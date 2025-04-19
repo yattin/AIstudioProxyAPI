@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// auto_connect_aistudio.js (v2.3 - Removed unnecessary disconnect)
+// auto_connect_aistudio.js (v2.4 - Clarified manual server start)
 
 const { spawn } = require('child_process');
 const path = require('path');
@@ -39,10 +39,9 @@ async function checkDependencies() {
     } catch (error) {
         if (error.code === 'MODULE_NOT_FOUND') {
             console.error('❌错误: Playwright 依赖未找到！');
-            console.log('请在当前目录下打开终端，运行以下命令来安装 Playwright:');
-            console.log('\nnpm install playwright\n');
-            console.log('以及服务器需要的其他依赖:');
-            console.log('\nnpm install express @playwright/test\n'); // 提示安装服务器所需依赖
+            console.log('请在当前目录下打开终端，运行以下命令来安装依赖:');
+            // v2.7 Note: Added 'cors' for server.js
+            console.log('\nnpm install express playwright @playwright/test cors\n');
             console.log('安装完成后，请重新运行此脚本。');
         } else {
             console.error('❌ 检查依赖时发生未知错误:', error);
@@ -71,13 +70,13 @@ async function launchChrome() {
         const chromeProcess = spawn(
             MACOS_CHROME_PATH,
             [`--remote-debugging-port=${DEBUGGING_PORT}`],
-            { detached: true, stdio: 'ignore' } // detached: true is important
+            { detached: true, stdio: 'ignore' }
         );
-        chromeProcess.unref(); // Allow parent process (this script) to exit independently
+        chromeProcess.unref();
 
         console.log('✅ Chrome 启动命令已发送。');
         console.log('⏳ 请等待几秒钟，让 Chrome 完全启动...');
-        await new Promise(resolve => setTimeout(resolve, 5000)); // Add a small delay
+        await new Promise(resolve => setTimeout(resolve, 5000));
         await askQuestion('请确认 Chrome 窗口已出现并加载（可能需要登录Google, 并确保位于 new_chat 页面），然后按 Enter 键继续连接...');
         return true;
 
@@ -92,7 +91,7 @@ async function launchChrome() {
 async function connectAndManagePage() {
     console.log(`--- 步骤 3: 连接 Playwright 到 ${CDP_ADDRESS} (最多尝试 ${CONNECTION_RETRIES} 次) ---`);
     let browser = null;
-    let context = null; // 将 context 提升作用域
+    let context = null;
 
     for (let i = 0; i < CONNECTION_RETRIES; i++) {
         try {
@@ -100,29 +99,26 @@ async function connectAndManagePage() {
             browser = await playwright.chromium.connectOverCDP(CDP_ADDRESS, { timeout: 15000 });
             console.log(`✅ 成功连接到 Chrome！`);
 
-             // 尝试获取上下文
-             await new Promise(resolve => setTimeout(resolve, 500)); // 等待连接稳定
+             await new Promise(resolve => setTimeout(resolve, 500));
              const contexts = browser.contexts();
              if (!contexts || contexts.length === 0) {
                  console.warn("   未能立即获取上下文，稍后重试...");
                  await new Promise(resolve => setTimeout(resolve, 1500));
-                 contexts = browser.contexts(); // 再次尝试
-                 if (!contexts || contexts.length === 0) {
+                 const retryContexts = browser.contexts();
+                 if (!retryContexts || retryContexts.length === 0) {
                       throw new Error('无法获取浏览器上下文。');
                  }
+                 context = retryContexts[0];
+             } else {
+                 context = contexts[0];
              }
-             context = contexts[0];
              console.log('-> 获取到浏览器上下文。');
-             break; // 连接和获取上下文都成功，跳出循环
+             break; // 连接和获取上下文都成功
 
         } catch (error) {
             console.warn(`   连接或获取上下文尝试 ${i + 1} 失败: ${error.message.split('\n')[0]}`);
-             if (browser && browser.isConnected()) {
-                 // 如果连接成功但获取上下文失败，可能需要断开重连？
-                 // 但 connectOverCDP 没有 disconnect，所以只能等下次循环
-             }
-             browser = null; // 重置 browser 状态
-             context = null; // 重置 context 状态
+             browser = null;
+             context = null;
 
             if (i < CONNECTION_RETRIES - 1) {
                 console.log(`   等待 ${RETRY_DELAY / 1000} 秒后重试...`);
@@ -134,12 +130,12 @@ async function connectAndManagePage() {
                 console.error(`   2. 是否有其他程序占用了端口 ${DEBUGGING_PORT}？(可以使用命令 lsof -i :${DEBUGGING_PORT} 检查)`);
                 console.error('   3. 启动 Chrome 时终端或系统是否有报错信息？');
                 console.error('   4. 防火墙或安全软件是否阻止了本地回环地址(127.0.0.1)的连接？');
-                return false; // 重试用尽，连接失败
+                return false;
             }
         }
     }
 
-    if (!browser || !context) { // 确保 browser 和 context 都有效
+    if (!browser || !context) {
          console.error("-> 未能成功连接到浏览器或获取上下文。");
          return false;
     }
@@ -149,15 +145,13 @@ async function connectAndManagePage() {
         let targetPage = null;
         const pages = context.pages();
         console.log(`-> 发现 ${pages.length} 个已存在的页面。正在搜索 AI Studio...`);
-        const aiStudioUrlPattern = 'aistudio.google.com/'; // 提取为常量
+        const aiStudioUrlPattern = 'aistudio.google.com/';
 
         for (const page of pages) {
              try {
-                // Add a check to ensure page is not closed before accessing url
                 if (!page.isClosed()) {
                     const pageUrl = page.url();
-                     // console.log(`   检查页面: ${pageUrl}`); // Debug log
-                    if (pageUrl.includes(aiStudioUrlPattern)) { // 使用 includes 更通用
+                    if (pageUrl.includes(aiStudioUrlPattern)) {
                          console.log(`-> 找到已存在的 AI Studio 页面: ${pageUrl}`);
                          targetPage = page;
                          // 确保导航到 new_chat 页
@@ -167,18 +161,14 @@ async function connectAndManagePage() {
                               console.log(`   导航完成: ${targetPage.url()}`);
                          } else {
                               console.log(`   页面已在 ${TARGET_URL} 或其子路径。`);
-                              // 可以选择性地 reload 以确保页面状态最新
-                              // console.log("   (可选) 重新加载页面确保状态...");
-                              // await targetPage.reload({ waitUntil: 'domcontentloaded', timeout: 20000 });
                          }
-                         break; // Found the page, exit loop
+                         break;
                      }
                  } else {
                       console.warn('   警告：跳过一个已关闭的页面。');
                  }
              } catch (pageError) {
-                  // Catch errors specifically when accessing page properties if it closes mid-operation
-                  if (!page.isClosed()) { // Only log if the page wasn't already closed
+                  if (!page.isClosed()) {
                       console.warn(`   警告：评估或导航页面时出错: ${pageError.message.split('\n')[0]}`);
                   }
              }
@@ -194,35 +184,33 @@ async function connectAndManagePage() {
 
         await targetPage.bringToFront();
         console.log('-> 已将 AI Studio 页面置于前台。');
-        // Add a small delay to ensure the page is fully interactable after bringToFront
-        await new Promise(resolve => setTimeout(resolve, 1000)); // 增加等待时间
+        await new Promise(resolve => setTimeout(resolve, 1000));
 
 
         console.log('\n🎉 --- 全部完成 --- 🎉');
-        console.log('Chrome 已启动，Playwright 已连接，AI Studio 页面已找到或打开。');
+        console.log('Chrome 已启动，Playwright 已连接，AI Studio 页面已准备就绪。');
         console.log('请确保在 Chrome 窗口中 AI Studio 页面处于可交互状态 (例如，已登录，无弹窗)。');
-        console.log('这个脚本的任务已完成。你可以关闭这个终端窗口，Chrome 会继续运行。');
-        console.log('下一步：请在另一个终端窗口运行 `node server.js` 来启动 API 服务器。');
+        console.log('\n👉 下一步：请在另一个终端窗口中运行以下命令来启动 API 服务器：');
+        console.log('\n   node server.js\n');
+        console.log('让此 Chrome 窗口和服务器终端保持运行状态即可使用 API。');
 
-        // **重要**: 不再调用 browser.disconnect()。脚本退出时连接会自动关闭。
-        return true; // 整个步骤成功
+        // **重要**: 不调用 disconnect。脚本退出时连接会自动关闭。
+        return true;
 
     } catch (error) {
         console.error('\n❌ --- 步骤 3 页面管理失败 ---');
         console.error('   在连接成功后，处理页面时发生错误:', error);
-        return false; // 页面管理失败
+        return false;
     } finally {
-         // **重要**: finally 块中不调用 disconnect
          console.log("-> auto_connect_aistudio.js 脚本即将退出。");
          // 不需要手动断开 browser 连接，因为是 connectOverCDP
-         // if (browser && browser.isConnected()) { ... }
     }
 }
 
 
 // --- 主执行流程 ---
 (async () => {
-    console.log('🚀 欢迎使用 AI Studio 自动连接脚本 (macOS) v2.3 🚀');
+    console.log('🚀 欢迎使用 AI Studio 自动连接脚本 (macOS) v2.4 🚀');
     console.log('-------------------------------------------------');
 
     if (!await checkDependencies()) {
@@ -242,7 +230,7 @@ async function connectAndManagePage() {
     }
 
     console.log('-------------------------------------------------');
-    console.log("脚本执行成功完成。");
-    process.exit(0); // 所有步骤成功完成
+    console.log("脚本执行成功完成。请按照提示启动 server.js。");
+    process.exit(0);
 
 })();

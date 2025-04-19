@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Studio API Test UI</title>
+    <style>
+        body { font-family: sans-serif; line-height: 1.6; padding: 20px; max-width: 800px; margin: auto; }
+        textarea { width: 95%; min-height: 100px; margin-bottom: 10px; padding: 10px; border: 1px solid #ccc; border-radius: 4px; }
+        button { padding: 10px 15px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        #output { margin-top: 20px; padding: 15px; background-color: #f8f9fa; border: 1px solid #eee; border-radius: 4px; white-space: pre-wrap; /* Allows wrapping and preserves whitespace */ word-wrap: break-word; min-height: 100px; }
+        #status { font-style: italic; color: #666; margin-top: 5px; }
+        .error { color: red; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <h1>AI Studio Playwright API Test</h1>
+    <p>
+        Send prompts to the locally running <code>server.js</code> which bridges to AI Studio via Playwright.
+        Requires <code>auto_connect_aistudio.js</code> to have run successfully and <code>server.js</code> to be running.
+    </p>
+
+    <label for="prompt">Enter your prompt:</label><br>
+    <textarea id="prompt" placeholder="e.g., Write a short story about a robot learning to paint"></textarea><br>
+
+    <button id="sendButton">Send Prompt (Stream)</button>
+    <div id="status">Ready</div>
+
+    <h2>Response:</h2>
+    <pre id="output"></pre>
+
+    <script>
+        const promptInput = document.getElementById('prompt');
+        const sendButton = document.getElementById('sendButton');
+        const outputDiv = document.getElementById('output');
+        const statusDiv = document.getElementById('status');
+
+        sendButton.addEventListener('click', handleSend);
+
+        async function handleSend() {
+            const prompt = promptInput.value.trim();
+            if (!prompt) {
+                alert('Please enter a prompt.');
+                return;
+            }
+
+            outputDiv.textContent = ''; // Clear previous output
+            statusDiv.textContent = 'Sending request...';
+            sendButton.disabled = true;
+
+            const requestPayload = {
+                model: "google-ai-studio-via-playwright-cdp", // Must match server expectation (even if unused server-side)
+                messages: [
+                    { role: "user", content: prompt }
+                ],
+                stream: true // Always use streaming for this UI
+            };
+
+            try {
+                const response = await fetch('/v1/chat/completions', { // Relative path to the same server
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'text/event-stream' // Indicate we prefer SSE
+                    },
+                    body: JSON.stringify(requestPayload)
+                });
+
+                if (!response.ok) {
+                    let errorMsg = `Server error: ${response.status} ${response.statusText}`;
+                    try {
+                         const errorJson = await response.json();
+                         errorMsg = `Server error: ${response.status}. ${errorJson.error?.message || JSON.stringify(errorJson)}`;
+                    } catch (e) { /* ignore json parsing error */ }
+                    throw new Error(errorMsg);
+                }
+
+                const contentType = response.headers.get('content-type');
+                if (!contentType || !contentType.includes('text/event-stream')) {
+                    statusDiv.textContent = 'Error: Expected text/event-stream, got ' + contentType;
+                    outputDiv.textContent = await response.text(); // Show non-stream response
+                    sendButton.disabled = false;
+                    return;
+                }
+
+                // Process the stream
+                statusDiv.textContent = 'Receiving stream...';
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let receivedDone = false;
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) {
+                        statusDiv.textContent = receivedDone ? 'Stream finished.' : 'Stream ended unexpectedly (no DONE).';
+                        break;
+                    }
+
+                    buffer += decoder.decode(value, { stream: true });
+                    let lines = buffer.split('\n');
+                    buffer = lines.pop() || ''; // Keep potentially incomplete line
+
+                    for (const line of lines) {
+                        const trimmedLine = line.trim();
+                        if (trimmedLine === '') continue;
+
+                        if (trimmedLine.startsWith('data:')) {
+                            const dataContent = trimmedLine.substring(5).trim();
+
+                            if (dataContent === '[DONE]') {
+                                receivedDone = true;
+                                statusDiv.textContent = 'Stream finished ([DONE] received).';
+                                break; // Stop processing lines for this chunk once DONE is seen
+                            }
+
+                            try {
+                                const jsonData = JSON.parse(dataContent);
+                                if (jsonData.error) {
+                                     throw new Error(`Stream error from server: ${jsonData.error.message || JSON.stringify(jsonData.error)}`);
+                                }
+                                const deltaContent = jsonData.choices?.[0]?.delta?.content;
+                                if (deltaContent) {
+                                    outputDiv.textContent += deltaContent; // Append text
+                                    // Optional: Scroll to bottom
+                                    // outputDiv.scrollTop = outputDiv.scrollHeight;
+                                }
+                            } catch (parseError) {
+                                console.error("JSON Parse Error:", parseError, "Data:", dataContent);
+                                statusDiv.innerHTML = `<span class="error">Error parsing stream data. Check console.</span>`;
+                                // Don't stop the whole stream on one parse error, maybe log it
+                            }
+                        }
+                    }
+                     if (receivedDone) break; // Exit while loop if DONE received
+                } // end while
+
+                if (!receivedDone) {
+                    console.warn("Stream finished, but [DONE] signal was not explicitly received.");
+                }
+
+            } catch (error) {
+                console.error('Fetch Error:', error);
+                statusDiv.innerHTML = `<span class="error">Error: ${error.message}</span>`;
+                outputDiv.textContent += `\n\n--- ERROR ---\n${error.message}`;
+            } finally {
+                sendButton.disabled = false; // Re-enable button
+                if (!statusDiv.textContent.includes('Error') && !statusDiv.textContent.includes('finished')) {
+                    statusDiv.textContent = 'Done.'; // Default done state if not error/finished
+                }
+            }
+        }
+    </script>
+
+</body>
+</html>
