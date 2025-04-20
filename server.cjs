@@ -233,11 +233,11 @@ async function interactAndSubmitPrompt(page, prompt, reqId) {
     }
 
     console.log(`[${reqId}]  - 清空并填充输入框...`);
-        await inputField.fill(prompt, { timeout: 15000 });
+        await inputField.fill(prompt, { timeout: 10000 });
 
     console.log(`[${reqId}]  - 等待运行按钮可用...`);
         try {
-            await expect(submitButton).toBeEnabled({ timeout: 15000 });
+            await expect(submitButton).toBeEnabled({ timeout: 10000 });
         } catch (e) {
         console.error(`[${reqId}] ❌ 等待运行按钮变为可用状态超时！`);
         await saveErrorSnapshot(`submit_button_not_enabled_before_click_${reqId}`);
@@ -402,7 +402,7 @@ async function handleStreamingResponse(res, responseElement, page, { inputField,
                         }
                      } catch (parseError) { /* Ignore */ }
                  }
-                 await page.waitForTimeout(500); // Faster polling during final window
+                 await page.waitForTimeout(250);
             }
     console.log(`[${reqId}]    最终 3 秒更新窗口结束。`);
 
