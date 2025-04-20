@@ -23,13 +23,14 @@ const CHROME_DEBUGGING_PORT = 8848;
 const CDP_ADDRESS = `http://127.0.0.1:${CHROME_DEBUGGING_PORT}`;
 const AI_STUDIO_URL_PATTERN = 'aistudio.google.com/';
 const RESPONSE_COMPLETION_TIMEOUT = 300000; // 5分钟总超时
-const POLLING_INTERVAL = 200; // 非流式/通用检查间隔
+const POLLING_INTERVAL = 500; // 非流式/通用检查间隔
 const POLLING_INTERVAL_STREAM = 200; // 流式检查轮询间隔 (ms)
 // v2.12: Timeout for secondary checks *after* spinner disappears
 const POST_SPINNER_CHECK_DELAY_MS = 500; // Spinner消失后稍作等待再检查其他状态
 const FINAL_STATE_CHECK_TIMEOUT_MS = 1500; // 检查按钮和输入框最终状态的超时
 const SPINNER_CHECK_TIMEOUT_MS = 1000; // 检查Spinner状态的超时
-const POST_COMPLETION_BUFFER = 1500; // JSON模式下可以缩短检查后等待时间
+const POST_COMPLETION_BUFFER = 1000; // JSON模式下可以缩短检查后等待时间
+const SILENCE_TIMEOUT_MS = 1500; // 文本静默多久后认为稳定 (Spinner消失后)
 
 // --- 常量 ---
 const MODEL_NAME = 'google-ai-studio-via-playwright-cdp-json';
@@ -48,7 +49,7 @@ const prepareAIStudioPrompt = (userPrompt, systemPrompt = null) => {
     let fullPrompt = `
 IMPORTANT: Your entire response MUST be a single JSON object. Do not include any text outside of this JSON object.
 The JSON object must have a single key named "response".
-Inside the value of the "response" key (which is a string), you MUST wrap your actual answer between the exact markers "<<<START_RESPONSE>>>" and "<<<END_RESPONSE>>>". There should be NO text outside these markers within the response string.
+Inside the value of the "response" key (which is a string), you MUST put the exact marker "<<<START_RESPONSE>>>"" at the very beginning of your actual answer. There should be NO text before this marker within the response string.
 `;
 
     if (systemPrompt && systemPrompt.trim() !== '') {
@@ -60,22 +61,36 @@ Example 1:
 User asks: "What is the capital of France?"
 Your response MUST be:
 {
-  "response": "<<<START_RESPONSE>>>The capital of France is Paris.<<<END_RESPONSE>>>"
+  "response": "<<<START_RESPONSE>>>The capital of France is Paris."
 }
 
 Example 2:
 User asks: "Write a python function to add two numbers"
 Your response MUST be:
 {
-  "response": "<<<START_RESPONSE>>>\\\`\\\`\\\`python\\ndef add(a, b):\\n  return a + b\\n\\\`\\\`\\\`<<<END_RESPONSE>>>"
+  "response": "<<<START_RESPONSE>>>\\\`\\\`\\\`python\\ndef add(a, b):\\n\\\`\\\`\\\`\""
 }
 
-Now, answer the following user prompt, ensuring your output strictly adheres to the JSON format AND the marker requirements described above:
+Now, answer the following user prompt, ensuring your output strictly adheres to the JSON format AND the start marker requirement described above:
 
 User Prompt: "${userPrompt}"
 
 Your JSON Response:
 `;
+    return fullPrompt;
+};
+
+// v2.26: Simplified stream prompt to plain text after marker
+const prepareAIStudioPromptStream = (userPrompt, systemPrompt = null) => {
+    let fullPrompt = `
+IMPORTANT: Your entire response MUST start *immediately* with the exact marker \"<<<START_RESPONSE>>>\". Do NOT include any other text before this marker.\nImmediately following the marker, output your answer as plain text.\n`;
+
+    if (systemPrompt && systemPrompt.trim() !== '') {
+        fullPrompt += `\\nSystem Instruction: ${systemPrompt}\\n`;
+    }
+
+    fullPrompt += `
+Example 1:\nUser asks: \"What is the capital of France?\"\nYour response MUST be:\n<<<START_RESPONSE>>>The capital of France is Paris.\n\nExample 2:\nUser asks: \"Write a python function to add two numbers\"\nYour response MUST be:\n<<<START_RESPONSE>>>\n\`\`\`python\ndef add(a, b):\n  return a + b\n\`\`\`\n\nNow, answer the following user prompt, ensuring your output follows the marker requirement and provides plain text directly after it:\n\nUser Prompt: \"${userPrompt}\"\n\nYour Raw Response:\n`;
     return fullPrompt;
 };
 
@@ -293,18 +308,15 @@ async function locateResponseElements(page, { inputField, submitButton, loadingS
 
 // --- 新增：处理流式响应 ---
 async function handleStreamingResponse(res, responseElement, page, { inputField, submitButton, loadingSpinner }, operationTimer, reqId) {
-    console.log(`[${reqId}]   - 流式传输开始 (v2.19 优化: 严格标记提取)...`);
+    console.log(`[${reqId}]   - 流式传输开始 (v2.23: 简化，无JSON清理)...`); // Version Bump
     let lastRawText = "";
     let lastSentResponseContent = ""; // 跟踪已发送的 *标记间* 内容
     let responseStarted = false; // 跟踪是否检测到 START_RESPONSE
-    let responseEnded = false; // 跟踪是否检测到 END_RESPONSE
     const startTime = Date.now();
     let spinnerHasDisappeared = false;
     let lastTextChangeTimestamp = Date.now();
-    const SILENCE_TIMEOUT_MS = 1500; // 文本静默多久后认为稳定 (Spinner消失后)
 
     const startMarker = '<<<START_RESPONSE>>>';
-    const endMarker = '<<<END_RESPONSE>>>';
 
     let streamFinishedNaturally = false;
 
@@ -320,7 +332,7 @@ async function handleStreamingResponse(res, responseElement, page, { inputField,
 
             let currentExtractedContent = null;
 
-            // 2. 严格根据标记提取内容
+            // 2. 严格根据开始标记提取内容
             const startIndex = currentRawText.indexOf(startMarker);
             if (startIndex !== -1) {
                 const contentStartIndex = startIndex + startMarker.length;
@@ -328,33 +340,25 @@ async function handleStreamingResponse(res, responseElement, page, { inputField,
                      console.log(`[${reqId}]    (流式) 检测到 ${startMarker}，开始传输...`);
                      responseStarted = true; // 标记内容已开始
                 }
+                // 提取开始标记之后的所有内容 (Raw, no cleanup)
+                currentExtractedContent = currentRawText.substring(contentStartIndex);
 
-                const endIndex = currentRawText.indexOf(endMarker, contentStartIndex);
-                if (endIndex !== -1) {
-                    // 找到结束标记，提取标记之间的内容
-                    currentExtractedContent = currentRawText.substring(contentStartIndex, endIndex);
-                    responseEnded = true; // 标记 AI 已输出结束标记
-                    // console.log(`[${reqId}]    (流式) 检测到 ${endMarker}。`);
-                } else {
-                    // 未找到结束标记，提取开始标记之后的所有内容
-                    currentExtractedContent = currentRawText.substring(contentStartIndex);
-                }
             } // else: 未找到开始标记，currentExtractedContent 保持 null
 
-            // 3. 如果提取到新内容 (且内容确实在增加)，计算 delta 并发送
+            // 3. 如果提取到新内容 (且内容确实在增加)，计算 delta 并发送 (No cleanup)
             if (responseStarted && currentExtractedContent !== null && currentExtractedContent.length > lastSentResponseContent.length && currentExtractedContent.startsWith(lastSentResponseContent)) {
                  const delta = currentExtractedContent.substring(lastSentResponseContent.length);
 
-                 // --- NEW: Logging for newline diagnosis ---
-                 if (delta.includes('\n')) {
-                    console.log(`[${reqId}]    Delta contains newline(s): ${JSON.stringify(delta)}`);
-                 } else {
-                    // console.log(`[${reqId}]    Sending Delta (len: ${delta.length}): ${delta.substring(0, 70)}...`); // Less verbose log
-                 }
-                 // --- END NEW: Logging ---
+                // --- Logging ---
+                if (delta.includes('\n')) {
+                   console.log(`[${reqId}]    (Send) Delta contains newline(s): ${JSON.stringify(delta)}`);
+                } else {
+                   // console.log(`[${reqId}]    (Send) Sending Delta (len: ${delta.length}): ${delta.substring(0, 70)}...`); // Less verbose log
+                }
+                // --- End Logging ---
 
-                 sendStreamChunk(res, delta, reqId);
-                 lastSentResponseContent = currentExtractedContent; // 更新已发送的 *标记间* 内容
+                sendStreamChunk(res, delta, reqId); // Send immediately
+                lastSentResponseContent = currentExtractedContent; // 更新已发送的 *标记间* 内容
             }
 
             // 4. 更新最近看到的原始文本
@@ -372,15 +376,9 @@ async function handleStreamingResponse(res, responseElement, page, { inputField,
             } catch (e) { /* Spinner 仍然可见 */ }
         }
 
-        // 6. 检查结束条件:
-        // 主要条件: AI 发送了结束标记
-        // 备用条件: Spinner 消失且文本静默 (以防 AI 未发结束标记)
-        if (responseEnded || (spinnerHasDisappeared && (Date.now() - lastTextChangeTimestamp > SILENCE_TIMEOUT_MS))) {
-            if (responseEnded) {
-                 console.log(`[${reqId}]    判定流结束 (检测到 ${endMarker})。`);
-            } else {
-                 console.log(`[${reqId}]    判定流结束 (Spinner 已消失且文本静默超过 ${SILENCE_TIMEOUT_MS}ms)。`);
-            }
+        // 6. 检查结束条件: Spinner 消失且文本静默
+        if (spinnerHasDisappeared && (Date.now() - lastTextChangeTimestamp > SILENCE_TIMEOUT_MS)) {
+            console.log(`[${reqId}]    判定流结束 (Spinner 已消失且文本静默超过 ${SILENCE_TIMEOUT_MS}ms)。`);
             streamFinishedNaturally = true;
             break; // 跳出主循环
         }
@@ -388,7 +386,7 @@ async function handleStreamingResponse(res, responseElement, page, { inputField,
         // 7. 控制轮询间隔
         const loopEndTime = Date.now();
         const loopDuration = loopEndTime - loopStartTime;
-        const waitTime = Math.max(0, POLLING_INTERVAL - loopDuration); // 使用常量
+        const waitTime = Math.max(0, POLLING_INTERVAL_STREAM - loopDuration); // Use STREAM constant
         await page.waitForTimeout(waitTime);
 
     } // --- 结束主循环 ---
@@ -403,34 +401,38 @@ async function handleStreamingResponse(res, responseElement, page, { inputField,
             sendStreamError(res, "Stream processing timed out on server.", reqId);
         }
     } else if (!res.writableEnded) {
-        // 自然结束，做最后一次同步检查 (以防结束判断后仍有微小延迟)
+        // 自然结束
+
+        // --- Final Sync (Simplified: Send remaining raw delta if any) ---
+        console.log(`[${reqId}]    Loop ended due to silence/spinner, performing final sync check...`);
         const finalRawText = await getRawTextContent(responseElement, lastRawText, reqId);
         if (finalRawText !== lastRawText) {
-             console.log(`[${reqId}]    进行最后一次文本同步 (基于标记)...`);
-             let finalExtractedContent = null;
-             try {
-                 const startIndex = finalRawText.indexOf(startMarker);
-                 if (startIndex !== -1) {
+            console.log(`[${reqId}]    进行最后一次文本同步 (Raw)...`);
+            let finalExtractedContent = null;
+            try {
+                // Extract raw content after start marker
+                const startIndex = finalRawText.indexOf(startMarker);
+                if (startIndex !== -1) {
                     const contentStartIndex = startIndex + startMarker.length;
-                    const endIndex = finalRawText.indexOf(endMarker, contentStartIndex);
-                    if (endIndex !== -1) {
-                       finalExtractedContent = finalRawText.substring(contentStartIndex, endIndex);
-                    } else {
-                       finalExtractedContent = finalRawText.substring(contentStartIndex); // Fallback
-                    }
-                 }
-                 if (finalExtractedContent !== null && finalExtractedContent.length > lastSentResponseContent.length && finalExtractedContent.startsWith(lastSentResponseContent)) {
-                     const delta = finalExtractedContent.substring(lastSentResponseContent.length);
-                     sendStreamChunk(res, delta, reqId);
-                     lastSentResponseContent = finalExtractedContent;
-                 }
-             } catch (e) { console.warn(`[${reqId}] Final marker sync error: ${e.message}`); }
-        }
+                    finalExtractedContent = finalRawText.substring(contentStartIndex);
+                } else {
+                    finalExtractedContent = null;
+                }
 
-        res.write('data: [DONE]\\n\\n');
+                // Compare final extracted content with last sent content
+                if (finalExtractedContent !== null && finalExtractedContent.length > lastSentResponseContent.length && finalExtractedContent.startsWith(lastSentResponseContent)) {
+                    const delta = finalExtractedContent.substring(lastSentResponseContent.length);
+                    console.log(`[${reqId}]    (Final Sync) Sending final raw delta (len: ${delta.length})`);
+                    sendStreamChunk(res, delta, reqId); // Send immediately
+                    lastSentResponseContent = finalExtractedContent; // Update last sent content
+                }
+            } catch (e) { console.warn(`[${reqId}] Final marker sync error: ${e.message}`); }
+        }
+        // --- End Final Sync ---
+
+        res.write('data: [DONE]\n\n');
         res.end();
         console.log(`[${reqId}] ✅ 流式响应 [DONE] 已发送。`);
-        console.log(`[${reqId}]    最终提取的响应内容长度: ${lastSentResponseContent.length}`);
     } else {
         console.log(`[${reqId}] 流已提前结束，不再发送 [DONE]。`);
     }
@@ -647,43 +649,39 @@ async function handleNonStreamingResponse(res, page, locators, operationTimer, r
                  cleanedResponse = aiResponseText; // Keep original if parsing fails
             }
 
-    console.log(`[${reqId}] ✅ 获取到解析后的 AI 回复 (来自JSON, 长度: ${cleanedResponse?.length ?? 0}): "${cleanedResponse?.substring(0, 100)}..."`);
+    console.log(`[${reqId}] ✅ 获取到解析后的 AI 回复 (来自JSON, 长度: ${cleanedResponse?.length ?? 0}): "${cleanedResponse?.substring(0, 100)}...\"`);
 
-            // --- 新增步骤：在非流式响应中移除标记 ---
-            const startMarker = '<<<START_RESPONSE>>>';
-            const endMarker = '<<<END_RESPONSE>>>';
-            let finalContentForUser = cleanedResponse; // 默认使用清理后的响应
+               // --- 新增步骤：在非流式响应中移除标记 ---
+               const startMarker = '<<<START_RESPONSE>>>'; // Re-added
 
-            const startIndex = cleanedResponse.indexOf(startMarker);
-            const endIndex = cleanedResponse.lastIndexOf(endMarker); // 使用 lastIndexOf 以防意外嵌套
+               let finalContentForUser = cleanedResponse; // 默认使用清理后的响应
 
-            if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
-                 // 如果同时找到开始和结束标记，提取中间的内容
-                 finalContentForUser = cleanedResponse.substring(startIndex + startMarker.length, endIndex);
-                 console.log(`[${reqId}]    (非流式) 成功移除标记，最终内容长度: ${finalContentForUser.length}`);
-            } else {
-                 // 如果标记不完整或未找到，可能 AI 未遵循指令，记录警告但返回原始内容
-                 console.warn(`[${reqId}]    (非流式) 警告: 未找到完整的开始/结束标记，将返回原始 cleanedResponse。`);
-            }
-            // --- 结束新增步骤 ---
+               // Re-added: Check for and remove the starting marker if present
+               if (finalContentForUser?.startsWith(startMarker)) {
+                    finalContentForUser = finalContentForUser.substring(startMarker.length);
+                    console.log(`[${reqId}]    (非流式) 移除前缀 ${startMarker}，最终内容长度: ${finalContentForUser.length}`);
+               } else {
+                    console.warn(`[${reqId}]    (非流式) 警告: 未在 response 字段中找到预期的 ${startMarker} 前缀。`);
+               }
+               // --- 结束新增步骤 ---
 
 
-            // 使用移除标记后的内容构建最终响应
-            const responsePayload = {
-                id: `${CHAT_COMPLETION_ID_PREFIX}${Date.now()}-${Math.random().toString(36).substring(2, 15)}`,
-                object: 'chat.completion',
-                created: Math.floor(Date.now() / 1000),
-                model: MODEL_NAME,
-                choices: [{
-                    index: 0,
-                    message: { role: 'assistant', content: finalContentForUser }, // 使用 finalContentForUser
-                    finish_reason: 'stop',
-                }],
-                usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-            };
-            console.log(`[${reqId}] ✅ 返回 JSON 响应。`);
-            res.json(responsePayload);
-        }
+               // 使用移除标记后的内容构建最终响应
+               const responsePayload = {
+                  id: `${CHAT_COMPLETION_ID_PREFIX}${Date.now()}-${Math.random().toString(36).substring(2, 15)}`,
+                  object: 'chat.completion',
+                  created: Math.floor(Date.now() / 1000),
+                  model: MODEL_NAME,
+                  choices: [{
+                      index: 0,
+                      message: { role: 'assistant', content: finalContentForUser }, // Use cleaned content
+                      finish_reason: 'stop',
+                  }],
+                  usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+              };
+              console.log(`[${reqId}] ✅ 返回 JSON 响应。`);
+              res.json(responsePayload);
+          }
 
 // --- 新增：处理 /v1/models 请求以满足 Open WebUI 验证 ---
 app.get('/v1/models', (req, res) => {
@@ -770,8 +768,14 @@ app.post('/v1/chat/completions', async (req, res) => {
         }
 
         // 4. 准备 Prompt
-        const prompt = prepareAIStudioPrompt(userPrompt, systemPrompt);
-        console.log(`[${reqId}] 构建的 Prompt (含系统提示): "${prompt.substring(0, 200)}..."`);
+        let prompt;
+        if (isStreaming) {
+            prompt = prepareAIStudioPromptStream(userPrompt, systemPrompt);
+            console.log(`[${reqId}] 构建的流式 Prompt (Raw): \"${prompt.substring(0, 200)}...\"`);
+        } else {
+            prompt = prepareAIStudioPrompt(userPrompt, systemPrompt);
+            console.log(`[${reqId}] 构建的非流式 Prompt (JSON): \"${prompt.substring(0, 200)}...\"`);
+        }
 
         // 5. 与页面交互并提交
         const locators = await interactAndSubmitPrompt(page, prompt, reqId);
