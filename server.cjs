@@ -23,7 +23,8 @@ const CHROME_DEBUGGING_PORT = 8848;
 const CDP_ADDRESS = `http://127.0.0.1:${CHROME_DEBUGGING_PORT}`;
 const AI_STUDIO_URL_PATTERN = 'aistudio.google.com/';
 const RESPONSE_COMPLETION_TIMEOUT = 300000; // 5分钟总超时
-const POLLING_INTERVAL = 250; // 流式检查间隔
+const POLLING_INTERVAL = 200; // 非流式/通用检查间隔
+const POLLING_INTERVAL_STREAM = 200; // 流式检查轮询间隔 (ms)
 // v2.12: Timeout for secondary checks *after* spinner disappears
 const POST_SPINNER_CHECK_DELAY_MS = 500; // Spinner消失后稍作等待再检查其他状态
 const FINAL_STATE_CHECK_TIMEOUT_MS = 1500; // 检查按钮和输入框最终状态的超时
@@ -46,28 +47,30 @@ const ERROR_TOAST_SELECTOR = 'div.toast.warning, div.toast.error'; // 页面错�
 const prepareAIStudioPrompt = (userPrompt, systemPrompt = null) => {
     let fullPrompt = `
 IMPORTANT: Your entire response MUST be a single JSON object. Do not include any text outside of this JSON object.
-The JSON object must have a single key named "response". The value of the "response" key must be your complete answer to the user's prompt.
+The JSON object must have a single key named "response".
+Inside the value of the "response" key (which is a string), you MUST wrap your actual answer between the exact markers "<<<START_RESPONSE>>>" and "<<<END_RESPONSE>>>". There should be NO text outside these markers within the response string.
 `;
 
     if (systemPrompt && systemPrompt.trim() !== '') {
-        fullPrompt += `\nSystem Instruction: ${systemPrompt}\n`;
+        fullPrompt += `\\nSystem Instruction: ${systemPrompt}\\n`;
     }
 
     fullPrompt += `
-Example:
+Example 1:
 User asks: "What is the capital of France?"
 Your response MUST be:
 {
-  "response": "The capital of France is Paris."
+  "response": "<<<START_RESPONSE>>>The capital of France is Paris.<<<END_RESPONSE>>>"
 }
 
+Example 2:
 User asks: "Write a python function to add two numbers"
 Your response MUST be:
 {
-  "response": "\\\`\\\`\\\`python\\ndef add(a, b):\\n  return a + b\\n\\\`\\\`\\\`"
+  "response": "<<<START_RESPONSE>>>\\\`\\\`\\\`python\\ndef add(a, b):\\n  return a + b\\n\\\`\\\`\\\`<<<END_RESPONSE>>>"
 }
 
-Now, answer the following user prompt, ensuring your output strictly adheres to the JSON format described above:
+Now, answer the following user prompt, ensuring your output strictly adheres to the JSON format AND the marker requirements described above:
 
 User Prompt: "${userPrompt}"
 
@@ -290,128 +293,138 @@ async function locateResponseElements(page, { inputField, submitButton, loadingS
 
 // --- 新增：处理流式响应 ---
 async function handleStreamingResponse(res, responseElement, page, { inputField, submitButton, loadingSpinner }, operationTimer, reqId) {
-    console.log(`[${reqId}]   - 流式传输开始 (主要阶段: 轮询直到 Spinner 消失)...`);
-            let lastRawText = "";
-            let lastSentResponseContent = ""; // Tracks the *extracted* content sent
-            let responseKeyDetected = false; // Tracks if outer 'response' key found
-            const startTime = Date.now();
+    console.log(`[${reqId}]   - 流式传输开始 (v2.19 优化: 严格标记提取)...`);
+    let lastRawText = "";
+    let lastSentResponseContent = ""; // 跟踪已发送的 *标记间* 内容
+    let responseStarted = false; // 跟踪是否检测到 START_RESPONSE
+    let responseEnded = false; // 跟踪是否检测到 END_RESPONSE
+    const startTime = Date.now();
+    let spinnerHasDisappeared = false;
+    let lastTextChangeTimestamp = Date.now();
+    const SILENCE_TIMEOUT_MS = 1500; // 文本静默多久后认为稳定 (Spinner消失后)
 
-            let primaryLoopEnded = false;
-            while (Date.now() - startTime < RESPONSE_COMPLETION_TIMEOUT && !primaryLoopEnded) {
-                // 1. Get text & parse (including nesting) & send delta
+    const startMarker = '<<<START_RESPONSE>>>';
+    const endMarker = '<<<END_RESPONSE>>>';
+
+    let streamFinishedNaturally = false;
+
+    while (Date.now() - startTime < RESPONSE_COMPLETION_TIMEOUT && !streamFinishedNaturally) {
+        const loopStartTime = Date.now();
+
+        // 1. 获取当前原始文本
         const currentRawText = await getRawTextContent(responseElement, lastRawText, reqId);
-                if (currentRawText !== lastRawText) {
-                    lastRawText = currentRawText;
-                    try {
-                const parsedJson = tryParseJson(currentRawText, reqId); // 解析最外层
-                        if (parsedJson && typeof parsedJson.response === 'string') {
-                            let potentialResponseString = parsedJson.response;
-                            let currentActualContent = potentialResponseString; // 默认使用外层的值
 
-                            // ---- 尝试解析内层 JSON ----
-                            try {
-                        const innerParsedJson = tryParseJson(potentialResponseString, reqId);
-                                if (innerParsedJson && typeof innerParsedJson.response === 'string') {
-                                     // 如果内层解析成功且有 response，则使用内层的值
-                                     currentActualContent = innerParsedJson.response;
-                                 }
-                            } catch (innerParseError) { /* Ignore inner parse error */ }
-                            // ---- 结束内层处理 ----
+        if (currentRawText !== lastRawText) {
+            // console.log(`[${reqId}] Raw text changed (Length: ${currentRawText.length})`);
+            lastTextChangeTimestamp = Date.now(); // 更新时间戳
 
-                            // First time detecting the response key (or nested response)
-                            if (!responseKeyDetected) {
-                        console.log(`[${reqId}]    (流式) 检测到 \'response\' 键或嵌套内容，开始传输...`);
-                                responseKeyDetected = true;
-                            }
+            let currentExtractedContent = null;
 
-                            // Send delta if new content is appended and key was detected
-                            // 使用 currentActualContent 进行比较和发送
-                            if (responseKeyDetected && currentActualContent.length > lastSentResponseContent.length && currentActualContent.startsWith(lastSentResponseContent)) {
-                                const delta = currentActualContent.substring(lastSentResponseContent.length);
-                        sendStreamChunk(res, delta, reqId);
-                                lastSentResponseContent = currentActualContent; // Update the last sent *extracted* content
-                            }
-                        }
-                    } catch (parseError) { /* Ignore outer parse errors */ }
+            // 2. 严格根据标记提取内容
+            const startIndex = currentRawText.indexOf(startMarker);
+            if (startIndex !== -1) {
+                const contentStartIndex = startIndex + startMarker.length;
+                if (!responseStarted) {
+                     console.log(`[${reqId}]    (流式) 检测到 ${startMarker}，开始传输...`);
+                     responseStarted = true; // 标记内容已开始
                 }
 
-                // 2. Check spinner state
-                let isSpinnerHidden = false;
-                try {
-                    await expect(loadingSpinner).toBeHidden({ timeout: SPINNER_CHECK_TIMEOUT_MS });
-                    isSpinnerHidden = true;
-                } catch (e) { /* Spinner still visible */ }
-
-                if (isSpinnerHidden) {
-            console.log(`[${reqId}]    Spinner 已消失，结束主要轮询阶段。`);
-                    primaryLoopEnded = true;
+                const endIndex = currentRawText.indexOf(endMarker, contentStartIndex);
+                if (endIndex !== -1) {
+                    // 找到结束标记，提取标记之间的内容
+                    currentExtractedContent = currentRawText.substring(contentStartIndex, endIndex);
+                    responseEnded = true; // 标记 AI 已输出结束标记
+                    // console.log(`[${reqId}]    (流式) 检测到 ${endMarker}。`);
                 } else {
-                    // 3. Wait for next poll interval if spinner still visible
-                    await page.waitForTimeout(2000); // 2-second interval
+                    // 未找到结束标记，提取开始标记之后的所有内容
+                    currentExtractedContent = currentRawText.substring(contentStartIndex);
                 }
+            } // else: 未找到开始标记，currentExtractedContent 保持 null
 
-            } // End primary while loop
+            // 3. 如果提取到新内容 (且内容确实在增加)，计算 delta 并发送
+            if (responseStarted && currentExtractedContent !== null && currentExtractedContent.length > lastSentResponseContent.length && currentExtractedContent.startsWith(lastSentResponseContent)) {
+                 const delta = currentExtractedContent.substring(lastSentResponseContent.length);
+                 // console.log(`[${reqId}]    Sending delta: "${delta.substring(0, 50)}..."`);
+                 sendStreamChunk(res, delta, reqId);
+                 lastSentResponseContent = currentExtractedContent; // 更新已发送的 *标记间* 内容
+            }
 
-             if (!primaryLoopEnded && Date.now() - startTime >= RESPONSE_COMPLETION_TIMEOUT) {
-         console.warn(`[${reqId}]   - 主要轮询阶段因总超时结束。`);
-         await saveErrorSnapshot(`streaming_primary_timeout_${reqId}`);
-                 if (!res.writableEnded) {
-             sendStreamError(res, "Stream processing timed out during primary phase.", reqId);
-             res.end(); // Ensure stream ends
-                 }
-         clearTimeout(operationTimer); // Clear the overall timer as operation failed here
-         throw new Error(`[${reqId}] Streaming primary loop timed out.`); // Throw to be caught by main handler
-             }
+            // 4. 更新最近看到的原始文本
+            lastRawText = currentRawText;
 
-            // --- Post-Spinner Phase ---
-    console.log(`[${reqId}]    检查最终页面状态 (输入框空 + 按钮禁用)...`);
+        } // 结束 if(currentRawText !== lastRawText)
+
+        // 5. 检查 Spinner 状态 (非阻塞)
+        if (!spinnerHasDisappeared) {
             try {
-                await expect(inputField).toHaveValue('', { timeout: FINAL_STATE_CHECK_TIMEOUT_MS });
-                await expect(submitButton).toBeDisabled({ timeout: FINAL_STATE_CHECK_TIMEOUT_MS });
-        console.log(`[${reqId}]    最终页面状态确认成功。`);
-            } catch (finalStateError) {
-        console.warn(`[${reqId}]    警告: 检查最终页面状态失败或超时: ${finalStateError.message.split('\n')[0]}`);
-        // Continue even if final state check fails, as the stream might still finish
+                await expect(loadingSpinner).toBeHidden({ timeout: 50 }); // 快速检查
+                spinnerHasDisappeared = true;
+                lastTextChangeTimestamp = Date.now(); // Spinner消失重置静默计时器
+                console.log(`[${reqId}]    Spinner 已消失，进入静默期检测...`);
+            } catch (e) { /* Spinner 仍然可见 */ }
+        }
+
+        // 6. 检查结束条件:
+        // 主要条件: AI 发送了结束标记
+        // 备用条件: Spinner 消失且文本静默 (以防 AI 未发结束标记)
+        if (responseEnded || (spinnerHasDisappeared && (Date.now() - lastTextChangeTimestamp > SILENCE_TIMEOUT_MS))) {
+            if (responseEnded) {
+                 console.log(`[${reqId}]    判定流结束 (检测到 ${endMarker})。`);
+            } else {
+                 console.log(`[${reqId}]    判定流结束 (Spinner 已消失且文本静默超过 ${SILENCE_TIMEOUT_MS}ms)。`);
             }
+            streamFinishedNaturally = true;
+            break; // 跳出主循环
+        }
 
-    console.log(`[${reqId}]    开始最终 3 秒更新窗口...`);
-            const finalWindowStartTime = Date.now();
-            while (Date.now() - finalWindowStartTime < 3000) {
-                 // Get text & parse & send delta (same logic as in primary loop)
-        const currentRawText = await getRawTextContent(responseElement, lastRawText, reqId);
-                 if (currentRawText !== lastRawText) {
-                    lastRawText = currentRawText;
-                     try {
-                const parsedJson = tryParseJson(currentRawText, reqId); // 解析最外层
-                        if (parsedJson && typeof parsedJson.response === 'string') {
-                            let potentialResponseString = parsedJson.response;
-                            let currentActualContent = potentialResponseString;
-                            try { // Handle nesting
-                        const innerParsedJson = tryParseJson(potentialResponseString, reqId);
-                                if (innerParsedJson && typeof innerParsedJson.response === 'string') {
-                                     currentActualContent = innerParsedJson.response;
-                                 }
-                            } catch (innerParseError) { /* Ignore */ }
+        // 7. 控制轮询间隔
+        const loopEndTime = Date.now();
+        const loopDuration = loopEndTime - loopStartTime;
+        const waitTime = Math.max(0, POLLING_INTERVAL - loopDuration); // 使用常量
+        await page.waitForTimeout(waitTime);
 
-                            // No need to check responseKeyDetected again here
-                            if (currentActualContent.length > lastSentResponseContent.length && currentActualContent.startsWith(lastSentResponseContent)) {
-                                const delta = currentActualContent.substring(lastSentResponseContent.length);
-                        sendStreamChunk(res, delta, reqId);
-                                lastSentResponseContent = currentActualContent;
-                            }
-                        }
-                     } catch (parseError) { /* Ignore */ }
+    } // --- 结束主循环 ---
+
+    // --- 清理和结束 ---
+    clearTimeout(operationTimer);
+
+    if (!streamFinishedNaturally && Date.now() - startTime >= RESPONSE_COMPLETION_TIMEOUT) {
+        console.warn(`[${reqId}]   - 流式传输因总超时 (${RESPONSE_COMPLETION_TIMEOUT / 1000}s) 结束。`);
+        await saveErrorSnapshot(`streaming_timeout_${reqId}`);
+        if (!res.writableEnded) {
+            sendStreamError(res, "Stream processing timed out on server.", reqId);
+        }
+    } else if (!res.writableEnded) {
+        // 自然结束，做最后一次同步检查 (以防结束判断后仍有微小延迟)
+        const finalRawText = await getRawTextContent(responseElement, lastRawText, reqId);
+        if (finalRawText !== lastRawText) {
+             console.log(`[${reqId}]    进行最后一次文本同步 (基于标记)...`);
+             let finalExtractedContent = null;
+             try {
+                 const startIndex = finalRawText.indexOf(startMarker);
+                 if (startIndex !== -1) {
+                    const contentStartIndex = startIndex + startMarker.length;
+                    const endIndex = finalRawText.indexOf(endMarker, contentStartIndex);
+                    if (endIndex !== -1) {
+                       finalExtractedContent = finalRawText.substring(contentStartIndex, endIndex);
+                    } else {
+                       finalExtractedContent = finalRawText.substring(contentStartIndex); // Fallback
+                    }
                  }
-                 await page.waitForTimeout(250);
-            }
-    console.log(`[${reqId}]    最终 3 秒更新窗口结束。`);
+                 if (finalExtractedContent !== null && finalExtractedContent.length > lastSentResponseContent.length && finalExtractedContent.startsWith(lastSentResponseContent)) {
+                     const delta = finalExtractedContent.substring(lastSentResponseContent.length);
+                     sendStreamChunk(res, delta, reqId);
+                     lastSentResponseContent = finalExtractedContent;
+                 }
+             } catch (e) { console.warn(`[${reqId}] Final marker sync error: ${e.message}`); }
+        }
 
-            // --- End Stream ---
-            if (!res.writableEnded) {
-        res.write('data: [DONE]\n\n');
-                res.end();
+        res.write('data: [DONE]\\n\\n');
+        res.end();
         console.log(`[${reqId}] ✅ 流式响应 [DONE] 已发送。`);
-        console.log(`[${reqId}]    最终提取的响应内容长度: ${lastSentResponseContent.length}`); // Log extracted length
+        console.log(`[${reqId}]    最终提取的响应内容长度: ${lastSentResponseContent.length}`);
+    } else {
+        console.log(`[${reqId}] 流已提前结束，不再发送 [DONE]。`);
     }
 }
 
@@ -508,7 +521,7 @@ async function handleNonStreamingResponse(res, page, locators, operationTimer, r
                  console.warn(`[${reqId}]     - 第 ${attempts} 次获取的原始文本为空。`);
                           throw new Error("Raw text content is empty.");
                       }
-              console.log(`[${reqId}]     - 获取到原始文本 (长度: ${rawText.length}): \"${rawText.substring(0,100)}...\"`);
+              console.log(`[${reqId}]     - 获取到原始文本 (长度: ${rawText.length}): "${rawText.substring(0,100)}..."`);
 
              const parsedJson = tryParseJson(rawText, reqId);
 
@@ -591,21 +604,41 @@ async function handleNonStreamingResponse(res, page, locators, operationTimer, r
                  cleanedResponse = aiResponseText; // Keep original if parsing fails
             }
 
-    console.log(`[${reqId}] ✅ 获取到解析后的 AI 回复 (来自JSON, 长度: ${cleanedResponse?.length ?? 0}): \"${cleanedResponse?.substring(0, 100)}...\"`);
+    console.log(`[${reqId}] ✅ 获取到解析后的 AI 回复 (来自JSON, 长度: ${cleanedResponse?.length ?? 0}): "${cleanedResponse?.substring(0, 100)}..."`);
 
+            // --- 新增步骤：在非流式响应中移除标记 ---
+            const startMarker = '<<<START_RESPONSE>>>';
+            const endMarker = '<<<END_RESPONSE>>>';
+            let finalContentForUser = cleanedResponse; // 默认使用清理后的响应
+
+            const startIndex = cleanedResponse.indexOf(startMarker);
+            const endIndex = cleanedResponse.lastIndexOf(endMarker); // 使用 lastIndexOf 以防意外嵌套
+
+            if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
+                 // 如果同时找到开始和结束标记，提取中间的内容
+                 finalContentForUser = cleanedResponse.substring(startIndex + startMarker.length, endIndex);
+                 console.log(`[${reqId}]    (非流式) 成功移除标记，最终内容长度: ${finalContentForUser.length}`);
+            } else {
+                 // 如果标记不完整或未找到，可能 AI 未遵循指令，记录警告但返回原始内容
+                 console.warn(`[${reqId}]    (非流式) 警告: 未找到完整的开始/结束标记，将返回原始 cleanedResponse。`);
+            }
+            // --- 结束新增步骤 ---
+
+
+            // 使用移除标记后的内容构建最终响应
             const responsePayload = {
-        id: `${CHAT_COMPLETION_ID_PREFIX}${Date.now()}-${Math.random().toString(36).substring(2, 15)}`,
+                id: `${CHAT_COMPLETION_ID_PREFIX}${Date.now()}-${Math.random().toString(36).substring(2, 15)}`,
                 object: 'chat.completion',
                 created: Math.floor(Date.now() / 1000),
-        model: MODEL_NAME,
+                model: MODEL_NAME,
                 choices: [{
                     index: 0,
-                    message: { role: 'assistant', content: cleanedResponse },
+                    message: { role: 'assistant', content: finalContentForUser }, // 使用 finalContentForUser
                     finish_reason: 'stop',
                 }],
-        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+                usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
             };
-    console.log(`[${reqId}] ✅ 返回 JSON 响应。`);
+            console.log(`[${reqId}] ✅ 返回 JSON 响应。`);
             res.json(responsePayload);
         }
 
@@ -685,9 +718,9 @@ app.post('/v1/chat/completions', async (req, res) => {
         const { userPrompt, systemPrompt: extractedSystemPrompt } = validateChatRequest(messages);
         const systemPrompt = extractedSystemPrompt || otherParams?.system_prompt; // Combine sources
 
-        console.log(`[${reqId}]   原始 User Prompt (start): \"${userPrompt?.substring(0, 80)}...\"`);
+        console.log(`[${reqId}]   原始 User Prompt (start): "${userPrompt?.substring(0, 80)}..."`);
         if (systemPrompt) {
-            console.log(`[${reqId}]   System Prompt (start): \"${systemPrompt.substring(0, 80)}...\"`);
+            console.log(`[${reqId}]   System Prompt (start): "${systemPrompt.substring(0, 80)}..."`);
         }
         if (Object.keys(otherParams).length > 0) {
              console.log(`[${reqId}]   记录到的额外参数: ${JSON.stringify(otherParams)}`);
@@ -695,7 +728,7 @@ app.post('/v1/chat/completions', async (req, res) => {
 
         // 4. 准备 Prompt
         const prompt = prepareAIStudioPrompt(userPrompt, systemPrompt);
-        console.log(`[${reqId}] 构建的 Prompt (含系统提示): \"${prompt.substring(0, 200)}...\"`);
+        console.log(`[${reqId}] 构建的 Prompt (含系统提示): "${prompt.substring(0, 200)}..."`);
 
         // 5. 与页面交互并提交
         const locators = await interactAndSubmitPrompt(page, prompt, reqId);
