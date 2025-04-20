@@ -344,7 +344,15 @@ async function handleStreamingResponse(res, responseElement, page, { inputField,
             // 3. 如果提取到新内容 (且内容确实在增加)，计算 delta 并发送
             if (responseStarted && currentExtractedContent !== null && currentExtractedContent.length > lastSentResponseContent.length && currentExtractedContent.startsWith(lastSentResponseContent)) {
                  const delta = currentExtractedContent.substring(lastSentResponseContent.length);
-                 // console.log(`[${reqId}]    Sending delta: "${delta.substring(0, 50)}..."`);
+
+                 // --- NEW: Logging for newline diagnosis ---
+                 if (delta.includes('\n')) {
+                    console.log(`[${reqId}]    Delta contains newline(s): ${JSON.stringify(delta)}`);
+                 } else {
+                    // console.log(`[${reqId}]    Sending Delta (len: ${delta.length}): ${delta.substring(0, 70)}...`); // Less verbose log
+                 }
+                 // --- END NEW: Logging ---
+
                  sendStreamChunk(res, delta, reqId);
                  lastSentResponseContent = currentExtractedContent; // 更新已发送的 *标记间* 内容
             }
@@ -464,28 +472,63 @@ async function handleNonStreamingResponse(res, page, locators, operationTimer, r
                   if (isSpinnerHidden && isInputEmpty && isButtonDisabled) {
                       if (!finalStateCheckInitiated) {
                           finalStateCheckInitiated = true;
-                console.log(`[${reqId}]    检测到潜在最终状态。等待 3 秒进行确认...`);
-                await page.waitForTimeout(3000);
-                console.log(`[${reqId}]    3 秒等待结束，重新检查状态...`);
+                console.log(`[${reqId}]    检测到潜在最终状态。等待 ${POST_COMPLETION_BUFFER}ms 进行确认...`); // Use constant
+                await page.waitForTimeout(POST_COMPLETION_BUFFER); // Wait a bit first
+                console.log(`[${reqId}]    ${POST_COMPLETION_BUFFER}ms 等待结束，重新检查状态...`);
                 try {
                     await expect(loadingSpinner).toBeHidden({ timeout: 500 });
                     await expect(inputField).toHaveValue('', { timeout: 500 });
                     await expect(submitButton).toBeDisabled({ timeout: 500 });
-                    console.log(`[${reqId}]    状态确认成功。判定处理完成。`);
-                    processComplete = true;
-                          } catch (recheckError) {
-                    console.log(`[${reqId}]    状态在 3 秒确认期间发生变化 (${recheckError.message.split('\n')[0]})。继续轮询...`);
+                    console.log(`[${reqId}]    状态确认成功。开始文本静默检查...`);
+
+                    // --- NEW: Text Silence Check ---
+                    let lastCheckText = '';
+                    let currentCheckText = '';
+                    let textStable = false;
+                    const silenceCheckStartTime = Date.now();
+                    // Re-locate response element here for the check
+                    const { responseElement: checkResponseElement } = await locateResponseElements(page, locators, reqId);
+
+                    while (Date.now() - silenceCheckStartTime < SILENCE_TIMEOUT_MS * 2) { // Check for up to 2*silence duration
+                        lastCheckText = currentCheckText;
+                        currentCheckText = await getRawTextContent(checkResponseElement, lastCheckText, reqId);
+                        if (currentCheckText === lastCheckText) {
+                             // Text hasn't changed since last check in this loop
+                             if (Date.now() - silenceCheckStartTime >= SILENCE_TIMEOUT_MS) {
+                                  // And enough time has passed
+                                  console.log(`[${reqId}]    文本内容静默 ${SILENCE_TIMEOUT_MS}ms，确认处理完成。`);
+                                  textStable = true;
+                                  break;
+                             }
+                        } else {
+                            // Text changed, reset silence timer within this check
+                            // silenceCheckStartTime = Date.now(); // Option: Reset timer on any change
+                            console.log(`[${reqId}]    (静默检查) 文本仍在变化...`);
+                        }
+                        await page.waitForTimeout(POLLING_INTERVAL); // Use standard poll interval for checks
+                    }
+
+                    if (textStable) {
+                         processComplete = true; // Mark process as complete
+                    } else {
+                         console.warn(`[${reqId}]    警告: 文本静默检查超时，可能仍在输出。将继续尝试解析。`);
+                         processComplete = true; // Proceed anyway after timeout, but log warning
+                    }
+                    // --- END NEW: Text Silence Check ---
+
+                } catch (recheckError) {
+                    console.log(`[${reqId}]    状态在确认期间发生变化 (${recheckError.message.split('\\n')[0]})。继续轮询...`);
                     finalStateCheckInitiated = false;
-                          }
-                      }
-                  } else {
-                      if (finalStateCheckInitiated) {
-                console.log(`[${reqId}]    最终状态不再满足，重置确认标志。`);
-                          finalStateCheckInitiated = false;
-                      }
-             await page.waitForTimeout(POLLING_INTERVAL * 2);
-                  }
-              } // End while loop for completion check
+                }
+            }
+        } else {
+             if (finalStateCheckInitiated) {
+                 console.log(`[${reqId}]    最终状态不再满足，重置确认标志。`);
+                 finalStateCheckInitiated = false;
+             }
+             await page.waitForTimeout(POLLING_INTERVAL * 2); // Longer wait if not in final state check
+        }
+    } // --- End Completion check logic loop ---
 
     // Check for Page Errors BEFORE attempting to parse JSON
     console.log(`[${reqId}]   - 检查页面上是否存在错误提示...`);
