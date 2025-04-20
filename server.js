@@ -28,7 +28,7 @@ const POLLING_INTERVAL = 250; // 流式检查间隔
 const POST_SPINNER_CHECK_DELAY_MS = 500; // Spinner消失后稍作等待再检查其他状态
 const FINAL_STATE_CHECK_TIMEOUT_MS = 1500; // 检查按钮和输入框最终状态的超时
 const SPINNER_CHECK_TIMEOUT_MS = 1000; // 检查Spinner状态的超时
-const POST_COMPLETION_BUFFER = 300; // 结束检查后额外等待捕获文本
+const POST_COMPLETION_BUFFER = 3000; // 结束检查后额外等待捕获文本
 
 const app = express();
 

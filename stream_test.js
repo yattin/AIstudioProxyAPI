@@ -8,7 +8,7 @@ const TARGET_URL = `${SERVER_URL}${API_ENDPOINT}`;
 // --- 请求体 (包含 stream: true) ---
 const requestPayload = {
     // model 字段是必须的，即使你的服务器可能不使用它
-    model: "google-ai-studio-via-playwright-cdp", // 与服务器 model 匹配（虽然服务器端未使用）
+    model: "google-ai-studio-via-playwright-cdp", // 与服务器 model 匹配（随便填）
     messages: [
         { role: "user", content: "请写一首关于春天的七言律诗，包含'花'和'鸟'" } // 修改为你想要的 prompt
     ],
