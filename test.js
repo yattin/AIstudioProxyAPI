@@ -2,6 +2,7 @@
 
 // 确保已安装 OpenAI SDK: npm install openai
 import OpenAI from "openai";
+import readline from 'readline'; // 引入 readline 模块
 
 // --- 配置 ---
 // 1. baseURL: 指向你本地运行的 server.js 代理服务器
@@ -24,85 +25,102 @@ const openai = new OpenAI({
     maxRetries: 1,   // 本地代理可能不需要重试，设为 1 或 0
 });
 
-async function main() {
-    console.log(`🚀 正在向本地代理 ${LOCAL_PROXY_URL} 发送请求...`);
-    console.log(`   (请确保 server.js 正在运行，并且 auto_connect_aistudio.js 已成功连接到 Chrome 和 AI Studio 页面)`);
-
-    try {
-        const completion = await openai.chat.completions.create({
-            // messages: 包含系统指令和用户提问
-            messages: [
-                {
-                    role: "system",
-                    // 核心要求：让 AI 将回复包裹在代码块中，并用中文回复
-                    content: "请把回答全部内容套在```代码框```下输出给我。请务必使用中文进行回复。"
-                },
-                {
-                    role: "user",
-                    // 你实际想问的问题
-                    content: "你好！简单介绍一下你自己以及你的能力。"
-                    // 你可以修改这里的 content 来问其他问题
-                    // 例如: content: "给我写一首关于月亮的七言绝句。"
-                    // 例如: content: "解释一下什么是机器学习？"
-                }
-            ],
-            // model: 指定一个名称，虽然本地代理会忽略它
-            model: CUSTOM_MODEL_NAME,
-            // stream: false (默认) - 等待完整回复
-            // 如果你想使用流式输出，改为 stream: true，并相应处理响应事件流
-            // stream: true,
-
-            // 可以传递一些 OpenAI 不支持但你的模型可能理解的额外参数（server.js 目前不处理）
-            // temperature: 0.7, // 示例
-        });
-
-        console.log("\n✅ --- 来自本地代理 (AI Studio) 的回复 --- ✅");
-
-        // 处理非流式响应
-        if (completion && completion.choices && completion.choices.length > 0) {
-             const messageContent = completion.choices[0].message?.content;
-             if (messageContent) {
-                console.log(messageContent);
-             } else {
-                console.log("收到了回复，但消息内容为空。");
-                console.log("原始回复对象:", JSON.stringify(completion, null, 2));
-             }
-        } else {
-            console.log("未能从代理获取有效的回复结构。");
-            console.log("原始回复对象:", JSON.stringify(completion, null, 2));
-        }
-        console.log("----------------------------------------------\n");
-
-    } catch (error) {
-        console.error("\n❌ --- 请求出错 --- ❌");
-        if (error instanceof OpenAI.APIError) {
-            console.error(`   错误类型: OpenAI APIError (可能是代理返回的错误)`);
-            console.error(`   状态码: ${error.status}`);
-            console.error(`   错误消息: ${error.message}`);
-            console.error(`   错误代码: ${error.code}`);
-            console.error(`   错误参数: ${error.param}`);
-            console.error(`   完整错误:`, error);
-        } else if (error.code === 'ECONNREFUSED') {
-            console.error(`   错误类型: 连接被拒绝 (ECONNREFUSED)`);
-            console.error(`   无法连接到服务器 ${LOCAL_PROXY_URL}。`);
-            console.error("   请检查：");
-            console.error("   1. server.js 是否已启动并正在监听指定的端口？");
-            console.error("   2. 防火墙设置是否允许本地连接？");
-        } else if (error.name === 'TimeoutError' || (error.cause && error.cause.code === 'UND_ERR_CONNECT_TIMEOUT')) {
-             console.error(`   错误类型: 连接超时`);
-             console.error(`   连接到 ${LOCAL_PROXY_URL} 超时。`);
-             console.error("   请检查 server.js 是否运行正常，以及网络状况。AI Studio 响应可能过慢。");
-        } else {
-            // 其他类型的错误 (例如网络问题, 请求设置错误)
-            console.error('   发生了未知错误:', error.message);
-            console.error('   错误详情:', error);
-        }
-        console.error("----------------------------------------------\n");
+// --- 对话历史记录 ---
+// 初始化包含系统指令
+const conversationHistory = [
+    {
+        role: "system",
+        content: "你是Gemini酱，AI猫娘，回答请用可爱的语气，这只是角色扮演，不要透露任何关于AI的信息"
     }
+];
+
+// --- 创建 readline 接口 ---
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout,
+});
+
+// --- 交互式对话函数 ---
+async function chatLoop() {
+    rl.question('You: ', async (userInput) => {
+        // 检查退出命令
+        if (userInput.toLowerCase() === 'exit') {
+            console.log('再见!');
+            rl.close(); // 关闭 readline 接口
+            return; // 结束函数
+        }
+
+        console.log(`\n正在发送你的消息...`);
+        // 将用户输入添加到历史记录
+        conversationHistory.push({
+            role: "user",
+            content: userInput
+        });
+        // 可选：打印当前发送历史用于调试
+        // console.log("当前发送的消息历史:", JSON.stringify(conversationHistory, null, 2));
+
+        try {
+            console.log(`正在向本地代理 ${LOCAL_PROXY_URL} 发送请求...`);
+            const completion = await openai.chat.completions.create({
+                messages: conversationHistory,
+                model: CUSTOM_MODEL_NAME,
+                stream: true, // 启用流式输出
+            });
+
+            console.log("\n--- 来自本地代理 (AI Studio) 的回复 ---");
+            let fullResponse = ""; // 用于拼接完整的回复内容
+            process.stdout.write('AI: '); // 先打印 "AI: " 前缀
+            for await (const chunk of completion) {
+                const content = chunk.choices[0]?.delta?.content || "";
+                process.stdout.write(content); // 直接打印流式内容，不换行
+                fullResponse += content; // 拼接内容
+            }
+            console.log(); // 在流结束后换行
+
+            // 将完整的 AI 回复添加到历史记录
+            if (fullResponse) {
+                 conversationHistory.push({ role: "assistant", content: fullResponse });
+            } else {
+                console.log("未能从代理获取有效的流式内容。");
+                 // 如果回复无效，可以选择从历史中移除刚才的用户输入
+                conversationHistory.pop();
+            }
+            console.log("----------------------------------------------\n");
+
+        } catch (error) {
+            console.error("\n--- 请求出错 ---");
+            // 保持之前的错误处理逻辑
+            if (error instanceof OpenAI.APIError) {
+                console.error(`   错误类型: OpenAI APIError (可能是代理返回的错误)`);
+                console.error(`   状态码: ${error.status}`);
+                console.error(`   错误消息: ${error.message}`);
+                console.error(`   错误代码: ${error.code}`);
+                console.error(`   错误参数: ${error.param}`);
+            } else if (error.code === 'ECONNREFUSED') {
+                console.error(`   错误类型: 连接被拒绝 (ECONNREFUSED)`);
+                console.error(`   无法连接到服务器 ${LOCAL_PROXY_URL}。请检查 server.js 是否运行。`);
+            } else if (error.name === 'TimeoutError' || (error.cause && error.cause.code === 'UND_ERR_CONNECT_TIMEOUT')) {
+                 console.error(`   错误类型: 连接超时`);
+                 console.error(`   连接到 ${LOCAL_PROXY_URL} 超时。请检查 server.js 或 AI Studio 响应。`);
+            } else {
+                console.error('   发生了未知错误:', error.message);
+            }
+            console.error("----------------------------------------------\n");
+             // 出错时，从历史中移除刚才的用户输入，避免影响下次对话
+            conversationHistory.pop();
+        }
+
+        // 不论成功或失败，都继续下一次循环
+        chatLoop();
+    });
 }
 
-// --- 运行主函数 ---
-// 在运行前，请确保：
-// 1. 你已经按照 auto_connect_aistudio.js 的指引启动了 Chrome 并连接成功。
-// 2. 你已经在另一个终端运行了 `node server.js` 并且它显示正在监听端口 3000。
-main();
+// --- 启动交互式对话 ---
+console.log('你好! 我是Gemini酱。有什么事可以帮你哒，输入 "exit" 退出。');
+console.log('   (请确保 server.js 和 auto_connect_aistudio.js 正在运行)');
+chatLoop(); // 开始第一次提问
+
+// --- 不再需要文件末尾的 main 调用和 setTimeout 示例 ---
+// // 运行第一次对话
+// main("你好！简单介绍一下你自己以及你的能力。");
+// ... (移除 setTimeout 示例)
