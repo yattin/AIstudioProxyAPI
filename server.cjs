@@ -148,6 +148,10 @@ let browser = null;
 let page = null;
 let isPlaywrightReady = false;
 let isInitializing = false;
+// v2.18: 请求队列和处理状态
+let requestQueue = [];
+let isProcessing = false;
+
 
 // --- Playwright 初始化函数 ---
 async function initializePlaywright() {
@@ -164,6 +168,7 @@ async function initializePlaywright() {
             isPlaywrightReady = false;
             browser = null;
             page = null;
+            // v2.18: Clear queue on disconnect? Maybe not, let requests fail naturally.
         });
 
         await new Promise(resolve => setTimeout(resolve, 500));
@@ -222,6 +227,11 @@ async function initializePlaywright() {
 
         isPlaywrightReady = true;
         console.log('✅ Playwright 已准备就绪。');
+        // v2.18: Start processing queue if playwright just became ready and queue has items
+        if (requestQueue.length > 0 && !isProcessing) {
+             console.log(`[Queue] Playwright 就绪，队列中有 ${requestQueue.length} 个请求，开始处理...`);
+             processQueue();
+        }
 
     } catch (error) {
         console.error(`❌ 初始化 Playwright 失败: ${error.message}`);
@@ -252,15 +262,31 @@ app.get('/', (req, res) => {
 app.get('/health', (req, res) => {
     const isConnected = browser?.isConnected() ?? false;
     const isPageValid = page && !page.isClosed();
+    const queueLength = requestQueue.length;
+    const status = {
+        status: 'Unknown',
+        message: '',
+        playwrightReady: isPlaywrightReady,
+        browserConnected: isConnected,
+        pageValid: isPageValid,
+        initializing: isInitializing,
+        processing: isProcessing,
+        queueLength: queueLength
+    };
+
     if (isPlaywrightReady && isPageValid && isConnected) {
-        res.status(200).json({ status: 'OK', message: 'Server running, Playwright connected, page valid.' });
+        status.status = 'OK';
+        status.message = `Server running, Playwright connected, page valid. Currently ${isProcessing ? 'processing' : 'idle'} with ${queueLength} item(s) in queue.`;
+        res.status(200).json(status);
     } else {
+        status.status = 'Error';
         const reasons = [];
         if (!isPlaywrightReady) reasons.push("Playwright not initialized or ready");
         if (!isPageValid) reasons.push("Target page not found or closed");
         if (!isConnected) reasons.push("Browser disconnected");
         if (isInitializing) reasons.push("Playwright is currently initializing");
-        res.status(503).json({ status: 'Error', message: `Service Unavailable. Issues: ${reasons.join(', ')}.` });
+        status.message = `Service Unavailable. Issues: ${reasons.join(', ')}. Currently ${isProcessing ? 'processing' : 'idle'} with ${queueLength} item(s) in queue.`;
+        res.status(503).json(status);
     }
 });
 
@@ -433,7 +459,7 @@ async function handleStreamingResponse(res, responseElement, page, { inputField,
     } // --- End main loop ---
 
     // --- Cleanup and End ---
-    clearTimeout(operationTimer);
+    clearTimeout(operationTimer); // Clear the specific timer for THIS request
 
     if (!streamFinishedNaturally && Date.now() - startTime >= RESPONSE_COMPLETION_TIMEOUT) {
         // Timeout case
@@ -717,6 +743,7 @@ async function handleNonStreamingResponse(res, page, locators, operationTimer, r
                   usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
               };
               console.log(`[${reqId}] ✅ 返回 JSON 响应 (来自解析后的JSON)。`);
+              clearTimeout(operationTimer); // Clear the specific timer for THIS request
               res.json(responsePayload);
           }
 
@@ -752,128 +779,168 @@ app.get('/v1/models', (req, res) => {
     });
 });
 
-// --- API 端点 (重构后) ---
+
+// --- v2.18: 新增队列处理函数 ---
+async function processQueue() {
+     if (isProcessing || requestQueue.length === 0) {
+          // console.log(`[Queue] Process check: Already processing (${isProcessing}) or queue empty (${requestQueue.length}). Exiting.`);
+          return; // 如果正在处理或队列为空，则退出
+     }
+
+     isProcessing = true;
+     const { req, res, reqId } = requestQueue.shift(); // 从队列头部取出一个请求
+     console.log(`\n[${reqId}] ---开始处理队列中的请求 (剩余 ${requestQueue.length} 个)---`);
+
+     let operationTimer; // Timer for this specific request
+
+     try {
+          // 1. 检查 Playwright 状态 (针对当前请求)
+          if (!isPlaywrightReady && !isInitializing) {
+               console.warn(`[${reqId}] Playwright 未就绪，尝试重新初始化...`);
+               await initializePlaywright();
+          }
+          if (!isPlaywrightReady || !page || page.isClosed() || !browser?.isConnected()) {
+               console.error(`[${reqId}] API 请求失败：Playwright 未就绪、页面关闭或连接断开。`);
+               let detail = 'Unknown issue.';
+               if (!browser?.isConnected()) detail = "Browser connection lost.";
+               else if (!page || page.isClosed()) detail = "Target AI Studio page is not available or closed.";
+               else if (!isPlaywrightReady) detail = "Playwright initialization failed or incomplete.";
+               console.error(`[${reqId}] Playwright 连接不可用详情: ${detail}`);
+               // 直接为当前请求返回错误，不需要抛出，因为要继续处理队列
+               if (!res.headersSent) {
+                    res.status(503).json({
+                         error: { message: `[${reqId}] Playwright connection is not active. ${detail} Please ensure Chrome is running correctly, the AI Studio tab is open, and potentially restart the server.`, type: 'server_error' }
+                    });
+               }
+               throw new Error("Playwright not ready for this request."); // Throw to skip further processing in try block
+          }
+
+          const { messages, stream, ...otherParams } = req.body;
+          const isStreaming = stream === true;
+
+          console.log(`[${reqId}] 请求模式: ${isStreaming ? '流式 (SSE)' : '非流式 (JSON)'}`);
+
+          // 2. 设置此请求的总操作超时
+          operationTimer = setTimeout(async () => {
+               await saveErrorSnapshot(`operation_timeout_${reqId}`);
+               console.error(`[${reqId}] Operation timed out after ${RESPONSE_COMPLETION_TIMEOUT / 1000} seconds.`);
+               if (!res.headersSent) {
+                    res.status(504).json({ error: { message: `[${reqId}] Operation timed out`, type: 'timeout_error' } });
+               } else if (isStreaming && !res.writableEnded) {
+                    sendStreamError(res, "Operation timed out on server.", reqId);
+               }
+               // Note: Timeout error now managed within processQueue, allowing next item to proceed
+          }, RESPONSE_COMPLETION_TIMEOUT);
+
+          // 3. 验证请求
+          const { userPrompt, systemPrompt: extractedSystemPrompt } = validateChatRequest(messages);
+          const systemPrompt = extractedSystemPrompt || otherParams?.system_prompt; // Combine sources
+
+          console.log(`[${reqId}]   原始 User Prompt (start): \"${userPrompt?.substring(0, 80)}...\"`);
+          if (systemPrompt) {
+               console.log(`[${reqId}]   System Prompt (start): \"${systemPrompt.substring(0, 80)}...\"`);
+          }
+          if (Object.keys(otherParams).length > 0) {
+                console.log(`[${reqId}]   记录到的额外参数: ${JSON.stringify(otherParams)}`);
+          }
+
+          // 4. 准备 Prompt
+          let prompt;
+          if (isStreaming) {
+               prompt = prepareAIStudioPromptStream(userPrompt, systemPrompt);
+               console.log(`[${reqId}] 构建的流式 Prompt (Raw): \"${prompt.substring(0, 200)}...\"`);
+          } else {
+               prompt = prepareAIStudioPrompt(userPrompt, systemPrompt);
+               console.log(`[${reqId}] 构建的非流式 Prompt (JSON): \"${prompt.substring(0, 200)}...\"`);
+          }
+
+          // 5. 与页面交互并提交
+          const locators = await interactAndSubmitPrompt(page, prompt, reqId);
+
+          // 6. 定位响应元素
+          const { responseElement } = await locateResponseElements(page, locators, reqId);
+
+          // 7. 处理响应 (流式或非流式)
+          console.log(`[${reqId}] 处理 AI 回复...`);
+          if (isStreaming) {
+               // --- 设置流式响应头 ---
+               res.setHeader('Content-Type', 'text/event-stream');
+               res.setHeader('Cache-Control', 'no-cache');
+               res.setHeader('Connection', 'keep-alive');
+               res.flushHeaders();
+
+               // 调用流式处理函数
+               await handleStreamingResponse(res, responseElement, page, locators, operationTimer, reqId);
+
+          } else {
+               // 调用非流式处理函数
+               await handleNonStreamingResponse(res, page, locators, operationTimer, reqId);
+          }
+
+          console.log(`[${reqId}] ✅ 请求处理成功完成。`);
+          // Clear timeout only on successful completion within try block
+          clearTimeout(operationTimer);
+
+     } catch (error) {
+          clearTimeout(operationTimer); // 确保在任何错误情况下都清除此请求的定时器
+          console.error(`[${reqId}] ❌ 处理队列中的请求时出错: ${error.message}\n${error.stack}`);
+          if (!error.message?.includes('snapshot') && !error.stack?.includes('saveErrorSnapshot') && !error.message?.includes('Playwright not ready')) {
+               // 避免在保存快照失败或已知Playwright问题时再次尝试保存
+               await saveErrorSnapshot(`general_api_error_${reqId}`);
+          }
+
+          // 发送错误响应，如果尚未发送
+          if (!res.headersSent) {
+                let statusCode = 500;
+                let errorType = 'server_error';
+                if (error.message?.includes('timed out') || error.message?.includes('timeout')) {
+                    statusCode = 504; // Gateway Timeout
+                    errorType = 'timeout_error';
+                } else if (error.message?.includes('AI Studio Error')) {
+                    statusCode = 502; // Bad Gateway (error from upstream)
+                    errorType = 'upstream_error';
+                } else if (error.message?.includes('Invalid request')) {
+                    statusCode = 400; // Bad Request
+                    errorType = 'invalid_request_error';
+                } else if (error.message?.includes('Playwright not ready')) { // Specific handling for PW not ready here
+                    statusCode = 503;
+                    errorType = 'server_error';
+                }
+               res.status(statusCode).json({ error: { message: `[${reqId}] ${error.message}`, type: errorType } });
+          } else if (req.body.stream === true && !res.writableEnded) { // Check if it WAS a streaming request
+                // 如果是流式响应且头部已发送，则发送流式错误
+                sendStreamError(res, error.message, reqId);
+          }
+          else if (!res.writableEnded) {
+                // 对于非流式但已发送部分内容的罕见情况，或流式错误发送后的清理
+                res.end();
+          }
+     } finally {
+          isProcessing = false; // 标记处理已结束
+          console.log(`[${reqId}] ---结束处理队列中的请求---`);
+          // 触发处理下一个请求（如果队列中有）
+          processQueue();
+     }
+}
+
+// --- API 端点 (v2.18: 使用队列) ---
 app.post('/v1/chat/completions', async (req, res) => {
     const reqId = Math.random().toString(36).substring(2, 9); // 生成简短的请求 ID
-    console.log(`\n[${reqId}] --- 收到 /v1/chat/completions 请求 ---`);
+    console.log(`\n[${reqId}] === 收到 /v1/chat/completions 请求 ===`);
 
-    // 1. 检查 Playwright 状态
-    if (!isPlaywrightReady && !isInitializing) {
-        console.warn(`[${reqId}] Playwright 未就绪，尝试重新初始化...`);
-        await initializePlaywright(); // 注意：initializePlaywright 内部日志无 reqId
-    }
-    if (!isPlaywrightReady || !page || page.isClosed() || !browser?.isConnected()) {
-        console.error(`[${reqId}] API 请求失败：Playwright 未就绪、页面关闭或连接断开。`);
-         let detail = 'Unknown issue.';
-         if (!browser?.isConnected()) detail = "Browser connection lost.";
-         else if (!page || page.isClosed()) detail = "Target AI Studio page is not available or closed.";
-         else if (!isPlaywrightReady) detail = "Playwright initialization failed or incomplete.";
-         console.error(`[${reqId}] Playwright 连接不可用详情: ${detail}`);
-        return res.status(503).json({
-            error: { message: `[${reqId}] Playwright connection is not active. ${detail} Please ensure Chrome is running correctly, the AI Studio tab is open, and potentially restart the server.`, type: 'server_error' }
-        });
-    }
+    // 将请求加入队列
+    requestQueue.push({ req, res, reqId });
+    console.log(`[${reqId}] 请求已加入队列 (当前队列长度: ${requestQueue.length})`);
 
-    const { messages, stream, ...otherParams } = req.body;
-    const isStreaming = stream === true;
-    let operationTimer;
-
-    try {
-        console.log(`[${reqId}] 请求模式: ${isStreaming ? '流式 (SSE)' : '非流式 (JSON)'}`);
-
-        // 2. 设置总操作超时
-        operationTimer = setTimeout(async () => {
-            await saveErrorSnapshot(`operation_timeout_${reqId}`);
-            console.error(`[${reqId}] Operation timed out after ${RESPONSE_COMPLETION_TIMEOUT / 1000} seconds.`);
-            if (!res.headersSent) {
-                 res.status(504).json({ error: { message: `[${reqId}] Operation timed out`, type: 'timeout_error' } });
-            } else if (isStreaming && !res.writableEnded) {
-                 sendStreamError(res, "Operation timed out on server.", reqId);
-            }
-        }, RESPONSE_COMPLETION_TIMEOUT);
-
-        // 3. 验证请求
-        const { userPrompt, systemPrompt: extractedSystemPrompt } = validateChatRequest(messages);
-        const systemPrompt = extractedSystemPrompt || otherParams?.system_prompt; // Combine sources
-
-        console.log(`[${reqId}]   原始 User Prompt (start): \"${userPrompt?.substring(0, 80)}...\"`);
-        if (systemPrompt) {
-            console.log(`[${reqId}]   System Prompt (start): \"${systemPrompt.substring(0, 80)}...\"`);
-        }
-        if (Object.keys(otherParams).length > 0) {
-             console.log(`[${reqId}]   记录到的额外参数: ${JSON.stringify(otherParams)}`);
-        }
-
-        // 4. 准备 Prompt
-        let prompt;
-        if (isStreaming) {
-            prompt = prepareAIStudioPromptStream(userPrompt, systemPrompt);
-            console.log(`[${reqId}] 构建的流式 Prompt (Raw): \"${prompt.substring(0, 200)}...\"`);
-        } else {
-            prompt = prepareAIStudioPrompt(userPrompt, systemPrompt);
-            console.log(`[${reqId}] 构建的非流式 Prompt (JSON): \"${prompt.substring(0, 200)}...\"`);
-        }
-
-        // 5. 与页面交互并提交
-        const locators = await interactAndSubmitPrompt(page, prompt, reqId);
-
-        // 6. 定位响应元素
-        const { responseElement } = await locateResponseElements(page, locators, reqId);
-
-        // 7. 处理响应 (流式或非流式)
-        console.log(`[${reqId}] 处理 AI 回复...`);
-        if (isStreaming) {
-            // --- 设置流式响应头 ---
-            res.setHeader('Content-Type', 'text/event-stream');
-            res.setHeader('Cache-Control', 'no-cache');
-            res.setHeader('Connection', 'keep-alive');
-            res.flushHeaders();
-
-            // 调用流式处理函数
-            await handleStreamingResponse(res, responseElement, page, locators, operationTimer, reqId);
-
-        } else {
-            // 调用非流式处理函数
-            await handleNonStreamingResponse(res, page, locators, operationTimer, reqId);
-        }
-
-        console.log(`[${reqId}] ✅ 请求处理成功完成。`);
-        clearTimeout(operationTimer); // 清除总超时定时器（成功完成）
-
-    } catch (error) {
-        clearTimeout(operationTimer); // 确保在任何错误情况下都清除定时器
-        console.error(`[${reqId}] ❌ 处理 API 请求时出错: ${error.message}\n${error.stack}`);
-        if (!error.message?.includes('snapshot') && !error.stack?.includes('saveErrorSnapshot')) {
-             // 避免在保存快照失败时再次尝试保存快照
-             await saveErrorSnapshot(`general_api_error_${reqId}`);
-        }
-
-        // 发送错误响应
-        if (!res.headersSent) {
-             // 根据错误类型判断状态码，提供一些常见情况的处理
-             let statusCode = 500;
-             let errorType = 'server_error';
-             if (error.message?.includes('timed out') || error.message?.includes('timeout')) {
-                 statusCode = 504; // Gateway Timeout
-                 errorType = 'timeout_error';
-             } else if (error.message?.includes('AI Studio Error')) {
-                 statusCode = 502; // Bad Gateway (error from upstream)
-                 errorType = 'upstream_error';
-             } else if (error.message?.includes('Invalid request')) {
-                 statusCode = 400; // Bad Request
-                 errorType = 'invalid_request_error';
-             }
-            res.status(statusCode).json({ error: { message: `[${reqId}] ${error.message}`, type: errorType } });
-        } else if (isStreaming && !res.writableEnded) {
-             // 如果是流式响应且头部已发送，则发送流式错误
-             sendStreamError(res, error.message, reqId);
-        }
-        else if (!res.writableEnded) {
-             // 对于非流式但已发送部分内容的罕见情况，或流式错误发送后的清理
-             res.end();
-        }
+    // 尝试处理队列 (如果当前未在处理)
+    if (!isProcessing) {
+        console.log(`[Queue] 触发队列处理 (收到新请求 ${reqId} 时处于空闲状态)`);
+        processQueue();
+    } else {
+         console.log(`[Queue] 当前正在处理其他请求，请求 ${reqId} 已排队等待。`);
     }
 });
+
 
 // --- Helper: 获取当前文本 (v2.14 - 获取原始文本) -> vNEXT: Try innerText
 async function getRawTextContent(responseElement, previousText, reqId) {
@@ -1050,12 +1117,14 @@ let serverInstance = null;
 
     serverInstance = app.listen(SERVER_PORT, () => {
         console.log("\n=============================================================");
-        console.log("          🚀 AI Studio Proxy Server (v2.17+) 🚀");
+        // v2.18: Updated version marker
+        console.log("          🚀 AI Studio Proxy Server (v2.18 - Queue) 🚀");
         console.log("=============================================================");
         console.log(`🔗 监听地址: http://localhost:${SERVER_PORT}`);
         console.log(`   - Web UI (测试): http://localhost:${SERVER_PORT}/`);
         console.log(`   - API 端点:   http://localhost:${SERVER_PORT}/v1/chat/completions`);
         console.log(`   - 模型接口:   http://localhost:${SERVER_PORT}/v1/models`);
+        console.log(`   - 健康检查:   http://localhost:${SERVER_PORT}/health`);
         console.log("-------------------------------------------------------------");
         if (isPlaywrightReady) {
             console.log('✅ Playwright 连接成功，服务已准备就绪！');
@@ -1090,6 +1159,9 @@ async function shutdown(signal) {
     if (isShuttingDown) return;
     isShuttingDown = true;
     console.log(`\n收到 ${signal} 信号，正在关闭服务器...`);
+    console.log(`当前队列中有 ${requestQueue.length} 个请求等待处理。将不再接受新请求。`);
+    // Option: Wait for the current request to finish?
+    // For now, we'll just close the server, potentially interrupting the current request.
 
     if (serverInstance) {
         serverInstance.close(async (err) => {
