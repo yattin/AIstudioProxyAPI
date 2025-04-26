@@ -130,4 +130,7 @@ public
 
 # IDE config folders
 .idea/
-.vscode/ 
+.vscode/
+
+# Custom
+errors/ 
