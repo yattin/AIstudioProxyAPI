@@ -244,7 +244,7 @@ async function interactAndSubmitPrompt(page, prompt, reqId) {
 
 // 定位 AI 回复元素
 async function locateResponseElements(page, locators /* Pass locators */, reqId) {
-    console.log(`[${reqId}] 定位 AI 回复元素...`);
+    // console.log(`[${reqId}] 定位 AI 回复元素...`); // Commented out noisy log
     let lastResponseContainer;
     let responseElement;
     let locatedResponseElements = false;
@@ -252,7 +252,7 @@ async function locateResponseElements(page, locators /* Pass locators */, reqId)
     // Increased retries for robustness
     for (let i = 0; i < 3 && !locatedResponseElements; i++) {
         try {
-            console.log(`[${reqId}]    (Locate Attempt ${i + 1}) 尝试定位最新回复容器及文本元素...`);
+            // console.log(`[${reqId}]    (Locate Attempt ${i + 1}) 尝试定位最新回复容器及文本元素...`); // Comment out loop log
             await page.waitForTimeout(500 + i * 300); // Slightly longer initial delay and increment
 
             lastResponseContainer = page.locator(RESPONSE_CONTAINER_SELECTOR).last();
@@ -261,7 +261,7 @@ async function locateResponseElements(page, locators /* Pass locators */, reqId)
             responseElement = lastResponseContainer.locator(RESPONSE_TEXT_SELECTOR);
             await responseElement.waitFor({ state: 'attached', timeout: 7000 }); // Increased timeout
 
-            console.log(`[${reqId}]    (Locate Attempt ${i + 1}) 回复容器和文本元素定位成功。`);
+            // console.log(`[${reqId}]    (Locate Attempt ${i + 1}) 回复容器和文本元素定位成功。`); // Comment out loop log
             locatedResponseElements = true;
         } catch (locateError) {
             console.warn(`[${reqId}]    (Locate Attempt ${i + 1}) 定位回复元素失败: ${locateError.message.split('\\n')[0]}`);
@@ -385,47 +385,236 @@ app.post('/v1/chat/completions', async (req, res) => {
         // 5. 与页面交互并提交
         const locators = await interactAndSubmitPrompt(page, prompt, reqId);
 
-        // 6. 等待 AI 完成
-        console.log(`[${reqId}] 等待 AI 完成 (UI 状态 + 文本静默)...`);
-        const completionConfirmed = await waitForAICompletion(page, locators, reqId);
-        if (!completionConfirmed) {
-             console.warn(`[${reqId}] AI 完成状态未能在超时内确认，但仍将尝试获取内容。`);
-        }
-
-        // 7. 获取、处理并清理最终响应内容
-        console.log(`[${reqId}] 开始获取并处理最终响应内容...`);
-        const finalContent = await getAndProcessFinalResponse(page, locators, reqId);
-        console.log(`[${reqId}] ✅ 成功获取并处理最终内容 (长度: ${finalContent?.length})。`);
-
-        // --- 再次检查页面错误 ---
-        const finalPageError = await detectAndExtractPageError(page, reqId);
-        if (finalPageError) {
-            console.error(`[${reqId}] ❌ 在处理响应后检测到 AI Studio 页面错误: ${finalPageError}`);
-            await saveErrorSnapshot(`page_error_post_processing_${reqId}`);
-            if (!finalContent) {
-                 throw new Error(`[${reqId}] AI Studio Error detected after processing, and no content was retrieved: ${finalPageError}`);
-            }
-        }
-        // --- 结束页面错误检查 ---
-
-        // 8. 根据 stream 参数构建并发送响应
+        // --- Conditional logic based on streaming ---
         if (isStreaming) {
-            // 模拟流式响应
-             console.log(`[${reqId}] 发送模拟流式响应...`);
+            // --- START: Real-time Streaming Logic (Rebuilt for structure) ---
+            console.log(`[${reqId}] Sending real-time streaming response...`);
             if (!res.headersSent) {
-                 res.writeHead(200, {
-                     'Content-Type': 'text/event-stream',
-                     'Cache-Control': 'no-cache',
-                     'Connection': 'keep-alive',
-                 });
+                res.writeHead(200, {
+                    'Content-Type': 'text/event-stream',
+                    'Cache-Control': 'no-cache',
+                    'Connection': 'keep-alive',
+                });
             }
-             sendStreamChunk(res, finalContent, reqId); // Send the single chunk
-             res.write('data: [DONE]\n\n');
-             res.end();
-             console.log(`[${reqId}] ✅ 模拟流式响应 [DONE] 已发送。`);
+
+            let state = 'LOOKING_FOR_START'; // LOOKING_FOR_START, INSIDE_VALUE, POTENTIAL_END, FINISHED
+            let responseValueBuffer = '';
+            let potentialEndBuffer = '';
+            let potentialEndTime = null;
+            let lastSentLength = 0;
+            let processedLength = 0;
+            const END_SILENCE_MS = 90;
+            const POLLING_INTERVAL_MS = 100;
+            let monitoringInterval = null;
+            let lastRawText = '';
+            let responseElement; // Declare here
+            let previousExtractedValue = ''; // Store the previously extracted value
+            let inJsonValue = false; // Flag to indicate if we are processing inside the response value
+
+            try {
+                // Initial check if locators exist (passed from interactAndSubmitPrompt)
+                if (!locators || !locators.inputField) { // Check if locators object is valid
+                     throw new Error("Locators object is invalid after prompt submission.");
+                }
+
+                // --- Start the monitoring interval ---
+                monitoringInterval = setInterval(async () => {
+                    // --- Outer try...catch for the entire interval callback ---
+                    try {
+                        console.log(`[${reqId}] Interval callback started. State: ${state}`); // Log interval start
+                        if (state === 'FINISHED' || res.writableEnded) { // Keep state for FINISHED status
+                            clearInterval(monitoringInterval);
+                            return;
+                        }
+
+                        // --- Re-locate response element inside the loop --- 
+                        let currentResponseElement;
+                        try {
+                            console.log(`[${reqId}] Before locateResponseElements`); // Log before locate
+                            const located = await locateResponseElements(page, locators, reqId);
+                            console.log(`[${reqId}] After locateResponseElements. Found: ${!!located?.responseElement}`); // Log after locate
+                            if (!located || !located.responseElement) {
+                                console.warn(`[${reqId}] ⚠️ Response element not found in interval. Skipping.`);
+                                return; 
+                            }
+                            currentResponseElement = located.responseElement;
+                        } catch (locateErrorInLoop) {
+                             console.warn(`[${reqId}] ⚠️ Error locating response element: ${locateErrorInLoop.message.split('\\n')[0]}. Skipping.`);
+                             return; 
+                        } 
+
+                        // --- Process Text Content --- 
+                        console.log(`[${reqId}] Before textContent`); 
+                        const currentRawText = await currentResponseElement.textContent({ timeout: 2000 }) 
+                            .catch(textReadError => {
+                                console.warn(`[${reqId}] ⚠️ Error reading textContent: ${textReadError.message.split('\\n')[0]}. Skipping.`);
+                                return null;
+                            });
+                        console.log(`[${reqId}] After textContent. Result is null: ${currentRawText === null}`); 
+
+                        if (currentRawText === null) {
+                           return; // Skip if text read failed
+                        }
+
+                        // --- Hybrid Strategy: Find marker, then track value growth --- 
+                        const marker = '{"response": "';
+                        let currentValue = ''; // The estimated actual value of the response field
+                        let processStartIndex = 0; // Where to start processing from in currentRawText
+
+                        if (!inJsonValue) {
+                            // Look for the start marker if we haven't found it yet
+                            const startIndex = currentRawText.indexOf(marker);
+                            if (startIndex !== -1) {
+                                console.log(`[${reqId}] Found JSON start marker.`);
+                                inJsonValue = true;
+                                processStartIndex = startIndex + marker.length; // Start processing after the marker
+                                previousExtractedValue = ''; // Reset previous value
+                            } else {
+                                console.log(`[${reqId}] Start marker not found yet. Waiting...`);
+                                // Maybe log part of raw text here if needed for debugging garbage
+                                // console.log(`[${reqId}] Raw: "${currentRawText.substring(0, 70).replace(/\n/g, '\\n')}..."`);
+                            }
+                        } else {
+                             // If we were already in the JSON value, assume marker is still at the beginning
+                             // or handle cases where it might disappear/reappear if necessary
+                             const startIndex = currentRawText.indexOf(marker);
+                             if (startIndex !== -1) {
+                                 processStartIndex = startIndex + marker.length;
+                             } else {
+                                 // Marker disappeared? Log warning and reset state.
+                                 console.warn(`[${reqId}] ⚠️ JSON start marker disappeared after being found. Resetting.`);
+                                 inJsonValue = false;
+                                 previousExtractedValue = '';
+                                 return; // Skip processing this interval
+                             }
+                        }
+
+                        if (inJsonValue) {
+                            // Extract text after the marker
+                            const potentialValueString = currentRawText.substring(processStartIndex);
+                            
+                            // Find the first non-escaped closing quote
+                            let endQuoteIndex = -1;
+                            let searchPos = 0;
+                            while(searchPos < potentialValueString.length) {
+                                let quotePos = potentialValueString.indexOf('"', searchPos);
+                                if (quotePos === -1) break; 
+                                if (quotePos > 0 && potentialValueString[quotePos - 1] === '\\\\') {
+                                    searchPos = quotePos + 1;
+                                } else {
+                                    endQuoteIndex = quotePos;
+                                    break;
+                                }
+                            }
+
+                            if (endQuoteIndex !== -1) {
+                                // Found potential end quote, value is up to this quote
+                                currentValue = potentialValueString.substring(0, endQuoteIndex);
+                                console.log(`[${reqId}] Potential end quote found. Current value (len: ${currentValue.length}): "${currentValue.substring(0, 70).replace(/\n/g, '\\n')}..."`);
+                                // --- Optional: Re-introduce POTENTIAL_END state here if needed --- 
+                                // Check char after quote, if '}', set state = POTENTIAL_END, start timer?
+                                // For now, we rely only on UI check for simplicity.
+                            } else {
+                                // No end quote found yet, AI is still typing the value
+                                currentValue = potentialValueString;
+                                console.log(`[${reqId}] No end quote found. Assuming full potential value (len: ${currentValue.length}): "${currentValue.substring(0, 70).replace(/\n/g, '\\n')}..."`);
+                            }
+
+                            // Compare with previous value and send increment
+                            if (currentValue.length > previousExtractedValue.length) {
+                                const increment = currentValue.substring(previousExtractedValue.length);
+                                console.log(`[${reqId}] Sending value increment (len: ${increment.length}): "${increment.substring(0, 50).replace(/\n/g, '\\n')}..."`);
+                                sendStreamChunk(res, increment, reqId);
+                                previousExtractedValue = currentValue; // Update previous value
+                            } else if (currentValue.length < previousExtractedValue.length) {
+                                console.warn(`[${reqId}] ⚠️ Content shrinking detected. Resetting previous value.`);
+                                previousExtractedValue = currentValue;
+                            } else {
+                                // Lengths are the same, check if content actually differs (e.g., due to replacements)
+                                if (currentValue !== previousExtractedValue) {
+                                     console.warn(`[${reqId}] ⚠️ Content changed but length is same? Sending full current value.`);
+                                     // Send the whole current value might be safer than trying to diff?
+                                     sendStreamChunk(res, currentValue, reqId); 
+                                     previousExtractedValue = currentValue;
+                                } else {
+                                     console.log(`[${reqId}] Value unchanged. No increment.`);
+                                }
+                            }
+                        } // end if(inJsonValue)
+                        
+                        // --- UI Fallback Check --- 
+                        if (state !== 'FINISHED' && inJsonValue) { 
+                             try { 
+                                const isSpinnerHidden = await locators.loadingSpinner.isHidden({ timeout: 150 });
+                                const isButtonDisabled = await locators.submitButton.isDisabled({ timeout: 150 });
+                                if (isSpinnerHidden && isButtonDisabled) { 
+                                    console.log(`[${reqId}] UI indicates completion. Finalizing stream.`);
+                                    state = 'FINISHED';
+                                    clearInterval(monitoringInterval);
+                                    clearTimeout(operationTimer);
+                                    console.log(`[${reqId}] Finalizing stream via UI fallback. Last extracted value: "${previousExtractedValue.substring(0,100).replace(/\n/g, '\\n')}..."`); 
+                                    if (!res.writableEnded) { res.write('data: [DONE]\\n\\n'); res.end(); }
+                                }
+                            } catch (uiCheckError) {
+                                console.warn(`[${reqId}] ⚠️ Warning during fallback UI check: ${uiCheckError.message.split('\\n')[0]}`);
+                            } 
+                        } 
+                        
+                    } catch (intervalError) { 
+                        console.error(`[${reqId}] ❌ Error inside monitoring interval: ${intervalError.message}`);
+                        state = 'FINISHED'; 
+                        clearInterval(monitoringInterval);
+                        clearTimeout(operationTimer); 
+                        sendStreamError(res, `Error during streaming monitor: ${intervalError.message}`, reqId);
+                        if (!res.writableEnded) res.end();
+                    } 
+                }, POLLING_INTERVAL_MS); 
+
+                // Timeout handler - Log previousExtractedValue
+                operationTimer._onTimeout = () => { 
+                    console.error(`[${reqId}] Streaming operation timed out (${RESPONSE_COMPLETION_TIMEOUT}ms).`);
+                    if (monitoringInterval) clearInterval(monitoringInterval);
+                     console.log(`[${reqId}] Finalizing stream via TIMEOUT. Last extracted value: "${previousExtractedValue.substring(0, 100).replace(/\n/g, '\\n')}..."`); 
+                    if (state !== 'FINISHED' && !res.writableEnded) {
+                        sendStreamError(res, "Operation timed out on server.", reqId);
+                    } else if (!res.writableEnded){
+                         res.end();
+                    }
+                };
+
+            } catch (streamingSetupError) { 
+                 console.error(`[${reqId}] ❌ Error setting up streaming: ${streamingSetupError.message}`);
+                 clearTimeout(operationTimer); 
+                 if (monitoringInterval) clearInterval(monitoringInterval); 
+                 sendStreamError(res, `Failed to setup streaming: ${streamingSetupError.message}`, reqId);
+                 if (!res.writableEnded) res.end();
+            } 
 
         } else {
-            // 发送标准的非流式 JSON 响应
+            // --- START: Non-Streaming Logic ---
+            // (Keep the original non-streaming logic here)
+            console.log(`[${reqId}] Waiting for AI completion (non-streaming)...`);
+            const completionConfirmed = await waitForAICompletion(page, locators, reqId);
+            if (!completionConfirmed) {
+                 console.warn(`[${reqId}] AI completion confirmation timed out, attempting to get content anyway.`);
+            }
+
+            console.log(`[${reqId}] Getting and processing final response (non-streaming)...`);
+            const finalContent = await getAndProcessFinalResponse(page, locators, reqId);
+            console.log(`[${reqId}] ✅ Retrieved final content (length: ${finalContent?.length}).`);
+
+            const finalPageError = await detectAndExtractPageError(page, reqId);
+            if (finalPageError) {
+                console.error(`[${reqId}] ❌ Post-processing AI Studio page error: ${finalPageError}`);
+                await saveErrorSnapshot(`page_error_post_processing_${reqId}`);
+                if (!finalContent) {
+                     throw new Error(`[${reqId}] AI Studio Error detected, and no content retrieved: ${finalPageError}`);
+                } else {
+                     console.warn(`[${reqId}] AI Studio error detected, proceeding with potentially incomplete content.`);
+                }
+            }
+
+            clearTimeout(operationTimer);
             const responsePayload = {
                 id: `${CHAT_COMPLETION_ID_PREFIX}${Date.now()}-${Math.random().toString(36).substring(2, 15)}`,
                 object: 'chat.completion',
@@ -433,26 +622,26 @@ app.post('/v1/chat/completions', async (req, res) => {
                 model: MODEL_NAME,
                 choices: [{
                     index: 0,
-                    message: { role: 'assistant', content: finalContent },
+                    message: { role: 'assistant', content: finalContent || "Error: Failed to retrieve content." },
                     finish_reason: 'stop',
                 }],
                 usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
             };
-            console.log(`[${reqId}] ✅ 返回 JSON 响应。`);
+            console.log(`[${reqId}] ✅ Sending JSON response.`);
             res.json(responsePayload);
-        }
+            // --- END: Non-Streaming Logic ---
+        } // End if(isStreaming)/else
 
-        console.log(`[${reqId}] ✅ 请求处理成功完成。`);
-        clearTimeout(operationTimer);
+    } catch (error) { // Catch errors in the main handler (before streaming/non-streaming split or general errors)
+        console.error(`[${reqId}] ❌ Top-level API request error: ${error.message}\n${error.stack}`);
+        if (monitoringInterval) clearInterval(monitoringInterval); // Ensure interval cleared on any error
+        clearTimeout(operationTimer); // Ensure main timer cleared
 
-    } catch (error) {
-        clearTimeout(operationTimer);
-        console.error(`[${reqId}] ❌ 处理 API 请求时出错: ${error.message}\n${error.stack}`);
         if (!error.message?.includes('snapshot') && !error.stack?.includes('saveErrorSnapshot')) {
              await saveErrorSnapshot(`general_api_error_${reqId}`);
         }
 
-        // 发送错误响应
+        // Send error response
         if (!res.headersSent) {
              let statusCode = 500;
              let errorType = 'server_error';
@@ -462,6 +651,8 @@ app.post('/v1/chat/completions', async (req, res) => {
                  statusCode = 502; errorType = 'upstream_error';
              } else if (error.message?.includes('Invalid request')) {
                  statusCode = 400; errorType = 'invalid_request_error';
+             } else if (error.message?.includes('locate AI response element') || error.message?.includes('streaming setup')) {
+                 statusCode = 503; errorType = 'server_error';
              }
             res.status(statusCode).json({ error: { message: `[${reqId}] ${error.message}`, type: errorType } });
         } else if (isStreaming && !res.writableEnded) {
@@ -469,8 +660,11 @@ app.post('/v1/chat/completions', async (req, res) => {
         } else if (!res.writableEnded) {
              res.end();
         }
-    }
-});
+    } finally { // Main handler finally block
+         clearTimeout(operationTimer); // Final check to clear timer
+         // Interval should be cleared within its specific logic paths or catch blocks
+    } // End finally
+}); // End app.post
 
 // --- Helper: 发送流式块 ---
 function sendStreamChunk(res, delta, reqId) {
@@ -654,35 +848,41 @@ async function getAndProcessFinalResponse(page, locators, reqId) {
 }
 
 
-// --- Helper: 安全解析 JSON ---
+// --- Helper: 安全解析 JSON (modified slightly for clarity) ---
 function tryParseJson(text, reqId) {
     if (!text || typeof text !== 'string') return null;
-    text = text.trim();
+    const trimmedText = text.trim(); // Trim whitespace first
 
     let startIndex = -1;
     let endIndex = -1;
 
-    const firstBrace = text.indexOf('{');
-    const firstBracket = text.indexOf('[');
+    // Find the first opening brace or bracket
+    const firstBrace = trimmedText.indexOf('{');
+    const firstBracket = trimmedText.indexOf('[');
 
     if (firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) {
         startIndex = firstBrace;
-        endIndex = text.lastIndexOf('}');
+        // Find the last closing brace for robustness against nested objects/errors
+        endIndex = trimmedText.lastIndexOf('}');
     } else if (firstBracket !== -1) {
         startIndex = firstBracket;
-        endIndex = text.lastIndexOf(']');
+        // Find the last closing bracket
+        endIndex = trimmedText.lastIndexOf(']');
     }
 
     if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) {
-        return null;
+        // console.log(`[${reqId}] (tryParseJson) No valid start/end brackets/braces found in: "${trimmedText.substring(0, 50)}..."`);
+        return null; // No valid structure found
     }
 
-    const jsonText = text.substring(startIndex, endIndex + 1);
+    // Extract the potential JSON part
+    const jsonText = trimmedText.substring(startIndex, endIndex + 1);
 
     try {
         return JSON.parse(jsonText);
     } catch (e) {
-        return null;
+         // console.warn(`[${reqId}] (tryParseJson) Failed to parse extracted text: "${jsonText.substring(0,100)}...". Error: ${e.message}`);
+        return null; // Parsing failed
     }
 }
 
