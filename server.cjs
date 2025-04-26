@@ -387,8 +387,8 @@ app.post('/v1/chat/completions', async (req, res) => {
 
         // --- Conditional logic based on streaming ---
         if (isStreaming) {
-            // --- START: Real-time Streaming Logic (Rebuilt for structure) ---
-            console.log(`[${reqId}] Sending real-time streaming response...`);
+            // --- START: Rewritten Real-time Streaming Logic (v3 - Hybrid) ---
+            console.log(`[${reqId}] Sending real-time streaming response (Rewritten v3)...`);
             if (!res.headersSent) {
                 res.writeHead(200, {
                     'Content-Type': 'text/event-stream',
@@ -397,44 +397,32 @@ app.post('/v1/chat/completions', async (req, res) => {
                 });
             }
 
-            let state = 'LOOKING_FOR_START'; // LOOKING_FOR_START, INSIDE_VALUE, POTENTIAL_END, FINISHED
-            let responseValueBuffer = '';
-            let potentialEndBuffer = '';
-            let potentialEndTime = null;
-            let lastSentLength = 0;
-            let processedLength = 0;
-            const END_SILENCE_MS = 90;
+            let state = 'INITIAL'; // Use simple state: INITIAL, STREAMING, FINISHED
+            let previousValue = '';  // Store the last successfully sent value part
             const POLLING_INTERVAL_MS = 100;
             let monitoringInterval = null;
-            let lastRawText = '';
-            let responseElement; // Declare here
-            let previousExtractedValue = ''; // Store the previously extracted value
-            let inJsonValue = false; // Flag to indicate if we are processing inside the response value
+            const marker = '{"response": "';
 
             try {
-                // Initial check if locators exist (passed from interactAndSubmitPrompt)
-                if (!locators || !locators.inputField) { // Check if locators object is valid
+                // Initial locator check remains the same
+                if (!locators || !locators.inputField) {
                      throw new Error("Locators object is invalid after prompt submission.");
                 }
 
-                // --- Start the monitoring interval ---
                 monitoringInterval = setInterval(async () => {
-                    // --- Outer try...catch for the entire interval callback ---
+                    // --- Outer try-catch for interval callback ---
                     try {
-                        console.log(`[${reqId}] Interval callback started. State: ${state}`); // Log interval start
-                        if (state === 'FINISHED' || res.writableEnded) { // Keep state for FINISHED status
+                        if (state === 'FINISHED' || res.writableEnded) {
                             clearInterval(monitoringInterval);
                             return;
                         }
 
-                        // --- Re-locate response element inside the loop --- 
+                        // --- Re-locate response element --- 
                         let currentResponseElement;
                         try {
-                            console.log(`[${reqId}] Before locateResponseElements`); // Log before locate
                             const located = await locateResponseElements(page, locators, reqId);
-                            console.log(`[${reqId}] After locateResponseElements. Found: ${!!located?.responseElement}`); // Log after locate
                             if (!located || !located.responseElement) {
-                                console.warn(`[${reqId}] ⚠️ Response element not found in interval. Skipping.`);
+                                // console.warn(`[${reqId}] ⚠️ Response element not found in interval. Skipping.`);
                                 return; 
                             }
                             currentResponseElement = located.responseElement;
@@ -443,57 +431,62 @@ app.post('/v1/chat/completions', async (req, res) => {
                              return; 
                         } 
 
-                        // --- Process Text Content --- 
-                        console.log(`[${reqId}] Before textContent`); 
-                        const currentRawText = await currentResponseElement.textContent({ timeout: 2000 }) 
-                            .catch(textReadError => {
-                                console.warn(`[${reqId}] ⚠️ Error reading textContent: ${textReadError.message.split('\\n')[0]}. Skipping.`);
-                                return null;
-                            });
-                        console.log(`[${reqId}] After textContent. Result is null: ${currentRawText === null}`); 
+                        // --- Fetch text content (with fallback) --- 
+                        let currentRawText = null;
+                        try {
+                            const preElement = currentResponseElement.locator('pre').last();
+                            currentRawText = await preElement.textContent({ timeout: 1000 })
+                                .catch(preReadError => null);
+                            if (currentRawText === null) {
+                                currentRawText = await currentResponseElement.textContent({ timeout: 2000 })
+                                    .catch(textReadError => {
+                                        console.warn(`[${reqId}] ⚠️ Error reading textContent (fallback): ${textReadError.message.split('\\n')[0]}. Skipping.`);
+                                        return null;
+                                    });
+                            }
+                        } catch (locatePreError) {
+                             currentRawText = await currentResponseElement.textContent({ timeout: 2000 })
+                                 .catch(textReadError => {
+                                     console.warn(`[${reqId}] ⚠️ Error reading textContent (fallback after pre locate error): ${textReadError.message.split('\\n')[0]}. Skipping.`);
+                                     return null;
+                                 });
+                        }
 
                         if (currentRawText === null) {
                            return; // Skip if text read failed
                         }
-
-                        // --- Hybrid Strategy: Find marker, then track value growth --- 
-                        const marker = '{"response": "';
-                        let currentValue = ''; // The estimated actual value of the response field
-                        let processStartIndex = 0; // Where to start processing from in currentRawText
-
-                        if (!inJsonValue) {
-                            // Look for the start marker if we haven't found it yet
+                        
+                        // --- Process based on state --- 
+                        let currentValue = ''; // Value extracted in this iteration
+                        
+                        if (state === 'INITIAL') {
                             const startIndex = currentRawText.indexOf(marker);
                             if (startIndex !== -1) {
-                                console.log(`[${reqId}] Found JSON start marker.`);
-                                inJsonValue = true;
-                                processStartIndex = startIndex + marker.length; // Start processing after the marker
-                                previousExtractedValue = ''; // Reset previous value
+                                console.log(`[${reqId}] Found JSON start marker. Switching to STREAMING state.`);
+                                state = 'STREAMING';
+                                previousValue = ''; // Reset previous value
+                                // Re-process the same text in STREAMING state immediately
                             } else {
-                                console.log(`[${reqId}] Start marker not found yet. Waiting...`);
-                                // Maybe log part of raw text here if needed for debugging garbage
+                                // console.log(`[${reqId}] Still looking for start marker...`);
+                                // Optional: log raw text if debugging needed
                                 // console.log(`[${reqId}] Raw: "${currentRawText.substring(0, 70).replace(/\n/g, '\\n')}..."`);
                             }
-                        } else {
-                             // If we were already in the JSON value, assume marker is still at the beginning
-                             // or handle cases where it might disappear/reappear if necessary
-                             const startIndex = currentRawText.indexOf(marker);
-                             if (startIndex !== -1) {
-                                 processStartIndex = startIndex + marker.length;
-                             } else {
-                                 // Marker disappeared? Log warning and reset state.
-                                 console.warn(`[${reqId}] ⚠️ JSON start marker disappeared after being found. Resetting.`);
-                                 inJsonValue = false;
-                                 previousExtractedValue = '';
-                                 return; // Skip processing this interval
-                             }
                         }
+                        
+                        // Use 'if' not 'else if' to allow immediate processing after state change
+                        if (state === 'STREAMING') { 
+                            const startIndex = currentRawText.indexOf(marker);
+                            if (startIndex === -1) {
+                                // Marker disappeared after being found!
+                                console.warn(`[${reqId}] ⚠️ JSON start marker disappeared. Resetting to INITIAL state.`);
+                                state = 'INITIAL';
+                                previousValue = '';
+                                return; // Skip further processing this interval
+                            }
 
-                        if (inJsonValue) {
-                            // Extract text after the marker
-                            const potentialValueString = currentRawText.substring(processStartIndex);
+                            const potentialValueString = currentRawText.substring(startIndex + marker.length);
                             
-                            // Find the first non-escaped closing quote
+                            // Find the first non-escaped closing quote to delimit the current value
                             let endQuoteIndex = -1;
                             let searchPos = 0;
                             while(searchPos < potentialValueString.length) {
@@ -508,42 +501,30 @@ app.post('/v1/chat/completions', async (req, res) => {
                             }
 
                             if (endQuoteIndex !== -1) {
-                                // Found potential end quote, value is up to this quote
+                                // Found a potential end quote
                                 currentValue = potentialValueString.substring(0, endQuoteIndex);
-                                console.log(`[${reqId}] Potential end quote found. Current value (len: ${currentValue.length}): "${currentValue.substring(0, 70).replace(/\n/g, '\\n')}..."`);
-                                // --- Optional: Re-introduce POTENTIAL_END state here if needed --- 
-                                // Check char after quote, if '}', set state = POTENTIAL_END, start timer?
-                                // For now, we rely only on UI check for simplicity.
                             } else {
-                                // No end quote found yet, AI is still typing the value
+                                // No end quote yet, assume everything after marker is value
                                 currentValue = potentialValueString;
-                                console.log(`[${reqId}] No end quote found. Assuming full potential value (len: ${currentValue.length}): "${currentValue.substring(0, 70).replace(/\n/g, '\\n')}..."`);
                             }
 
-                            // Compare with previous value and send increment
-                            if (currentValue.length > previousExtractedValue.length) {
-                                const increment = currentValue.substring(previousExtractedValue.length);
-                                console.log(`[${reqId}] Sending value increment (len: ${increment.length}): "${increment.substring(0, 50).replace(/\n/g, '\\n')}..."`);
+                            // Calculate and send increment
+                            if (currentValue.length > previousValue.length) {
+                                const increment = currentValue.substring(previousValue.length);
+                                // console.log(`[${reqId}] Sending increment (len: ${increment.length}): "${increment.substring(0, 50).replace(/\n/g, '\\n')}..."`); // REMOVED: Keep logs minimal
                                 sendStreamChunk(res, increment, reqId);
-                                previousExtractedValue = currentValue; // Update previous value
-                            } else if (currentValue.length < previousExtractedValue.length) {
-                                console.warn(`[${reqId}] ⚠️ Content shrinking detected. Resetting previous value.`);
-                                previousExtractedValue = currentValue;
-                            } else {
-                                // Lengths are the same, check if content actually differs (e.g., due to replacements)
-                                if (currentValue !== previousExtractedValue) {
-                                     console.warn(`[${reqId}] ⚠️ Content changed but length is same? Sending full current value.`);
-                                     // Send the whole current value might be safer than trying to diff?
-                                     sendStreamChunk(res, currentValue, reqId); 
-                                     previousExtractedValue = currentValue;
-                                } else {
-                                     console.log(`[${reqId}] Value unchanged. No increment.`);
-                                }
+                                previousValue = currentValue;
+                            } else if (currentValue !== previousValue) {
+                                // Handle content change without length increase (or shrinking)
+                                console.warn(`[${reqId}] ⚠️ Value changed without increasing length (or shrank). Sending full value.`);
+                                sendStreamChunk(res, currentValue, reqId);
+                                previousValue = currentValue;
                             }
-                        } // end if(inJsonValue)
+                            // No else needed if value is identical
+                        } // end if (state === 'STREAMING')
                         
-                        // --- UI Fallback Check --- 
-                        if (state !== 'FINISHED' && inJsonValue) { 
+                        // --- UI Fallback Check (Simplified) --- 
+                        if (state === 'STREAMING') { // Only check UI if we think we are streaming
                              try { 
                                 const isSpinnerHidden = await locators.loadingSpinner.isHidden({ timeout: 150 });
                                 const isButtonDisabled = await locators.submitButton.isDisabled({ timeout: 150 });
@@ -552,14 +533,15 @@ app.post('/v1/chat/completions', async (req, res) => {
                                     state = 'FINISHED';
                                     clearInterval(monitoringInterval);
                                     clearTimeout(operationTimer);
-                                    console.log(`[${reqId}] Finalizing stream via UI fallback. Last extracted value: "${previousExtractedValue.substring(0,100).replace(/\n/g, '\\n')}..."`); 
+                                    // console.log(`[${reqId}] Finalizing stream via UI fallback. Last value: "${previousValue.substring(0,100).replace(/\n/g, '\\n')}..."`); // REMOVED: Keep logs minimal
                                     if (!res.writableEnded) { res.write('data: [DONE]\\n\\n'); res.end(); }
                                 }
                             } catch (uiCheckError) {
-                                console.warn(`[${reqId}] ⚠️ Warning during fallback UI check: ${uiCheckError.message.split('\\n')[0]}`);
+                                // console.warn(`[${reqId}] ⚠️ Warning during fallback UI check: ${uiCheckError.message.split('\\n')[0]}`); // REMOVED: Keep logs minimal
                             } 
                         } 
                         
+                    // --- Outer catch for the entire interval callback ---
                     } catch (intervalError) { 
                         console.error(`[${reqId}] ❌ Error inside monitoring interval: ${intervalError.message}`);
                         state = 'FINISHED'; 
@@ -570,17 +552,18 @@ app.post('/v1/chat/completions', async (req, res) => {
                     } 
                 }, POLLING_INTERVAL_MS); 
 
-                // Timeout handler - Log previousExtractedValue
+                // Timeout handler - Log previousValue
                 operationTimer._onTimeout = () => { 
                     console.error(`[${reqId}] Streaming operation timed out (${RESPONSE_COMPLETION_TIMEOUT}ms).`);
                     if (monitoringInterval) clearInterval(monitoringInterval);
-                     console.log(`[${reqId}] Finalizing stream via TIMEOUT. Last extracted value: "${previousExtractedValue.substring(0, 100).replace(/\n/g, '\\n')}..."`); 
+                     console.log(`[${reqId}] Finalizing stream via TIMEOUT. Last known value: "${previousValue.substring(0, 100).replace(/\n/g, '\\n')}..."`); // Keep this debug log
                     if (state !== 'FINISHED' && !res.writableEnded) {
                         sendStreamError(res, "Operation timed out on server.", reqId);
                     } else if (!res.writableEnded){
                          res.end();
                     }
                 };
+                // --- END: Rewritten Real-time Streaming Logic (Setup part) ---
 
             } catch (streamingSetupError) { 
                  console.error(`[${reqId}] ❌ Error setting up streaming: ${streamingSetupError.message}`);
@@ -591,8 +574,7 @@ app.post('/v1/chat/completions', async (req, res) => {
             } 
 
         } else {
-            // --- START: Non-Streaming Logic ---
-            // (Keep the original non-streaming logic here)
+            // --- Non-Streaming Logic (Remains the same) ---
             console.log(`[${reqId}] Waiting for AI completion (non-streaming)...`);
             const completionConfirmed = await waitForAICompletion(page, locators, reqId);
             if (!completionConfirmed) {
@@ -629,10 +611,9 @@ app.post('/v1/chat/completions', async (req, res) => {
             };
             console.log(`[${reqId}] ✅ Sending JSON response.`);
             res.json(responsePayload);
-            // --- END: Non-Streaming Logic ---
         } // End if(isStreaming)/else
 
-    } catch (error) { // Catch errors in the main handler (before streaming/non-streaming split or general errors)
+    } catch (error) { // Catch errors in the main handler
         console.error(`[${reqId}] ❌ Top-level API request error: ${error.message}\n${error.stack}`);
         if (monitoringInterval) clearInterval(monitoringInterval); // Ensure interval cleared on any error
         clearTimeout(operationTimer); // Ensure main timer cleared
