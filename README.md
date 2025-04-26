@@ -46,8 +46,8 @@
 
 1.  **克隆仓库**: 
     ```bash
-    git clone https://github.com/your-username/ai-studio-proxy.git # 替换为你的仓库地址
-    cd ai-studio-proxy
+    git clone https://github.com/CJackHwang/AIstudioProxyAPI
+    cd AIstudioProxyAPI
     ```
 
 2.  **安装依赖**: 
