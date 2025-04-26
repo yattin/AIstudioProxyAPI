@@ -1,6 +1,6 @@
 # AI Studio Proxy Server
 
-[![Node.js CI](https://github.com/YOUR_USERNAME/YOUR_REPO/actions/workflows/node.js.yml/badge.svg)](https://github.com/YOUR_USERNAME/YOUR_REPO/actions/workflows/node.js.yml) <!-- 替换 YOUR_USERNAME/YOUR_REPO -->
+[![Node.js CI](https://github.com/cjackhwang/YOUR_REPO/actions/workflows/node.js.yml/badge.svg)](https://github.com/cjackhwang/YOUR_REPO/actions/workflows/node.js.yml) <!-- 替换 YOUR_USERNAME/YOUR_REPO -->
 
 这是一个 Node.js 代理服务器，它允许您通过模拟 OpenAI API 的方式来访问 Google AI Studio (Gemini)。这使得兼容 OpenAI API 的客户端（如 Open WebUI, NextChat 等）可以间接地使用 AI Studio 的能力。
 
