@@ -1,4 +1,4 @@
-// server_refactored.cjs (v2.30 - 统一获取逻辑)
+// server.cjs (优化版 v2.17 - 增加日志ID & 常量)
 
 const express = require('express');
 const fs = require('fs');
@@ -6,14 +6,37 @@ const path = require('path');
 const cors = require('cors');
 
 // --- 依赖检查 ---
-let playwright;
-let expect;
-try {
-    playwright = require('playwright');
-    expect = require('@playwright/test').expect;
-} catch (e) {
-    console.error("❌ 错误: 依赖模块未找到。请运行:");
-    console.error("   npm install express playwright @playwright/test cors");
+let playwright, expect;
+const requiredModules = ['express', 'playwright', '@playwright/test', 'cors'];
+const missingModules = [];
+
+for (const modName of requiredModules) {
+    try {
+        if (modName === 'playwright') {
+            playwright = require(modName);
+        } else if (modName === '@playwright/test') {
+            expect = require(modName).expect;
+        } else {
+            require(modName);
+        }
+        // console.log(`✅ 模块 ${modName} 已加载。`); // Optional: Log success
+    } catch (e) {
+        console.error(`❌ 模块 ${modName} 未找到。`);
+        missingModules.push(modName);
+    }
+}
+
+if (missingModules.length > 0) {
+    console.error("-------------------------------------------------------------");
+    console.error("❌ 错误：缺少必要的依赖模块！");
+    console.error("请根据您使用的包管理器运行以下命令安装依赖：");
+    console.error("-------------------------------------------------------------");
+    console.error(`   npm install ${missingModules.join(' ')}`);
+    console.error("   或");
+    console.error(`   yarn add ${missingModules.join(' ')}`);
+    console.error("   或");
+    console.error(`   pnpm install ${missingModules.join(' ')}`);
+    console.error("-------------------------------------------------------------");
     process.exit(1);
 }
 
@@ -23,11 +46,14 @@ const CHROME_DEBUGGING_PORT = 8848;
 const CDP_ADDRESS = `http://127.0.0.1:${CHROME_DEBUGGING_PORT}`;
 const AI_STUDIO_URL_PATTERN = 'aistudio.google.com/';
 const RESPONSE_COMPLETION_TIMEOUT = 300000; // 5分钟总超时
-const POLLING_INTERVAL = 500; // 通用检查间隔 (ms)
-const SPINNER_CHECK_TIMEOUT_MS = 1000; // 检查Spinner状态的超时
+const POLLING_INTERVAL = 500; // 非流式/通用检查间隔
+const POLLING_INTERVAL_STREAM = 200; // 流式检查轮询间隔 (ms)
+// v2.12: Timeout for secondary checks *after* spinner disappears
+const POST_SPINNER_CHECK_DELAY_MS = 500; // Spinner消失后稍作等待再检查其他状态
 const FINAL_STATE_CHECK_TIMEOUT_MS = 1500; // 检查按钮和输入框最终状态的超时
-const POST_COMPLETION_BUFFER = 1000; // 最终状态确认前的等待时间 (ms)
-const SILENCE_TIMEOUT_MS = 1500; // 文本静默多久后认为稳定 (ms)
+const SPINNER_CHECK_TIMEOUT_MS = 1000; // 检查Spinner状态的超时
+const POST_COMPLETION_BUFFER = 1000; // JSON模式下可以缩短检查后等待时间
+const SILENCE_TIMEOUT_MS = 1500; // 文本静默多久后认为稳定 (Spinner消失后)
 
 // --- 常量 ---
 const MODEL_NAME = 'google-ai-studio-via-playwright-cdp-json';
@@ -41,18 +67,79 @@ const RESPONSE_TEXT_SELECTOR = 'ms-cmark-node.cmark-node'; // Target the contain
 const LOADING_SPINNER_SELECTOR = 'button[aria-label="Run"] svg .stoppable-spinner'; // Spinner circle
 const ERROR_TOAST_SELECTOR = 'div.toast.warning, div.toast.error'; // 页面错误提示
 
-// --- Prompt 准备函数 ---
+// v2.16: JSON Structure Prompt (Restored for non-streaming)
 const prepareAIStudioPrompt = (userPrompt, systemPrompt = null) => {
-    let fullPrompt = `\\nIMPORTANT: Your entire response MUST be a single JSON object. Do not include any text outside of this JSON object.\\nThe JSON object must have a single key named "response".\\nInside the value of the "response" key (which is a string), place your complete answer directly.\\n`;
+    let fullPrompt = `
+IMPORTANT: Your entire response MUST be a single JSON object. Do not include any text outside of this JSON object.
+The JSON object must have a single key named "response".
+Inside the value of the "response" key (which is a string), you MUST put the exact marker "<<<START_RESPONSE>>>"" at the very beginning of your actual answer. There should be NO text before this marker within the response string.
+`;
 
     if (systemPrompt && systemPrompt.trim() !== '') {
-        fullPrompt += `\\nSystem Instruction: ${systemPrompt}\\n`;
+        fullPrompt += `\nSystem Instruction: ${systemPrompt}\n`;
     }
 
-    fullPrompt += `\\nExample 1:\\nUser asks: "What is the capital of France?"\\nYour response MUST be:\\n{\\n  "response": "The capital of France is Paris."\\n}\\n\\nExample 2:\\nUser asks: "Write a python function to add two numbers"\\nYour response MUST be:\\n{\\n  "response": "\\\`\\\`\\\`python\\ndef add(a, b):\\n  return a + b\\n\\\`\\\`\\\`"\\n}\\n\\nNow, answer the following user prompt, ensuring your output strictly adheres to the JSON format described above:\\n\\nUser Prompt: "${userPrompt}"\\n\\nYour JSON Response:\\n`;
+    fullPrompt += `
+Example 1:
+User asks: "What is the capital of France?"
+Your response MUST be:
+{
+  "response": "<<<START_RESPONSE>>>The capital of France is Paris."
+}
+
+Example 2:
+User asks: "Write a python function to add two numbers"
+Your response MUST be:
+{
+  "response": "<<<START_RESPONSE>>>\\\`\\\`\\\`python\\\\ndef add(a, b):\\\\n  return a + b\\\\n\\\`\\\`\\\`"
+}
+
+Now, answer the following user prompt, ensuring your output strictly adheres to the JSON format AND the start marker requirement described above:
+
+User Prompt: "${userPrompt}"
+
+Your JSON Response:
+`;
     return fullPrompt;
 };
 
+// v2.26: Use JSON prompt for streaming as well -> vNEXT: Use Markdown Code Block for streaming
+// vNEXT: Instruct AI to output *incomplete* JSON for streaming -> vNEXT: Instruct AI to output Markdown Code Block
+const prepareAIStudioPromptStream = (userPrompt, systemPrompt = null) => {
+    let fullPrompt = `
+IMPORTANT: For this streaming request, your entire response MUST be enclosed in a single markdown code block (like \`\`\` block \`\`\`).
+Inside this code block, your actual answer text MUST start immediately after the exact marker "<<<START_RESPONSE>>>".
+Start your response exactly with "\`\`\`\n<<<START_RESPONSE>>>" followed by your answer content.
+Continue outputting your answer content. You SHOULD include the final closing "\`\`\`" at the very end of your full response stream.
+`;
+
+    if (systemPrompt && systemPrompt.trim() !== '') {
+        fullPrompt += `\nSystem Instruction: ${systemPrompt}\n`;
+    }
+
+    fullPrompt += `
+Example 1 (Streaming):
+User asks: "What is the capital of France?"
+Your streamed response MUST look like this over time:
+Stream part 1: \`\`\`\n<<<START_RESPONSE>>>The capital
+Stream part 2:  of France is
+Stream part 3:  Paris.\n\`\`\`
+
+Example 2 (Streaming):
+User asks: "Write a python function to add two numbers"
+Your streamed response MUST look like this over time:
+Stream part 1: \`\`\`\n<<<START_RESPONSE>>>\`\`\`python\ndef add(a, b):
+Stream part 2: \n  return a + b\n
+Stream part 3: \`\`\`\n\`\`\`
+
+Now, answer the following user prompt, ensuring your output strictly adheres to the markdown code block, start marker, and streaming requirements described above:
+
+User Prompt: "${userPrompt}"
+
+Your Response (Streaming, within a markdown code block):
+`;
+    return fullPrompt;
+};
 
 const app = express();
 
@@ -177,17 +264,17 @@ app.get('/health', (req, res) => {
     }
 });
 
-// --- API 辅助函数 ---
+// --- 新增：API 辅助函数 ---
 
 // 验证聊天请求
 function validateChatRequest(messages) {
-    if (!messages || !Array.isArray(messages) || messages.length === 0) {
-        throw new Error('Invalid request: "messages" array is missing or empty.');
-    }
-    const lastUserMessage = messages.filter(msg => msg.role === 'user').pop();
-    if (!lastUserMessage || !lastUserMessage.content) {
-        throw new Error('Invalid request: No valid user message content found in the "messages" array.');
-    }
+        if (!messages || !Array.isArray(messages) || messages.length === 0) {
+             throw new Error('Invalid request: "messages" array is missing or empty.');
+        }
+        const lastUserMessage = messages.filter(msg => msg.role === 'user').pop();
+        if (!lastUserMessage || !lastUserMessage.content) {
+            throw new Error('Invalid request: No valid user message content found in the "messages" array.');
+        }
     return {
         userPrompt: lastUserMessage.content,
         systemPrompt: messages.find(msg => msg.role === 'system')?.content
@@ -199,148 +286,489 @@ async function interactAndSubmitPrompt(page, prompt, reqId) {
     console.log(`[${reqId}] 开始页面交互...`);
     const inputField = page.locator(INPUT_SELECTOR);
     const submitButton = page.locator(SUBMIT_BUTTON_SELECTOR);
-    const loadingSpinner = page.locator(LOADING_SPINNER_SELECTOR);
+    const loadingSpinner = page.locator(LOADING_SPINNER_SELECTOR); // Keep spinner locator here for later use
 
     console.log(`[${reqId}]  - 等待输入框可用...`);
-    try {
-        await inputField.waitFor({ state: 'visible', timeout: 10000 });
-    } catch (e) {
-        console.error(`[${reqId}] ❌ 查找输入框失败！`);
-        await saveErrorSnapshot(`input_field_not_visible_${reqId}`);
-        throw new Error(`[${reqId}] Failed to find visible input field. Error: ${e.message}`);
+        try {
+            await inputField.waitFor({ state: 'visible', timeout: 10000 });
+        } catch (e) {
+         console.error(`[${reqId}] ❌ 查找输入框失败！`);
+         await saveErrorSnapshot(`input_field_not_visible_${reqId}`);
+         throw new Error(`[${reqId}] Failed to find visible input field. Error: ${e.message}`);
     }
 
     console.log(`[${reqId}]  - 清空并填充输入框...`);
-    try {
         await inputField.fill(prompt, { timeout: 10000 });
-    } catch (e) {
-        console.error(`[${reqId}] ❌ 填充输入框失败！`);
-        await saveErrorSnapshot(`input_fill_fail_${reqId}`);
-        throw new Error(`[${reqId}] Failed to fill input field. Error: ${e.message}`);
-    }
-
 
     console.log(`[${reqId}]  - 等待运行按钮可用...`);
-    try {
-        await expect(submitButton).toBeEnabled({ timeout: 10000 });
-    } catch (e) {
+        try {
+            await expect(submitButton).toBeEnabled({ timeout: 10000 });
+        } catch (e) {
         console.error(`[${reqId}] ❌ 等待运行按钮变为可用状态超时！`);
         await saveErrorSnapshot(`submit_button_not_enabled_before_click_${reqId}`);
         throw new Error(`[${reqId}] Submit button not enabled before click. Error: ${e.message}`);
     }
 
     console.log(`[${reqId}]  - 点击运行按钮...`);
-    try {
-        await submitButton.click({ timeout: 10000 });
-    } catch (e) {
-        console.error(`[${reqId}] ❌ 点击运行按钮失败！`);
-        await saveErrorSnapshot(`submit_button_click_fail_${reqId}`);
-        throw new Error(`[${reqId}] Failed to click submit button. Error: ${e.message}`);
-    }
-
+    await submitButton.click({ timeout: 10000 });
 
     return { inputField, submitButton, loadingSpinner }; // Return locators
 }
 
-// 定位 AI 回复元素
-async function locateResponseElements(page, locators /* Pass locators */, reqId) {
-    // console.log(`[${reqId}] 定位 AI 回复元素...`); // Commented out noisy log
-    let lastResponseContainer;
+// 定位最新的回复元素
+async function locateResponseElements(page, { inputField, submitButton, loadingSpinner }, reqId) {
+    console.log(`[${reqId}] 定位 AI 回复元素...`);
+        let lastResponseContainer;
     let responseElement;
-    let locatedResponseElements = false;
+        let locatedResponseElements = false;
 
-    // Increased retries for robustness
-    for (let i = 0; i < 3 && !locatedResponseElements; i++) {
-        try {
-            // console.log(`[${reqId}]    (Locate Attempt ${i + 1}) 尝试定位最新回复容器及文本元素...`); // Comment out loop log
-            await page.waitForTimeout(500 + i * 300); // Slightly longer initial delay and increment
+        for (let i = 0; i < 3 && !locatedResponseElements; i++) {
+             try {
+             console.log(`[${reqId}]    尝试定位最新回复容器及文本元素 (第 ${i + 1} 次)`);
+                 await page.waitForTimeout(500 + i * 500); // 固有延迟
 
-            lastResponseContainer = page.locator(RESPONSE_CONTAINER_SELECTOR).last();
-            await lastResponseContainer.waitFor({ state: 'attached', timeout: 7000 }); // Increased timeout
+             const isEndState = await checkEndConditionQuickly(page, loadingSpinner, inputField, submitButton, 250, reqId);
+             const locateTimeout = isEndState ? 3000 : 60000;
+                 if (isEndState) {
+                console.log(`[${reqId}]     -> 检测到结束条件已满足，使用 ${locateTimeout / 1000}s 超时进行定位。`);
+                 }
 
-            responseElement = lastResponseContainer.locator(RESPONSE_TEXT_SELECTOR);
-            await responseElement.waitFor({ state: 'attached', timeout: 7000 }); // Increased timeout
+             lastResponseContainer = page.locator(RESPONSE_CONTAINER_SELECTOR).last();
+                 await lastResponseContainer.waitFor({ state: 'attached', timeout: locateTimeout });
 
-            // console.log(`[${reqId}]    (Locate Attempt ${i + 1}) 回复容器和文本元素定位成功。`); // Comment out loop log
-            locatedResponseElements = true;
-        } catch (locateError) {
-            console.warn(`[${reqId}]    (Locate Attempt ${i + 1}) 定位回复元素失败: ${locateError.message.split('\\n')[0]}`);
-            if (i === 2) {
-                console.error(`[${reqId}] ❌ 无法在多次尝试后定位响应元素。`);
-                await saveErrorSnapshot(`locate_response_fail_final_${reqId}`); // Save snapshot on final failure
-            }
-        }
-    }
-    // Return nulls if not found, handled by caller
-    return { responseElement: locatedResponseElements ? responseElement : null, lastResponseContainer: locatedResponseElements ? lastResponseContainer : null };
-}
+             responseElement = lastResponseContainer.locator(RESPONSE_TEXT_SELECTOR);
+                 await responseElement.waitFor({ state: 'attached', timeout: locateTimeout });
 
-// 获取原始文本内容
-async function getRawTextContent(responseElement, previousText, reqId) {
-    if (!responseElement) {
-         console.warn(`[${reqId}] (getRawTextContent) responseElement is null, returning previousText.`);
-        return previousText;
-    }
-    try {
-         // Ensure the element is somewhat stable before trying to get text
-         await responseElement.waitFor({ state: 'visible', timeout: 2500 }); // Wait for visible instead of just attached
-         // Prioritize reading from <pre> if available, fallback to whole node
-         const preElement = responseElement.locator('pre').last();
-         let rawText = null;
-         try {
-              await preElement.waitFor({ state: 'attached', timeout: 1000 }); // Shorter timeout for pre
-              rawText = await preElement.textContent({ timeout: 1500 });
-         } catch {
-              rawText = await responseElement.textContent({ timeout: 2500 });
+             console.log(`[${reqId}]    回复容器和文本元素定位成功。`);
+                 locatedResponseElements = true;
+             } catch (locateError) {
+             console.warn(`[${reqId}]    第 ${i + 1} 次定位回复元素失败: ${locateError.message.split('\n')[0]}`);
+                 if (i === 2) {
+                  await saveErrorSnapshot(`response_locate_fail_${reqId}`);
+                  throw new Error(`[${reqId}] Failed to locate response elements after multiple attempts.`);
+             }
          }
-         // Normalize whitespace and trim
-         return rawText !== null ? rawText.replace(/\\s+/g, ' ').trim() : previousText;
-    } catch (e) {
-         console.warn(`[${reqId}] (Warn) getRawTextContent failed: ${e.message.split('\\n')[0]}. Returning previous.`);
-         return previousText;
+    }
+    if (!locatedResponseElements) throw new Error(`[${reqId}] Could not locate response elements.`);
+    return { responseElement, lastResponseContainer }; // Return located elements
+}
+
+// --- 新增：处理流式响应 (vNEXT: 标记优先，静默结束，无JSON处理) ---
+async function handleStreamingResponse(res, responseElement, page, { inputField, submitButton, loadingSpinner }, operationTimer, reqId) {
+    console.log(`[${reqId}]   - 流式传输开始 (vNEXT: Marker priority, silence end, no JSON handling)...`); // TODO: Update version
+    let lastRawText = "";
+    let lastSentResponseContent = ""; // Tracks content *after* the marker that has been SENT
+    let responseStarted = false; // Tracks if <<<START_RESPONSE>>> has been seen
+    const startTime = Date.now();
+    let spinnerHasDisappeared = false;
+    let lastTextChangeTimestamp = Date.now();
+    const startMarker = '<<<START_RESPONSE>>>';
+    let streamFinishedNaturally = false;
+
+    while (Date.now() - startTime < RESPONSE_COMPLETION_TIMEOUT && !streamFinishedNaturally) {
+        const loopStartTime = Date.now();
+
+        // 1. Get current raw text
+        const currentRawText = await getRawTextContent(responseElement, lastRawText, reqId);
+
+        if (currentRawText !== lastRawText) {
+            lastTextChangeTimestamp = Date.now();
+            let potentialNewDelta = "";
+            let currentContentAfterMarker = "";
+
+            // 2. Marker Check & Delta Calculation
+            const markerIndex = currentRawText.indexOf(startMarker);
+            if (markerIndex !== -1) {
+                if (!responseStarted) {
+                    console.log(`[${reqId}]    (流式 Simple) 检测到 ${startMarker}，开始传输...`);
+                    responseStarted = true;
+                }
+                // Content after marker in the current raw text
+                currentContentAfterMarker = currentRawText.substring(markerIndex + startMarker.length);
+                // Calculate new content since last *sent* content
+                potentialNewDelta = currentContentAfterMarker.substring(lastSentResponseContent.length);
+            } else if(responseStarted) {
+                 // If marker was seen before, but now disappears (e.g., AI cleared output?), treat as no new delta.
+                 potentialNewDelta = "";
+                 console.warn(`[${reqId}] Marker disappeared after being seen. Raw: ${currentRawText.substring(0,100)}`);
+            }
+
+            // 3. Send Delta if found
+            if (potentialNewDelta) {
+                 // console.log(`[${reqId}]    (Send Stream Simple) Sending Delta (len: ${potentialNewDelta.length})`);
+                 sendStreamChunk(res, potentialNewDelta, reqId);
+                 lastSentResponseContent += potentialNewDelta; // Update tracking
+            }
+
+            // Update last raw text
+            lastRawText = currentRawText;
+
+        } // End if(currentRawText !== lastRawText)
+
+        // 4. Check Spinner status
+        if (!spinnerHasDisappeared) {
+            try {
+                await expect(loadingSpinner).toBeHidden({ timeout: 50 });
+                spinnerHasDisappeared = true;
+                lastTextChangeTimestamp = Date.now(); // Reset silence timer when spinner disappears
+                console.log(`[${reqId}]    Spinner 已消失，进入静默期检测...`);
+            } catch (e) { /* Spinner still visible */ }
+        }
+
+        // 5. Silence Check (Standard)
+        const isSilent = spinnerHasDisappeared && (Date.now() - lastTextChangeTimestamp > SILENCE_TIMEOUT_MS);
+
+        if (isSilent) {
+            console.log(`[${reqId}] Silence detected. Finishing stream.`);
+            streamFinishedNaturally = true;
+            break; // Exit loop
+        }
+
+        // 6. Control polling interval
+        const loopEndTime = Date.now();
+        const loopDuration = loopEndTime - loopStartTime;
+        const waitTime = Math.max(0, POLLING_INTERVAL_STREAM - loopDuration);
+        await page.waitForTimeout(waitTime);
+
+    } // --- End main loop ---
+
+    // --- Cleanup and End ---
+    clearTimeout(operationTimer);
+
+    if (!streamFinishedNaturally && Date.now() - startTime >= RESPONSE_COMPLETION_TIMEOUT) {
+        // Timeout case
+        console.warn(`[${reqId}]   - 流式传输(Simple模式)因总超时 (${RESPONSE_COMPLETION_TIMEOUT / 1000}s) 结束。`);
+        await saveErrorSnapshot(`streaming_simple_timeout_${reqId}`);
+        if (!res.writableEnded) {
+            sendStreamError(res, "Stream processing timed out on server (Simple mode).", reqId);
+        }
+    } else if (streamFinishedNaturally && !res.writableEnded) {
+        // Natural end (Silence detected)
+        // --- Final Sync (Simple Mode) ---
+        // Check one last time for any content received after the last delta was sent but before silence was declared.
+        console.log(`[${reqId}]    (Simple Stream) Loop ended naturally, performing final sync check...`);
+        const finalRawText = await getRawTextContent(responseElement, lastRawText, reqId);
+        console.log(`[${reqId}]    (Simple Stream) Performing final marker check and delta calculation...`);
+        try {
+             let finalExtractedContent = ""; // Content after marker
+             const finalMarkerIndex = finalRawText.indexOf(startMarker);
+             if (finalMarkerIndex !== -1) {
+                  finalExtractedContent = finalRawText.substring(finalMarkerIndex + startMarker.length);
+             }
+
+             const finalDelta = finalExtractedContent.substring(lastSentResponseContent.length);
+
+            if (finalDelta){
+                 console.log(`[${reqId}]    (Final Sync Simple) Sending final delta (len: ${finalDelta.length})`);
+                 sendStreamChunk(res, finalDelta, reqId);
+            } else {
+                 console.log(`[${reqId}]    (Final Sync Simple) No final delta to send based on lastSent comparison.`);
+            }
+        } catch (e) { console.warn(`[${reqId}] (Simple Stream) Final sync error during marker/delta calc: ${e.message}`); }
+        // --- End Final Sync ---
+
+        res.write('data: [DONE]\n\n');
+        res.end();
+        console.log(`[${reqId}] ✅ 流式(Simple模式)响应 [DONE] 已发送。`);
+    } else if (res.writableEnded) {
+        console.log(`[${reqId}] 流(Simple模式)已提前结束 (writableEnded=true)，不再发送 [DONE]。`);
+    } else {
+         console.log(`[${reqId}] 流(Simple模式)结束时状态异常 (finishedNaturally=${streamFinishedNaturally}, writableEnded=${res.writableEnded})，不再发送 [DONE]。`);
     }
 }
 
+// --- 新增：处理非流式响应 --- vNEXT: Restore JSON Parsing
+async function handleNonStreamingResponse(res, page, locators, operationTimer, reqId) {
+    console.log(`[${reqId}]   - 等待 AI 处理完成 (检查 Spinner 消失 + 输入框空 + 按钮禁用)...`);
+            let processComplete = false;
+            const nonStreamStartTime = Date.now();
+    let finalStateCheckInitiated = false;
+    const { inputField, submitButton, loadingSpinner } = locators;
 
-// --- 处理 /v1/models 请求 ---
+    // Completion check logic
+            while (!processComplete && Date.now() - nonStreamStartTime < RESPONSE_COMPLETION_TIMEOUT) {
+                  let isSpinnerHidden = false;
+                  let isInputEmpty = false;
+                  let isButtonDisabled = false;
+
+                  try {
+                      await expect(loadingSpinner).toBeHidden({ timeout: SPINNER_CHECK_TIMEOUT_MS });
+                      isSpinnerHidden = true;
+                  } catch { /* Spinner still visible */ }
+
+                  if (isSpinnerHidden) {
+                      try {
+                          await expect(inputField).toHaveValue('', { timeout: FINAL_STATE_CHECK_TIMEOUT_MS });
+                          isInputEmpty = true;
+                      } catch { /* Input not empty */ }
+
+                      if (isInputEmpty) {
+                          try {
+                              await expect(submitButton).toBeDisabled({ timeout: FINAL_STATE_CHECK_TIMEOUT_MS });
+                              isButtonDisabled = true;
+                          } catch { /* Button not disabled */ }
+                      }
+                  }
+
+                  if (isSpinnerHidden && isInputEmpty && isButtonDisabled) {
+                      if (!finalStateCheckInitiated) {
+                          finalStateCheckInitiated = true;
+                console.log(`[${reqId}]    检测到潜在最终状态。等待 ${POST_COMPLETION_BUFFER}ms 进行确认...`); // Use constant
+                await page.waitForTimeout(POST_COMPLETION_BUFFER); // Wait a bit first
+                console.log(`[${reqId}]    ${POST_COMPLETION_BUFFER}ms 等待结束，重新检查状态...`);
+                try {
+                    await expect(loadingSpinner).toBeHidden({ timeout: 500 });
+                    await expect(inputField).toHaveValue('', { timeout: 500 });
+                    await expect(submitButton).toBeDisabled({ timeout: 500 });
+                    console.log(`[${reqId}]    状态确认成功。开始文本静默检查...`);
+
+                    // --- NEW: Text Silence Check ---
+                    let lastCheckText = '';
+                    let currentCheckText = '';
+                    let textStable = false;
+                    const silenceCheckStartTime = Date.now();
+                    // Re-locate response element here for the check
+                    const { responseElement: checkResponseElement } = await locateResponseElements(page, locators, reqId);
+
+                    while (Date.now() - silenceCheckStartTime < SILENCE_TIMEOUT_MS * 2) { // Check for up to 2*silence duration
+                        lastCheckText = currentCheckText;
+                        currentCheckText = await getRawTextContent(checkResponseElement, lastCheckText, reqId);
+                        if (currentCheckText === lastCheckText) {
+                             // Text hasn't changed since last check in this loop
+                             if (Date.now() - silenceCheckStartTime >= SILENCE_TIMEOUT_MS) {
+                                  // And enough time has passed
+                                  console.log(`[${reqId}]    文本内容静默 ${SILENCE_TIMEOUT_MS}ms，确认处理完成。`);
+                                  textStable = true;
+                                  break;
+                             }
+                        } else {
+                            // Text changed, reset silence timer within this check
+                            // silenceCheckStartTime = Date.now(); // Option: Reset timer on any change
+                            console.log(`[${reqId}]    (静默检查) 文本仍在变化...`);
+                        }
+                        await page.waitForTimeout(POLLING_INTERVAL); // Use standard poll interval for checks
+                    }
+
+                    if (textStable) {
+                         processComplete = true; // Mark process as complete
+                    } else {
+                         console.warn(`[${reqId}]    警告: 文本静默检查超时，可能仍在输出。将继续尝试解析。`);
+                         processComplete = true; // Proceed anyway after timeout, but log warning
+                    }
+                    // --- END NEW: Text Silence Check ---
+
+                } catch (recheckError) {
+                    console.log(`[${reqId}]    状态在确认期间发生变化 (${recheckError.message.split('\\n')[0]})。继续轮询...`);
+                    finalStateCheckInitiated = false;
+                }
+            }
+        } else {
+             if (finalStateCheckInitiated) {
+                 console.log(`[${reqId}]    最终状态不再满足，重置确认标志。`);
+                 finalStateCheckInitiated = false;
+             }
+             await page.waitForTimeout(POLLING_INTERVAL * 2); // Longer wait if not in final state check
+        }
+    } // --- End Completion check logic loop ---
+
+    // Check for Page Errors BEFORE attempting to parse JSON
+    console.log(`[${reqId}]   - 检查页面上是否存在错误提示...`);
+    const pageError = await detectAndExtractPageError(page, reqId);
+              if (pageError) {
+        console.error(`[${reqId}] ❌ 检测到 AI Studio 页面错误: ${pageError}`);
+        await saveErrorSnapshot(`page_error_detected_${reqId}`);
+        throw new Error(`[${reqId}] AI Studio Error: ${pageError}`);
+              }
+
+              if (!processComplete) {
+         console.warn(`[${reqId}]    警告：等待最终完成状态超时或未能稳定确认 (${(Date.now() - nonStreamStartTime) / 1000}s)。将直接尝试获取并解析JSON。`);
+          await saveErrorSnapshot(`nonstream_final_state_timeout_${reqId}`);
+               } else {
+         console.log(`[${reqId}]   - 开始获取并解析最终 JSON...`);
+               }
+
+    // Get and Parse JSON
+             let aiResponseText = null;
+             const maxRetries = 3;
+             let attempts = 0;
+
+             while (attempts < maxRetries && aiResponseText === null) {
+                  attempts++;
+         console.log(`[${reqId}]     - 尝试获取原始文本并解析 JSON (第 ${attempts} 次)...`);
+         try {
+             // Re-locate response element within the retry loop for robustness
+             const { responseElement: currentResponseElement } = await locateResponseElements(page, locators, reqId);
+
+             const rawText = await getRawTextContent(currentResponseElement, '', reqId);
+
+                      if (!rawText || rawText.trim() === '') {
+                 console.warn(`[${reqId}]     - 第 ${attempts} 次获取的原始文本为空。`);
+                          throw new Error("Raw text content is empty.");
+                      }
+              console.log(`[${reqId}]     - 获取到原始文本 (长度: ${rawText.length}): \"${rawText.substring(0,100)}...\"`);
+
+             const parsedJson = tryParseJson(rawText, reqId);
+
+                      if (parsedJson) {
+                          if (typeof parsedJson.response === 'string') {
+                              aiResponseText = parsedJson.response;
+                              console.log(`[${reqId}]     - 成功解析 JSON 并提取 'response' 字段。`);
+                          } else {
+                              // JSON 有效但无 response 字段
+                              try {
+                                  aiResponseText = JSON.stringify(parsedJson);
+                                  console.log(`[${reqId}]     - 警告: 未找到 'response' 字段，但解析到有效 JSON。将整个 JSON 字符串化作为回复。`);
+                              } catch (stringifyError) {
+                                  console.error(`[${reqId}]     - 错误：无法将解析出的 JSON 字符串化: ${stringifyError.message}`);
+                                  aiResponseText = null;
+                                  throw new Error("Failed to stringify the parsed JSON object.");
+                              }
+                          }
+                      } else {
+                          // JSON 解析失败
+                          console.warn(`[${reqId}]     - 第 ${attempts} 次未能解析 JSON。`);
+                          aiResponseText = null;
+                          if (attempts >= maxRetries) {
+                              await saveErrorSnapshot(`json_parse_fail_final_attempt_${reqId}`);
+                          }
+                          throw new Error("Failed to parse JSON from raw text.");
+                      }
+
+                 break;
+
+                  } catch (e) {
+             console.warn(`[${reqId}]     - 第 ${attempts} 次获取或解析失败: ${e.message.split('\n')[0]}`);
+             aiResponseText = null;
+                      if (attempts >= maxRetries) {
+                 console.error(`[${reqId}]     - 多次尝试获取并解析 JSON 失败。`);
+                 if (!e.message?.includes('snapshot')) await saveErrorSnapshot(`get_parse_json_failed_final_${reqId}`);
+                          aiResponseText = ""; // Fallback to empty string
+                      } else {
+                  await new Promise(resolve => setTimeout(resolve, 1500 + attempts * 500));
+                      }
+                  }
+             }
+
+            if (aiResponseText === null) {
+         console.log(`[${reqId}]     - JSON 解析失败，再次检查页面错误...`);
+         const finalCheckError = await detectAndExtractPageError(page, reqId);
+                 if (finalCheckError) {
+              console.error(`[${reqId}] ❌ 检测到 AI Studio 页面错误 (在 JSON 解析失败后): ${finalCheckError}`);
+              await saveErrorSnapshot(`page_error_post_json_fail_${reqId}`);
+              throw new Error(`[${reqId}] AI Studio Error after JSON parse failed: ${finalCheckError}`);
+         }
+          console.warn(`[${reqId}] 警告：所有尝试均未能获取并解析出有效的 JSON 回复。返回空回复。`);
+                  aiResponseText = "";
+              }
+
+    // Handle potential nested JSON
+            let cleanedResponse = aiResponseText;
+            try {
+                 // Attempt to parse the potential stringified JSON again for nested 'response' check
+                 // Only attempt if aiResponseText is likely a stringified JSON object/array
+                 if (aiResponseText && aiResponseText.startsWith('{') || aiResponseText.startsWith('[')) {
+                      const outerParsed = JSON.parse(aiResponseText); // Use JSON.parse directly here
+                      const innerParsed = tryParseJson(outerParsed.response, reqId); // Try parsing the inner 'response' field if it exists
+                      if (innerParsed && typeof innerParsed.response === 'string') {
+                          console.log(`[${reqId}]    (非流式) 检测到嵌套 JSON，使用内层 response 内容。`);
+                          cleanedResponse = innerParsed.response;
+                      } else if (typeof outerParsed.response === 'string') {
+                          // If the *outer* 'response' was already a string (not nested JSON), use it directly
+                          console.log(`[${reqId}]    (非流式) 使用外层 'response' 字段内容。`);
+                          cleanedResponse = outerParsed.response;
+                      }
+                      // If neither inner nor outer 'response' fields are relevant strings, keep the stringified JSON as cleanedResponse
+                 }
+            } catch (e) {
+                 // If parsing aiResponseText fails, it means it wasn't a stringified JSON in the first place,
+                 // or it was malformed. Keep the original aiResponseText.
+                 // console.warn(`[${reqId}] (Info) Post-processing check: aiResponseText ('${aiResponseText.substring(0,50)}...') is not a parseable JSON or lacks 'response'. Keeping original value. Error: ${e.message}`);
+                 cleanedResponse = aiResponseText; // Keep original if parsing fails
+            }
+
+    console.log(`[${reqId}] ✅ 获取到解析后的 AI 回复 (来自JSON, 长度: ${cleanedResponse?.length ?? 0}): \"${cleanedResponse?.substring(0, 100)}...\"`);
+
+               // --- 新增步骤：在非流式响应中移除标记 ---
+               const startMarker = '<<<START_RESPONSE>>>';
+
+               let finalContentForUser = cleanedResponse; // 默认使用清理后的响应
+
+               // Check for and remove the starting marker if present
+               if (finalContentForUser?.startsWith(startMarker)) {
+                    finalContentForUser = finalContentForUser.substring(startMarker.length);
+                    console.log(`[${reqId}]    (非流式 JSON) 移除前缀 ${startMarker}，最终内容长度: ${finalContentForUser.length}`);
+               } else if (aiResponseText !== null && aiResponseText !== "") { // 仅在获取到非空文本但无标记时警告
+                    console.warn(`[${reqId}]    (非流式 JSON) 警告: 未在 response 字段中找到预期的 ${startMarker} 前缀。内容: \"${aiResponseText.substring(0,50)}...\"`);
+               }
+               // --- 结束新增步骤 ---
+
+
+               // 使用移除标记后的内容构建最终响应
+               const responsePayload = {
+                  id: `${CHAT_COMPLETION_ID_PREFIX}${Date.now()}-${Math.random().toString(36).substring(2, 15)}`,
+                  object: 'chat.completion',
+                  created: Math.floor(Date.now() / 1000),
+                  model: MODEL_NAME,
+                  choices: [{
+                      index: 0,
+                      message: { role: 'assistant', content: finalContentForUser }, // Use cleaned content
+                      finish_reason: 'stop',
+                  }],
+                  usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+              };
+              console.log(`[${reqId}] ✅ 返回 JSON 响应 (来自解析后的JSON)。`);
+              res.json(responsePayload);
+          }
+
+// --- 新增：处理 /v1/models 请求以满足 Open WebUI 验证 ---
 app.get('/v1/models', (req, res) => {
-    const modelId = 'aistudio-proxy';
+    const modelId = 'aistudio-proxy'; // 您计划在 Open WebUI 中使用的模型名称
+    // 使用简短的日志ID或时间戳
     const logPrefix = `[${Date.now().toString(36).slice(-5)}]`;
     console.log(`${logPrefix} --- 收到 /v1/models 请求，返回模拟模型列表 ---`);
     res.json({
         object: "list",
         data: [
             {
-                id: modelId,
+                id: modelId, // 返回您要用的那个名字
                 object: "model",
                 created: Math.floor(Date.now() / 1000),
-                owned_by: "openai-proxy",
+                owned_by: "openai-proxy", // 可以随便写
                 permission: [],
                 root: modelId,
                 parent: null
             }
+            // 如果需要添加更多名称指向同一个代理，可以在此添加
+            // ,{
+            //    id: "gemini-pro-proxy",
+            //    object: "model",
+            //    created: Math.floor(Date.now() / 1000),
+            //    owned_by: "openai-proxy",
+            //    permission: [],
+            //    root: "gemini-pro-proxy",
+            //    parent: null
+            // }
         ]
     });
 });
 
-
-// --- API 端点 (重构 v2.30 - 统一获取逻辑) ---
+// --- API 端点 (重构后) ---
 app.post('/v1/chat/completions', async (req, res) => {
     const reqId = Math.random().toString(36).substring(2, 9); // 生成简短的请求 ID
-    console.log(`\\n[${reqId}] --- 收到 /v1/chat/completions 请求 ---`);
+    console.log(`\n[${reqId}] --- 收到 /v1/chat/completions 请求 ---`);
 
     // 1. 检查 Playwright 状态
     if (!isPlaywrightReady && !isInitializing) {
         console.warn(`[${reqId}] Playwright 未就绪，尝试重新初始化...`);
-        await initializePlaywright();
+        await initializePlaywright(); // 注意：initializePlaywright 内部日志无 reqId
     }
     if (!isPlaywrightReady || !page || page.isClosed() || !browser?.isConnected()) {
         console.error(`[${reqId}] API 请求失败：Playwright 未就绪、页面关闭或连接断开。`);
-        let detail = 'Unknown issue.';
-        if (!browser?.isConnected()) detail = "Browser connection lost.";
-        else if (!page || page.isClosed()) detail = "Target AI Studio page is not available or closed.";
-        else if (!isPlaywrightReady) detail = "Playwright initialization failed or incomplete.";
-        console.error(`[${reqId}] Playwright 连接不可用详情: ${detail}`);
+         let detail = 'Unknown issue.';
+         if (!browser?.isConnected()) detail = "Browser connection lost.";
+         else if (!page || page.isClosed()) detail = "Target AI Studio page is not available or closed.";
+         else if (!isPlaywrightReady) detail = "Playwright initialization failed or incomplete.";
+         console.error(`[${reqId}] Playwright 连接不可用详情: ${detail}`);
         return res.status(503).json({
             error: { message: `[${reqId}] Playwright connection is not active. ${detail} Please ensure Chrome is running correctly, the AI Studio tab is open, and potentially restart the server.`, type: 'server_error' }
         });
@@ -351,301 +779,124 @@ app.post('/v1/chat/completions', async (req, res) => {
     let operationTimer;
 
     try {
-        console.log(`[${reqId}] 请求模式: ${isStreaming ? '流式 (模拟)' : '非流式 (JSON)'}`);
+        console.log(`[${reqId}] 请求模式: ${isStreaming ? '流式 (SSE)' : '非流式 (JSON)'}`);
 
         // 2. 设置总操作超时
         operationTimer = setTimeout(async () => {
             await saveErrorSnapshot(`operation_timeout_${reqId}`);
             console.error(`[${reqId}] Operation timed out after ${RESPONSE_COMPLETION_TIMEOUT / 1000} seconds.`);
             if (!res.headersSent) {
-                res.status(504).json({ error: { message: `[${reqId}] Operation timed out`, type: 'timeout_error' } });
+                 res.status(504).json({ error: { message: `[${reqId}] Operation timed out`, type: 'timeout_error' } });
             } else if (isStreaming && !res.writableEnded) {
-                sendStreamError(res, "Operation timed out on server.", reqId);
-            } else if (!res.writableEnded){
-                 res.end();
+                 sendStreamError(res, "Operation timed out on server.", reqId);
             }
         }, RESPONSE_COMPLETION_TIMEOUT);
 
         // 3. 验证请求
         const { userPrompt, systemPrompt: extractedSystemPrompt } = validateChatRequest(messages);
-        const systemPrompt = extractedSystemPrompt || otherParams?.system_prompt;
+        const systemPrompt = extractedSystemPrompt || otherParams?.system_prompt; // Combine sources
 
-        console.log(`[${reqId}]   原始 User Prompt (start): "${userPrompt?.substring(0, 80)}..."`);
+        console.log(`[${reqId}]   原始 User Prompt (start): \"${userPrompt?.substring(0, 80)}...\"`);
         if (systemPrompt) {
-            console.log(`[${reqId}]   System Prompt (start): "${systemPrompt.substring(0, 80)}..."`);
+            console.log(`[${reqId}]   System Prompt (start): \"${systemPrompt.substring(0, 80)}...\"`);
         }
         if (Object.keys(otherParams).length > 0) {
-            console.log(`[${reqId}]   记录到的额外参数: ${JSON.stringify(otherParams)}`);
+             console.log(`[${reqId}]   记录到的额外参数: ${JSON.stringify(otherParams)}`);
         }
 
         // 4. 准备 Prompt
-        const prompt = prepareAIStudioPrompt(userPrompt, systemPrompt);
-        console.log(`[${reqId}] 构建的 Prompt (JSON): "${prompt.substring(0, 200)}..."`);
+        let prompt;
+        if (isStreaming) {
+            prompt = prepareAIStudioPromptStream(userPrompt, systemPrompt);
+            console.log(`[${reqId}] 构建的流式 Prompt (Raw): \"${prompt.substring(0, 200)}...\"`);
+        } else {
+            prompt = prepareAIStudioPrompt(userPrompt, systemPrompt);
+            console.log(`[${reqId}] 构建的非流式 Prompt (JSON): \"${prompt.substring(0, 200)}...\"`);
+        }
 
         // 5. 与页面交互并提交
         const locators = await interactAndSubmitPrompt(page, prompt, reqId);
 
-        // --- Conditional logic based on streaming ---
+        // 6. 定位响应元素
+        const { responseElement } = await locateResponseElements(page, locators, reqId);
+
+        // 7. 处理响应 (流式或非流式)
+        console.log(`[${reqId}] 处理 AI 回复...`);
         if (isStreaming) {
-            // --- START: Rewritten Real-time Streaming Logic (v3 - Hybrid) ---
-            console.log(`[${reqId}] Sending real-time streaming response (Rewritten v3)...`);
-            if (!res.headersSent) {
-                res.writeHead(200, {
-                    'Content-Type': 'text/event-stream',
-                    'Cache-Control': 'no-cache',
-                    'Connection': 'keep-alive',
-                });
-            }
+            // --- 设置流式响应头 ---
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
+            res.flushHeaders();
 
-            let state = 'INITIAL'; // Use simple state: INITIAL, STREAMING, FINISHED
-            let previousValue = '';  // Store the last successfully sent value part
-            const POLLING_INTERVAL_MS = 100;
-            let monitoringInterval = null;
-            const marker = '{"response": "';
-
-            try {
-                // Initial locator check remains the same
-                if (!locators || !locators.inputField) {
-                     throw new Error("Locators object is invalid after prompt submission.");
-                }
-
-                monitoringInterval = setInterval(async () => {
-                    // --- Outer try-catch for interval callback ---
-                    try {
-                        if (state === 'FINISHED' || res.writableEnded) {
-                            clearInterval(monitoringInterval);
-                            return;
-                        }
-
-                        // --- Re-locate response element --- 
-                        let currentResponseElement;
-                        try {
-                            const located = await locateResponseElements(page, locators, reqId);
-                            if (!located || !located.responseElement) {
-                                // console.warn(`[${reqId}] ⚠️ Response element not found in interval. Skipping.`);
-                                return; 
-                            }
-                            currentResponseElement = located.responseElement;
-                        } catch (locateErrorInLoop) {
-                             console.warn(`[${reqId}] ⚠️ Error locating response element: ${locateErrorInLoop.message.split('\\n')[0]}. Skipping.`);
-                             return; 
-                        } 
-
-                        // --- Fetch text content (with fallback) --- 
-                        let currentRawText = null;
-                        try {
-                            const preElement = currentResponseElement.locator('pre').last();
-                            currentRawText = await preElement.textContent({ timeout: 1000 })
-                                .catch(preReadError => null);
-                            if (currentRawText === null) {
-                                currentRawText = await currentResponseElement.textContent({ timeout: 2000 })
-                                    .catch(textReadError => {
-                                        console.warn(`[${reqId}] ⚠️ Error reading textContent (fallback): ${textReadError.message.split('\\n')[0]}. Skipping.`);
-                                        return null;
-                                    });
-                            }
-                        } catch (locatePreError) {
-                             currentRawText = await currentResponseElement.textContent({ timeout: 2000 })
-                                 .catch(textReadError => {
-                                     console.warn(`[${reqId}] ⚠️ Error reading textContent (fallback after pre locate error): ${textReadError.message.split('\\n')[0]}. Skipping.`);
-                                     return null;
-                                 });
-                        }
-
-                        if (currentRawText === null) {
-                           return; // Skip if text read failed
-                        }
-                        
-                        // --- Process based on state --- 
-                        let currentValue = ''; // Value extracted in this iteration
-                        
-                        if (state === 'INITIAL') {
-                            const startIndex = currentRawText.indexOf(marker);
-                            if (startIndex !== -1) {
-                                console.log(`[${reqId}] Found JSON start marker. Switching to STREAMING state.`);
-                                state = 'STREAMING';
-                                previousValue = ''; // Reset previous value
-                                // Re-process the same text in STREAMING state immediately
-                            } else {
-                                // console.log(`[${reqId}] Still looking for start marker...`);
-                                // Optional: log raw text if debugging needed
-                                // console.log(`[${reqId}] Raw: "${currentRawText.substring(0, 70).replace(/\n/g, '\\n')}..."`);
-                            }
-                        }
-                        
-                        // Use 'if' not 'else if' to allow immediate processing after state change
-                        if (state === 'STREAMING') { 
-                            const startIndex = currentRawText.indexOf(marker);
-                            if (startIndex === -1) {
-                                // Marker disappeared after being found!
-                                console.warn(`[${reqId}] ⚠️ JSON start marker disappeared. Resetting to INITIAL state.`);
-                                state = 'INITIAL';
-                                previousValue = '';
-                                return; // Skip further processing this interval
-                            }
-
-                            const potentialValueString = currentRawText.substring(startIndex + marker.length);
-                            
-                            // Find the first non-escaped closing quote to delimit the current value
-                            let endQuoteIndex = -1;
-                            let searchPos = 0;
-                            while(searchPos < potentialValueString.length) {
-                                let quotePos = potentialValueString.indexOf('"', searchPos);
-                                if (quotePos === -1) break; 
-                                if (quotePos > 0 && potentialValueString[quotePos - 1] === '\\\\') {
-                                    searchPos = quotePos + 1;
-                                } else {
-                                    endQuoteIndex = quotePos;
-                                    break;
-                                }
-                            }
-
-                            if (endQuoteIndex !== -1) {
-                                // Found a potential end quote
-                                currentValue = potentialValueString.substring(0, endQuoteIndex);
-                            } else {
-                                // No end quote yet, assume everything after marker is value
-                                currentValue = potentialValueString;
-                            }
-
-                            // Calculate and send increment
-                            if (currentValue.length > previousValue.length) {
-                                const increment = currentValue.substring(previousValue.length);
-                                // console.log(`[${reqId}] Sending increment (len: ${increment.length}): "${increment.substring(0, 50).replace(/\n/g, '\\n')}..."`); // REMOVED: Keep logs minimal
-                                sendStreamChunk(res, increment, reqId);
-                                previousValue = currentValue;
-                            } else if (currentValue !== previousValue) {
-                                // Handle content change without length increase (or shrinking)
-                                console.warn(`[${reqId}] ⚠️ Value changed without increasing length (or shrank). Sending full value.`);
-                                sendStreamChunk(res, currentValue, reqId);
-                                previousValue = currentValue;
-                            }
-                            // No else needed if value is identical
-                        } // end if (state === 'STREAMING')
-                        
-                        // --- UI Fallback Check (Simplified) --- 
-                        if (state === 'STREAMING') { // Only check UI if we think we are streaming
-                             try { 
-                                const isSpinnerHidden = await locators.loadingSpinner.isHidden({ timeout: 150 });
-                                const isButtonDisabled = await locators.submitButton.isDisabled({ timeout: 150 });
-                                if (isSpinnerHidden && isButtonDisabled) { 
-                                    console.log(`[${reqId}] UI indicates completion. Finalizing stream.`);
-                                    state = 'FINISHED';
-                                    clearInterval(monitoringInterval);
-                                    clearTimeout(operationTimer);
-                                    // console.log(`[${reqId}] Finalizing stream via UI fallback. Last value: "${previousValue.substring(0,100).replace(/\n/g, '\\n')}..."`); // REMOVED: Keep logs minimal
-                                    if (!res.writableEnded) { res.write('data: [DONE]\\n\\n'); res.end(); }
-                                }
-                            } catch (uiCheckError) {
-                                // console.warn(`[${reqId}] ⚠️ Warning during fallback UI check: ${uiCheckError.message.split('\\n')[0]}`); // REMOVED: Keep logs minimal
-                            } 
-                        } 
-                        
-                    // --- Outer catch for the entire interval callback ---
-                    } catch (intervalError) { 
-                        console.error(`[${reqId}] ❌ Error inside monitoring interval: ${intervalError.message}`);
-                        state = 'FINISHED'; 
-                        clearInterval(monitoringInterval);
-                        clearTimeout(operationTimer); 
-                        sendStreamError(res, `Error during streaming monitor: ${intervalError.message}`, reqId);
-                        if (!res.writableEnded) res.end();
-                    } 
-                }, POLLING_INTERVAL_MS); 
-
-                // Timeout handler - Log previousValue
-                operationTimer._onTimeout = () => { 
-                    console.error(`[${reqId}] Streaming operation timed out (${RESPONSE_COMPLETION_TIMEOUT}ms).`);
-                    if (monitoringInterval) clearInterval(monitoringInterval);
-                     console.log(`[${reqId}] Finalizing stream via TIMEOUT. Last known value: "${previousValue.substring(0, 100).replace(/\n/g, '\\n')}..."`); // Keep this debug log
-                    if (state !== 'FINISHED' && !res.writableEnded) {
-                        sendStreamError(res, "Operation timed out on server.", reqId);
-                    } else if (!res.writableEnded){
-                         res.end();
-                    }
-                };
-                // --- END: Rewritten Real-time Streaming Logic (Setup part) ---
-
-            } catch (streamingSetupError) { 
-                 console.error(`[${reqId}] ❌ Error setting up streaming: ${streamingSetupError.message}`);
-                 clearTimeout(operationTimer); 
-                 if (monitoringInterval) clearInterval(monitoringInterval); 
-                 sendStreamError(res, `Failed to setup streaming: ${streamingSetupError.message}`, reqId);
-                 if (!res.writableEnded) res.end();
-            } 
+            // 调用流式处理函数
+            await handleStreamingResponse(res, responseElement, page, locators, operationTimer, reqId);
 
         } else {
-            // --- Non-Streaming Logic (Remains the same) ---
-            console.log(`[${reqId}] Waiting for AI completion (non-streaming)...`);
-            const completionConfirmed = await waitForAICompletion(page, locators, reqId);
-            if (!completionConfirmed) {
-                 console.warn(`[${reqId}] AI completion confirmation timed out, attempting to get content anyway.`);
-            }
+            // 调用非流式处理函数
+            await handleNonStreamingResponse(res, page, locators, operationTimer, reqId);
+        }
 
-            console.log(`[${reqId}] Getting and processing final response (non-streaming)...`);
-            const finalContent = await getAndProcessFinalResponse(page, locators, reqId);
-            console.log(`[${reqId}] ✅ Retrieved final content (length: ${finalContent?.length}).`);
+        console.log(`[${reqId}] ✅ 请求处理成功完成。`);
+        clearTimeout(operationTimer); // 清除总超时定时器（成功完成）
 
-            const finalPageError = await detectAndExtractPageError(page, reqId);
-            if (finalPageError) {
-                console.error(`[${reqId}] ❌ Post-processing AI Studio page error: ${finalPageError}`);
-                await saveErrorSnapshot(`page_error_post_processing_${reqId}`);
-                if (!finalContent) {
-                     throw new Error(`[${reqId}] AI Studio Error detected, and no content retrieved: ${finalPageError}`);
-                } else {
-                     console.warn(`[${reqId}] AI Studio error detected, proceeding with potentially incomplete content.`);
-                }
-            }
-
-            clearTimeout(operationTimer);
-            const responsePayload = {
-                id: `${CHAT_COMPLETION_ID_PREFIX}${Date.now()}-${Math.random().toString(36).substring(2, 15)}`,
-                object: 'chat.completion',
-                created: Math.floor(Date.now() / 1000),
-                model: MODEL_NAME,
-                choices: [{
-                    index: 0,
-                    message: { role: 'assistant', content: finalContent || "Error: Failed to retrieve content." },
-                    finish_reason: 'stop',
-                }],
-                usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-            };
-            console.log(`[${reqId}] ✅ Sending JSON response.`);
-            res.json(responsePayload);
-        } // End if(isStreaming)/else
-
-    } catch (error) { // Catch errors in the main handler
-        console.error(`[${reqId}] ❌ Top-level API request error: ${error.message}\n${error.stack}`);
-        if (monitoringInterval) clearInterval(monitoringInterval); // Ensure interval cleared on any error
-        clearTimeout(operationTimer); // Ensure main timer cleared
-
+    } catch (error) {
+        clearTimeout(operationTimer); // 确保在任何错误情况下都清除定时器
+        console.error(`[${reqId}] ❌ 处理 API 请求时出错: ${error.message}\n${error.stack}`);
         if (!error.message?.includes('snapshot') && !error.stack?.includes('saveErrorSnapshot')) {
+             // 避免在保存快照失败时再次尝试保存快照
              await saveErrorSnapshot(`general_api_error_${reqId}`);
         }
 
-        // Send error response
+        // 发送错误响应
         if (!res.headersSent) {
+             // 根据错误类型判断状态码，提供一些常见情况的处理
              let statusCode = 500;
              let errorType = 'server_error';
              if (error.message?.includes('timed out') || error.message?.includes('timeout')) {
-                 statusCode = 504; errorType = 'timeout_error';
+                 statusCode = 504; // Gateway Timeout
+                 errorType = 'timeout_error';
              } else if (error.message?.includes('AI Studio Error')) {
-                 statusCode = 502; errorType = 'upstream_error';
+                 statusCode = 502; // Bad Gateway (error from upstream)
+                 errorType = 'upstream_error';
              } else if (error.message?.includes('Invalid request')) {
-                 statusCode = 400; errorType = 'invalid_request_error';
-             } else if (error.message?.includes('locate AI response element') || error.message?.includes('streaming setup')) {
-                 statusCode = 503; errorType = 'server_error';
+                 statusCode = 400; // Bad Request
+                 errorType = 'invalid_request_error';
              }
             res.status(statusCode).json({ error: { message: `[${reqId}] ${error.message}`, type: errorType } });
         } else if (isStreaming && !res.writableEnded) {
+             // 如果是流式响应且头部已发送，则发送流式错误
              sendStreamError(res, error.message, reqId);
-        } else if (!res.writableEnded) {
+        }
+        else if (!res.writableEnded) {
+             // 对于非流式但已发送部分内容的罕见情况，或流式错误发送后的清理
              res.end();
         }
-    } finally { // Main handler finally block
-         clearTimeout(operationTimer); // Final check to clear timer
-         // Interval should be cleared within its specific logic paths or catch blocks
-    } // End finally
-}); // End app.post
+    }
+});
+
+// --- Helper: 获取当前文本 (v2.14 - 获取原始文本) -> vNEXT: Try innerText
+async function getRawTextContent(responseElement, previousText, reqId) {
+    try {
+         await responseElement.waitFor({ state: 'attached', timeout: 1500 });
+         const preElement = responseElement.locator('pre').last();
+         let rawText = null;
+         try {
+              await preElement.waitFor({ state: 'attached', timeout: 500 });
+              // 尝试使用 innerText 获取渲染后的文本，可能更好地保留换行
+              rawText = await preElement.innerText({ timeout: 1000 });
+         } catch {
+              // 如果 pre 元素获取失败，回退到 responseElement 的 innerText
+              console.warn(`[${reqId}] (Warn) Failed to get innerText from <pre>, falling back to parent.`);
+              rawText = await responseElement.innerText({ timeout: 2000 });
+         }
+         // 移除 trim()，直接返回获取到的文本
+         return rawText !== null ? rawText : previousText;
+    } catch (e) {
+         console.warn(`[${reqId}] (Warn) getRawTextContent (innerText) failed: ${e.message.split('\n')[0]}. Returning previous.`);
+         return previousText;
+    }
+}
 
 // --- Helper: 发送流式块 ---
 function sendStreamChunk(res, delta, reqId) {
@@ -661,7 +912,7 @@ function sendStreamChunk(res, delta, reqId) {
              res.write(`data: ${JSON.stringify(chunk)}\n\n`);
          } catch (writeError) {
               console.error(`[${reqId}] Error writing stream chunk:`, writeError.message);
-              if (!res.writableEnded) res.end();
+              if (!res.writableEnded) res.end(); // End stream on write error
          }
     }
 }
@@ -671,25 +922,27 @@ function sendStreamError(res, errorMessage, reqId) {
      if (!res.writableEnded) {
          const errorPayload = { error: { message: `[${reqId}] Server error during streaming: ${errorMessage}`, type: 'server_error' } };
          try {
+              // Avoid writing multiple DONE messages if error occurs after normal DONE
               if (!res.writableEnded) res.write(`data: ${JSON.stringify(errorPayload)}\n\n`);
               if (!res.writableEnded) res.write('data: [DONE]\n\n');
          } catch (e) {
              console.error(`[${reqId}] Error writing stream error chunk:`, e.message);
          } finally {
-             if (!res.writableEnded) res.end();
+             if (!res.writableEnded) res.end(); // Ensure stream ends
          }
      }
 }
 
 // --- Helper: 保存错误快照 ---
 async function saveErrorSnapshot(errorName = 'error') {
+     // Extract reqId if present in the name
      const nameParts = errorName.split('_');
-     const reqId = nameParts[nameParts.length - 1].length === 7 ? nameParts.pop() : null;
+     const reqId = nameParts[nameParts.length - 1].length === 7 ? nameParts.pop() : null; // Simple check for likely reqId
      const baseErrorName = nameParts.join('_');
      const logPrefix = reqId ? `[${reqId}]` : '[No ReqId]';
 
      if (!browser?.isConnected() || !page || page.isClosed()) {
-         console.log(`${logPrefix} 无法保存错误快照 (${baseErrorName})，浏览器或页面不可用.`);
+         console.log(`${logPrefix} 无法保存错误快照 (${baseErrorName})，浏览器或页面不可用。`);
          return;
      }
      console.log(`${logPrefix} 尝试保存错误快照 (${baseErrorName})...`);
@@ -697,6 +950,7 @@ async function saveErrorSnapshot(errorName = 'error') {
      const errorDir = path.join(__dirname, 'errors');
      try {
           if (!fs.existsSync(errorDir)) fs.mkdirSync(errorDir, { recursive: true });
+          // Include reqId in filename if available
           const filenameSuffix = reqId ? `${reqId}_${timestamp}` : `${timestamp}`;
           const screenshotPath = path.join(errorDir, `${baseErrorName}_screenshot_${filenameSuffix}.png`);
           const htmlPath = path.join(errorDir, `${baseErrorName}_page_${filenameSuffix}.html`);
@@ -719,151 +973,37 @@ async function saveErrorSnapshot(errorName = 'error') {
      }
 }
 
-// --- Helper: 获取并处理最终响应 ---
-async function getAndProcessFinalResponse(page, locators, reqId) {
-    console.log(`[${reqId}]   - 开始获取并解析最终响应...`);
-    let aiResponseText = null;
-    const maxRetries = 3;
-    let attempts = 0;
-    let rawText = '';
-
-    while (attempts < maxRetries && aiResponseText === null) {
-        attempts++;
-        console.log(`[${reqId}]     - 尝试定位并获取原始文本 (第 ${attempts} 次)...`);
-        try {
-            const { responseElement: currentResponseElement } = await locateResponseElements(page, locators, reqId);
-
-            if (!currentResponseElement) {
-                 console.warn(`[${reqId}]     - 第 ${attempts} 次未能定位到响应元素。`);
-                 throw new Error("Failed to locate response element.");
-            }
-
-            rawText = await getRawTextContent(currentResponseElement, '', reqId);
-
-            if (!rawText || rawText.trim() === '') {
-                console.warn(`[${reqId}]     - 第 ${attempts} 次获取的原始文本为空。`);
-                if (attempts < maxRetries) {
-                     await page.waitForTimeout(1000 + attempts * 500);
-                     continue;
-                } else {
-                     throw new Error("Raw text content is empty after multiple attempts.");
-                }
-            }
-            console.log(`[${reqId}]     - 获取到原始文本 (长度: ${rawText.length}): "${rawText.substring(0, 150)}..."`);
-
-            const parsedJson = tryParseJson(rawText, reqId);
-
-            if (parsedJson) {
-                if (typeof parsedJson.response === 'string') {
-                    aiResponseText = parsedJson.response;
-                    console.log(`[${reqId}]     - 成功解析 JSON 并提取 'response' 字段。`);
-                } else {
-                    try {
-                        aiResponseText = JSON.stringify(parsedJson);
-                        console.log(`[${reqId}]     - 警告: 未找到 'response' 字段，但解析到有效 JSON。将整个 JSON 字符串化作为回复。`);
-                    } catch (stringifyError) {
-                        console.error(`[${reqId}]     - 错误：无法将解析出的 JSON 字符串化: ${stringifyError.message}`);
-                        throw new Error("Failed to stringify the parsed JSON object.");
-                    }
-                }
-            } else {
-                console.warn(`[${reqId}]     - 未能从原始文本中解析出 JSON。将使用原始文本作为基础。`);
-                aiResponseText = rawText;
-            }
-            break;
-
-        } catch (e) {
-            console.warn(`[${reqId}]     - 第 ${attempts} 次获取或处理失败: ${e.message.split('\\n')[0]}`);
-            aiResponseText = null;
-            if (attempts >= maxRetries) {
-                console.error(`[${reqId}] ❌ 多次尝试获取并处理响应文本失败。`);
-                await saveErrorSnapshot(`get_process_response_failed_final_${reqId}`);
-                return ""; // Return empty string on complete failure
-            } else {
-                await new Promise(resolve => setTimeout(resolve, 1500 + attempts * 500));
-            }
-        }
-    }
-
-    if (aiResponseText === null) {
-         console.error(`[${reqId}] 最终未能获取到任何响应文本。`);
-         return "";
-    }
-
-    // --- 清理最终响应文本 ---
-    let finalContentForUser = aiResponseText;
-
-    // 1. 处理可能的嵌套 JSON
-    try {
-         if (finalContentForUser && (finalContentForUser.startsWith('{') || finalContentForUser.startsWith('[')) && finalContentForUser.length > 2 ) {
-             const outerParsed = JSON.parse(finalContentForUser);
-             if (typeof outerParsed.response === 'string') {
-                 const innerParsed = tryParseJson(outerParsed.response, reqId);
-                 if (innerParsed && typeof innerParsed.response === 'string') {
-                    console.log(`[${reqId}]    (Cleanup) 检测到双重嵌套 JSON，提取最内层 response.`);
-                     finalContentForUser = innerParsed.response;
-                 } else {
-                    console.log(`[${reqId}]    (Cleanup) 使用外层 'response' 字段内容.`);
-                     finalContentForUser = outerParsed.response;
-                 }
-             }
-         }
-    } catch (e) { /* Keep finalContentForUser as is */ }
-
-    // 2. 移除开始标记
-    const startMarker = '<<<START_RESPONSE>>>';
-    if (finalContentForUser && finalContentForUser.startsWith(startMarker)) {
-        finalContentForUser = finalContentForUser.substring(startMarker.length);
-        console.log(`[${reqId}]    (Cleanup) 移除了前缀 ${startMarker}.`);
-    } else {
-         if (rawText === finalContentForUser) {
-              console.warn(`[${reqId}]    (Cleanup) 警告: 未在最终内容中找到预期的 ${startMarker} 前缀 (可能因为原始回复不是预期JSON格式).`);
-         }
-    }
-
-    // 3. Final trim
-    finalContentForUser = finalContentForUser.trim();
-
-    console.log(`[${reqId}]   - 清理后的最终内容 (长度: ${finalContentForUser.length}): "${finalContentForUser.substring(0, 100)}..."`);
-    return finalContentForUser;
-}
-
-
-// --- Helper: 安全解析 JSON (modified slightly for clarity) ---
+// v2.14: Helper to safely parse JSON, attempting to find the outermost object/array
 function tryParseJson(text, reqId) {
     if (!text || typeof text !== 'string') return null;
-    const trimmedText = text.trim(); // Trim whitespace first
+    text = text.trim();
 
     let startIndex = -1;
     let endIndex = -1;
 
-    // Find the first opening brace or bracket
-    const firstBrace = trimmedText.indexOf('{');
-    const firstBracket = trimmedText.indexOf('[');
+    const firstBrace = text.indexOf('{');
+    const firstBracket = text.indexOf('[');
 
     if (firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) {
         startIndex = firstBrace;
-        // Find the last closing brace for robustness against nested objects/errors
-        endIndex = trimmedText.lastIndexOf('}');
+        endIndex = text.lastIndexOf('}');
     } else if (firstBracket !== -1) {
         startIndex = firstBracket;
-        // Find the last closing bracket
-        endIndex = trimmedText.lastIndexOf(']');
+        endIndex = text.lastIndexOf(']');
     }
 
     if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) {
-        // console.log(`[${reqId}] (tryParseJson) No valid start/end brackets/braces found in: "${trimmedText.substring(0, 50)}..."`);
-        return null; // No valid structure found
+        // console.warn(`[${reqId}] (Warn) Could not find valid start/end braces/brackets for JSON parsing.`);
+        return null;
     }
 
-    // Extract the potential JSON part
-    const jsonText = trimmedText.substring(startIndex, endIndex + 1);
+    const jsonText = text.substring(startIndex, endIndex + 1);
 
     try {
         return JSON.parse(jsonText);
     } catch (e) {
-         // console.warn(`[${reqId}] (tryParseJson) Failed to parse extracted text: "${jsonText.substring(0,100)}...". Error: ${e.message}`);
-        return null; // Parsing failed
+         // console.warn(`[${reqId}] (Warn) JSON parse failed for extracted text: ${e.message}`);
+        return null;
     }
 }
 
@@ -873,7 +1013,7 @@ async function detectAndExtractPageError(page, reqId) {
     try {
         const isVisible = await errorToastLocator.isVisible({ timeout: 1000 });
         if (isVisible) {
-            console.log(`[${reqId}]    检测到错误 Toast 元素.`);
+            console.log(`[${reqId}]    检测到错误 Toast 元素。`);
             const messageLocator = errorToastLocator.locator('span.content-text');
             const errorMessage = await messageLocator.textContent({ timeout: 500 });
             return errorMessage || "Detected error toast, but couldn't extract specific message.";
@@ -881,133 +1021,26 @@ async function detectAndExtractPageError(page, reqId) {
              return null;
         }
     } catch (e) {
+        // console.warn(`[${reqId}] (Warn) Checking for error toast failed or timed out: ${e.message.split('\n')[0]}`);
         return null;
     }
 }
 
-// --- Helper: 等待 AI 完成 (UI 状态 + 文本静默检查) ---
-async function waitForAICompletion(page, locators, reqId) {
-    console.log(`[${reqId}]   - 等待 AI 处理完成 (UI 检查 + 文本静默)...`);
-    const waitStartTime = Date.now();
-    const { inputField, submitButton, loadingSpinner } = locators;
-    let processComplete = false;
-    let finalStateCheckInitiated = false;
-
-    while (!processComplete && Date.now() - waitStartTime < RESPONSE_COMPLETION_TIMEOUT) {
-        let isSpinnerHidden = false;
-        let isInputEmpty = false;
-        let isButtonDisabled = false;
-
-        // --- 检查 UI 状态 ---
-        try {
-            await expect(loadingSpinner).toBeHidden({ timeout: SPINNER_CHECK_TIMEOUT_MS });
-            isSpinnerHidden = true;
-
-            try {
-                await expect(inputField).toHaveValue('', { timeout: FINAL_STATE_CHECK_TIMEOUT_MS });
-                isInputEmpty = true;
-            } catch { /* Input not empty */ }
-
-            try {
-                await expect(submitButton).toBeDisabled({ timeout: FINAL_STATE_CHECK_TIMEOUT_MS });
-                isButtonDisabled = true;
-            } catch { /* Button not disabled */ }
-
-        } catch { /* Spinner still visible or initial check failed */ }
-        // --- 结束 UI 状态检查 ---
-
-
-        if (isSpinnerHidden && isInputEmpty && isButtonDisabled) {
-            // --- 潜在最终状态 ---
-            if (!finalStateCheckInitiated) {
-                finalStateCheckInitiated = true;
-                console.log(`[${reqId}]    检测到潜在最终 UI 状态。等待 ${POST_COMPLETION_BUFFER}ms 进行确认...`);
-                await page.waitForTimeout(POST_COMPLETION_BUFFER);
-                console.log(`[${reqId}]    ${POST_COMPLETION_BUFFER}ms 等待结束，重新检查 UI 状态...`);
-                try {
-                    // 严格重检 UI
-                    await expect(loadingSpinner).toBeHidden({ timeout: 500 });
-                    await expect(inputField).toHaveValue('', { timeout: 500 });
-                    await expect(submitButton).toBeDisabled({ timeout: 500 });
-                    console.log(`[${reqId}]    UI 状态确认成功。开始文本静默检查...`);
-
-                    // --- 文本静默检查 ---
-                    let lastCheckText = '';
-                    let currentCheckText = '';
-                    let textStable = false;
-                    let lastTextChangeTime = Date.now();
-
-                    const { responseElement: checkResponseElement } = await locateResponseElements(page, locators, reqId);
-
-                    if (checkResponseElement) {
-                        currentCheckText = await getRawTextContent(checkResponseElement, '', reqId);
-                        lastCheckText = currentCheckText;
-                        console.log(`[${reqId}]    (静默检查) 初始文本长度: ${currentCheckText?.length}`);
-
-                        const silenceCheckEndTime = Date.now() + SILENCE_TIMEOUT_MS;
-                        while (Date.now() < silenceCheckEndTime) {
-                            await page.waitForTimeout(POLLING_INTERVAL);
-                            currentCheckText = await getRawTextContent(checkResponseElement, lastCheckText, reqId);
-
-                            if (currentCheckText !== lastCheckText) {
-                                console.log(`[${reqId}]    (静默检查) 文本仍在变化 (新长度: ${currentCheckText?.length}).`);
-                                lastTextChangeTime = Date.now();
-                                lastCheckText = currentCheckText;
-                            } else {
-                                if (Date.now() - lastTextChangeTime >= SILENCE_TIMEOUT_MS) {
-                                    console.log(`[${reqId}]    文本内容稳定超过 ${SILENCE_TIMEOUT_MS}ms，确认处理完成.`);
-                                    textStable = true;
-                                    break;
-                                }
-                            }
-                        }
-
-                        if (!textStable) {
-                             currentCheckText = await getRawTextContent(checkResponseElement, lastCheckText, reqId);
-                             if (currentCheckText === lastCheckText && Date.now() - lastTextChangeTime >= SILENCE_TIMEOUT_MS) {
-                                console.log(`[${reqId}]    (静默检查 - Post Loop) 文本内容最终确认稳定.`);
-                                textStable = true;
-                             }
-                        }
-
-                    } else {
-                        console.warn(`[${reqId}]    (静默检查) 警告: 未能定位到回复元素，无法执行文本静默检查。将跳过.`);
-                        textStable = true; // Assume stable if cannot locate
-                    }
-
-                    if (textStable) {
-                        processComplete = true;
-                        console.log(`[${reqId}] ✅ AI 处理完成 (UI 稳定 + 文本静默/无法检查).`);
-                    } else {
-                        console.warn(`[${reqId}]    警告: 文本静默检查超时 (${SILENCE_TIMEOUT_MS}ms)。将继续处理.`);
-                        processComplete = true; // Proceed anyway
-                        await saveErrorSnapshot(`wait_completion_silence_timeout_${reqId}`);
-                    }
-                    // --- 结束文本静默检查 ---
-
-                } catch (recheckError) {
-                    console.log(`[${reqId}]    UI 状态在确认期间发生变化 (${recheckError.message.split('\\n')[0]})。重置并继续轮询...`);
-                    finalStateCheckInitiated = false;
-                }
-            } // End if (!finalStateCheckInitiated)
-        } else {
-            // --- UI 状态不满足 ---
-            if (finalStateCheckInitiated) {
-                console.log(`[${reqId}]    最终 UI 状态不再满足，重置确认标志.`);
-                finalStateCheckInitiated = false;
-            }
-            await page.waitForTimeout(POLLING_INTERVAL);
-        }
+// --- Helper: 快速检查结束条件 ---
+async function checkEndConditionQuickly(page, spinnerLocator, inputLocator, buttonLocator, timeoutMs = 250, reqId) {
+    try {
+        const results = await Promise.allSettled([
+            expect(spinnerLocator).toBeHidden({ timeout: timeoutMs }),
+            expect(inputLocator).toHaveValue('', { timeout: timeoutMs }),
+            expect(buttonLocator).toBeDisabled({ timeout: timeoutMs })
+        ]);
+        const allMet = results.every(result => result.status === 'fulfilled');
+        // console.log(`[${reqId}] (Quick Check) All met: ${allMet}`);
+        return allMet;
+    } catch (error) {
+        // console.warn(`[${reqId}] (Quick Check) Error during checkEndConditionQuickly: ${error.message}`);
+        return false;
     }
-    // --- 结束完成检查循环 ---
-
-    if (!processComplete) {
-        console.warn(`[${reqId}] 警告: 等待 AI 完成状态的总循环超时 (${RESPONSE_COMPLETION_TIMEOUT / 1000}s).`);
-        await saveErrorSnapshot(`wait_completion_timeout_${reqId}`);
-        return false; // Indicate completion wasn't confirmed
-    }
-
-    return true; // Indicate completion was confirmed
 }
 
 // --- 启动服务器 ---
@@ -1016,20 +1049,33 @@ let serverInstance = null;
     await initializePlaywright();
 
     serverInstance = app.listen(SERVER_PORT, () => {
-        console.log(`\n🚀 OpenAI API 代理服务器(v2.30 - 统一获取逻辑)正在监听 http://localhost:${SERVER_PORT}`);
-        console.log(`   - 访问 http://localhost:${SERVER_PORT}/ 可打开 Web UI 进行测试`);
+        console.log("\n=============================================================");
+        console.log("          🚀 AI Studio Proxy Server (v2.17+) 🚀");
+        console.log("=============================================================");
+        console.log(`🔗 监听地址: http://localhost:${SERVER_PORT}`);
+        console.log(`   - Web UI (测试): http://localhost:${SERVER_PORT}/`);
+        console.log(`   - API 端点:   http://localhost:${SERVER_PORT}/v1/chat/completions`);
+        console.log(`   - 模型接口:   http://localhost:${SERVER_PORT}/v1/models`);
+        console.log("-------------------------------------------------------------");
         if (isPlaywrightReady) {
-            console.log('✅ Playwright 已连接，服务器准备就绪。');
+            console.log('✅ Playwright 连接成功，服务已准备就绪！');
         } else {
-            console.warn('⚠️ Playwright 未能成功初始化。API 请求将失败，直到连接成功。');
-            console.warn('   请检查 Chrome 和 auto_connect_aistudio.js 的运行状态，或稍后重试 API 请求。');
+            console.warn('⚠️ Playwright 未就绪。请检查下方日志并确保 Chrome/AI Studio 正常运行。');
+            console.warn('   API 请求将失败，直到 Playwright 连接成功。');
         }
-        console.log(`确保 Chrome (由 auto_connect_aistudio.js 启动并监听端口 ${CHROME_DEBUGGING_PORT}) 正在运行...`);
+        console.log("-------------------------------------------------------------");
+        console.log(`⏳ 等待 Chrome 实例 (调试端口: ${CHROME_DEBUGGING_PORT})...`);
+        console.log("   请确保已运行 auto_connect_aistudio.js 脚本，");
+        console.log("   并且 Google AI Studio 页面已在浏览器中打开。 ");
+        console.log("=============================================================\n");
     });
 
     serverInstance.on('error', (error) => {
         if (error.code === 'EADDRINUSE') {
-            console.error(`❌ 错误：端口 ${SERVER_PORT} 已被占用。请关闭使用该端口的程序或更改 SERVER_PORT 配置。`);
+            console.error("\n=============================================================");
+            console.error(`❌ 致命错误：端口 ${SERVER_PORT} 已被占用！`);
+            console.error("   请关闭占用该端口的其他程序，或在 server.cjs 中修改 SERVER_PORT。 ");
+            console.error("=============================================================\n");
         } else {
             console.error('❌ 服务器启动失败:', error);
         }
@@ -1051,14 +1097,16 @@ async function shutdown(signal) {
             else console.log("HTTP 服务器已关闭。");
 
             console.log("Playwright connectOverCDP 将自动断开。");
+            // No need to explicitly disconnect browser in connectOverCDP mode
             console.log('服务器优雅关闭完成。');
             process.exit(err ? 1 : 0);
         });
 
+        // Force exit after timeout
         setTimeout(() => {
             console.error("优雅关闭超时，强制退出进程。");
             process.exit(1);
-        }, 10000);
+        }, 10000); // 10 seconds timeout
     } else {
         console.log("服务器实例未找到，直接退出。");
         process.exit(0);
