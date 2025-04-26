@@ -1,7 +1,7 @@
 # AI Studio Proxy Server
 
 
-这是一个 Node.js 代理服务器，它允许您通过模拟 OpenAI API 的方式来访问 Google AI Studio (Gemini)。这使得兼容 OpenAI API 的客户端（如 Open WebUI, NextChat 等）可以间接地使用 AI Studio 的能力。
+这是一个Node.js+Playwright服务器，通过模拟 OpenAI API 的方式来访问 Google AI Studio 网页版，服务器无缝交互转发gemini对话。这使得兼容 OpenAI API 的客户端（如 Open WebUI, NextChat 等）可以使用 AI Studio 的无限额度及能力
 
 ## ✨ 特性
 
