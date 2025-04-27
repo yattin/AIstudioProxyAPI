@@ -46,7 +46,7 @@ const CHROME_DEBUGGING_PORT = 8848;
 const CDP_ADDRESS = `http://127.0.0.1:${CHROME_DEBUGGING_PORT}`;
 const AI_STUDIO_URL_PATTERN = 'aistudio.google.com/';
 const RESPONSE_COMPLETION_TIMEOUT = 300000; // 5分钟总超时
-const POLLING_INTERVAL = 500; // 非流式/通用检查间隔
+const POLLING_INTERVAL = 300; // 非流式/通用检查间隔
 const POLLING_INTERVAL_STREAM = 200; // 流式检查轮询间隔 (ms)
 // v2.12: Timeout for secondary checks *after* spinner disappears
 const POST_SPINNER_CHECK_DELAY_MS = 500; // Spinner消失后稍作等待再检查其他状态
@@ -465,7 +465,7 @@ async function locateResponseElements(page, { inputField, submitButton, loadingS
 }
 
 // --- 新增：处理流式响应 (vNEXT: 标记优先，静默结束，无JSON处理) ---
-async function handleStreamingResponse(res, responseElement, page, { inputField, submitButton, loadingSpinner }, operationTimer, reqId) {
+async function handleStreamingResponse(res, responseElement, page, { inputField, submitButton, loadingSpinner }, operationTimer, reqId, isRequestCancelled) {
     console.log(`[${reqId}]   - 流式传输开始 (vNEXT: Marker priority, silence end, no JSON handling)...`); // TODO: Update version
     let lastRawText = "";
     let lastSentResponseContent = ""; // Tracks content *after* the marker that has been SENT
@@ -477,6 +477,18 @@ async function handleStreamingResponse(res, responseElement, page, { inputField,
     let streamFinishedNaturally = false;
 
     while (Date.now() - startTime < RESPONSE_COMPLETION_TIMEOUT && !streamFinishedNaturally) {
+        // --- 添加检查：请求是否已取消 ---
+        const cancelled = isRequestCancelled(); // 调用检查函数
+        // 添加日志记录检查结果
+        // console.log(`[${reqId}]   (Streaming Loop Check) isRequestCancelled() returned: ${cancelled}`); // 可选：过于频繁，暂时注释掉
+        if (cancelled) {
+             console.log(`[${reqId}]   (Streaming) 检测到请求已取消 (isRequestCancelled() is true)，停止处理。`); // 修改日志
+             clearTimeout(operationTimer); // 确保定时器清除
+             if (!res.writableEnded) res.end(); // 确保响应结束
+             return; // 退出函数
+        }
+        // --- 结束检查 ---
+
         const loopStartTime = Date.now();
 
         // 1. Get current raw text
@@ -543,7 +555,7 @@ async function handleStreamingResponse(res, responseElement, page, { inputField,
 
     } // --- End main loop ---
 
-    // --- Cleanup and End ---
+    // --- Cleanup and End --- (如果循环是因取消而退出，下面的代码不会执行)
     clearTimeout(operationTimer); // Clear the specific timer for THIS request
 
     if (!streamFinishedNaturally && Date.now() - startTime >= RESPONSE_COMPLETION_TIMEOUT) {
@@ -589,7 +601,7 @@ async function handleStreamingResponse(res, responseElement, page, { inputField,
 }
 
 // --- 新增：处理非流式响应 --- vNEXT: Restore JSON Parsing
-async function handleNonStreamingResponse(res, page, locators, operationTimer, reqId) {
+async function handleNonStreamingResponse(res, page, locators, operationTimer, reqId, isRequestCancelled) {
     console.log(`[${reqId}]   - 等待 AI 处理完成 (检查 Spinner 消失 + 输入框空 + 按钮禁用)...`);
             let processComplete = false;
             const nonStreamStartTime = Date.now();
@@ -598,6 +610,20 @@ async function handleNonStreamingResponse(res, page, locators, operationTimer, r
 
     // Completion check logic
             while (!processComplete && Date.now() - nonStreamStartTime < RESPONSE_COMPLETION_TIMEOUT) {
+                // --- 添加检查：请求是否已取消 ---
+                if (isRequestCancelled()) {
+                    console.log(`[${reqId}]   (Non-Streaming) 检测到请求已取消，停止等待完成状态。`);
+                    clearTimeout(operationTimer); // 确保定时器清除
+                    if (!res.headersSent) {
+                         // 如果头还没发送，可以发送一个取消错误
+                         res.status(499).json({ error: { message: `[${reqId}] Client closed request`, type: 'client_error' } });
+                    } else if (!res.writableEnded) {
+                         res.end(); // 否则只结束响应
+                    }
+                    return; // 退出函数
+                }
+                // --- 结束检查 ---
+
                   let isSpinnerHidden = false;
                   let isInputEmpty = false;
                   let isButtonDisabled = false;
@@ -681,6 +707,14 @@ async function handleNonStreamingResponse(res, page, locators, operationTimer, r
              await page.waitForTimeout(POLLING_INTERVAL * 2); // Longer wait if not in final state check
         }
     } // --- End Completion check logic loop ---
+
+    // --- 添加检查：如果在循环结束后发现请求已取消 ---
+    if (isRequestCancelled()) {
+        console.log(`[${reqId}]   (Non-Streaming) 请求在等待完成后被取消，不再继续处理。`);
+        // 定时器和响应应该已经被上面的检查处理了，这里只退出
+        return;
+    }
+    // --- 结束检查 ---
 
     // Check for Page Errors BEFORE attempting to parse JSON
     console.log(`[${reqId}]   - 检查页面上是否存在错误提示...`);
@@ -868,18 +902,43 @@ app.get('/v1/models', (req, res) => {
 // --- v2.18: 新增队列处理函数 ---
 async function processQueue() {
      if (isProcessing || requestQueue.length === 0) {
-          // console.log(`[Queue] Process check: Already processing (${isProcessing}) or queue empty (${requestQueue.length}). Exiting.`);
-          return; // 如果正在处理或队列为空，则退出
+          return;
      }
 
      isProcessing = true;
-     const { req, res, reqId } = requestQueue.shift(); // 从队列头部取出一个请求
+     // 从队列头部取出包含状态的请求项
+     const queueItem = requestQueue.shift();
+     // 解构所需变量，包括取消标记和临时处理器
+     const { req, res, reqId, isCancelledByClient, preliminaryCloseHandler } = queueItem;
+
+     // --- 重要：立即移除临时监听器（如果存在且未被触发移除）---
+     // 因为我们要么跳过处理，要么添加新的主监听器
+     if (preliminaryCloseHandler) {
+          // 使用 removeListener 以防万一它已被触发并自我移除
+          res.removeListener('close', preliminaryCloseHandler);
+     }
+     // --- 结束移除临时监听器 ---
+
+     // --- 新增：检查请求是否在处理前已被取消 ---
+     if (isCancelledByClient) {
+          console.log(`[${reqId}] Request was cancelled by client before processing began. Skipping.`);
+          // 清理可能由其他地方（如主 close 事件处理器）设置的定时器，以防万一
+          if (operationTimer) clearTimeout(operationTimer);
+          // 标记处理结束（跳过），然后处理下一个
+          isProcessing = false;
+          processQueue(); // 尝试处理下一个请求
+          return; // 退出当前 processQueue 调用
+     }
+     // --- 结束新增检查 ---
+
      console.log(`\n[${reqId}] ---开始处理队列中的请求 (剩余 ${requestQueue.length} 个)---`);
 
-     let operationTimer; // Timer for this specific request
+     let operationTimer; // 主操作定时器
+     let isCancelled = false; // 处理期间的取消标志
+     let closeEventHandler = null; // 主 close 事件处理器引用
 
      try {
-          // 1. 检查 Playwright 状态 (针对当前请求)
+          // 1. 检查 Playwright 状态 (现在可以安全地继续，因为请求未被提前取消)
           if (!isPlaywrightReady && !isInitializing) {
                console.warn(`[${reqId}] Playwright 未就绪，尝试重新初始化...`);
                await initializePlaywright();
@@ -900,31 +959,10 @@ async function processQueue() {
                throw new Error("Playwright not ready for this request."); // Throw to skip further processing in try block
           }
 
-          // --- v2.19: 提取并记录更多参数 ---
-          const {
-              messages,
-              stream = false,
-              model, // 记录 model 参数
-              temperature, // 记录 temperature 参数
-              max_tokens, // 记录 max_tokens 参数
-              top_p, // 记录 top_p 参数
-              frequency_penalty, // 记录 frequency_penalty 参数
-              presence_penalty, // 记录 presence_penalty 参数
-              // 可以根据需要添加更多你想记录的 OpenAI 参数
-              ...otherUnsupportedParams // 捕获其他所有未显式处理的参数
-          } = req.body;
+          const { messages, stream, ...otherParams } = req.body;
           const isStreaming = stream === true;
 
           console.log(`[${reqId}] 请求模式: ${isStreaming ? '流式 (SSE)' : '非流式 (JSON)'}`);
-          console.log(`[${reqId}] 接收参数: model=${model}, stream=${isStreaming}, temperature=${temperature}, max_tokens=${max_tokens}, top_p=${top_p}, freq_penalty=${frequency_penalty}, pres_penalty=${presence_penalty}`);
-          if (Object.keys(otherUnsupportedParams).length > 0) {
-               // 过滤掉我们已经特殊处理的 system_prompt (如果它存在于 otherUnsupportedParams 中)
-               const { system_prompt: _sysPrompt, ...loggableParams } = otherUnsupportedParams;
-               if (Object.keys(loggableParams).length > 0) {
-                    console.log(`[${reqId}]   其他未处理参数: ${JSON.stringify(loggableParams)}`);
-               }
-          }
-          // --- 结束参数记录 ---
 
           // 2. 设置此请求的总操作超时
           operationTimer = setTimeout(async () => {
@@ -943,9 +981,7 @@ async function processQueue() {
           const validationMessages = messages.map(m => ({ ...m, reqId })); // Add reqId temporarily
           const { userPrompt, systemPrompt: extractedSystemPrompt } = validateChatRequest(validationMessages);
           // Combine system prompts if provided in multiple ways
-          // 优先使用请求体根目录的 system_prompt (如果存在于 otherUnsupportedParams 中)
-          const systemPrompt = otherUnsupportedParams?.system_prompt || extractedSystemPrompt;
-
+          const systemPrompt = extractedSystemPrompt || otherParams?.system_prompt;
 
           // --- Logging (Now userPrompt is guaranteed to be a string) ---
           const userPromptPreview = userPrompt.substring(0, 80);
@@ -958,10 +994,9 @@ async function processQueue() {
           } else {
                console.log(`[${reqId}]   无 System Prompt。`);
           }
-          // 不再需要单独记录 otherParams，因为已经在上面记录了
-          // if (Object.keys(otherParams).length > 0) {
-          //      console.log(`[${reqId}]   记录到的额外参数: ${JSON.stringify(otherParams)}`);
-          // }
+          if (Object.keys(otherParams).length > 0) {
+                console.log(`[${reqId}]   记录到的额外参数: ${JSON.stringify(otherParams)}`);
+          }
           // --- End Logging ---
 
           // 4. 准备 Prompt (使用处理后的 userPrompt 和 systemPrompt)
@@ -977,6 +1012,57 @@ async function processQueue() {
           // 5. 与页面交互并提交
           const locators = await interactAndSubmitPrompt(page, prompt, reqId);
 
+          // --- 添加 'close' 事件监听器 ---
+          closeEventHandler = async () => {
+               console.log(`[${reqId}] 'close' event handler triggered.`); // <-- 新增日志
+               if (isCancelled) {
+                    console.log(`[${reqId}] 'close' event handler: Already cancelled, doing nothing.`); // <-- 新增日志
+                    return; // 防止重复执行
+               }
+               isCancelled = true;
+               console.log(`[${reqId}] Client disconnected ('close' event). Attempting to stop generation by clicking the run/stop button.`);
+               clearTimeout(operationTimer); // 清除主超时定时器
+
+               // 尝试点击运行/停止按钮 (因为它是同一个按钮)
+               try {
+                    // 确保 locators, submitButton, inputField 存在
+                    if (!locators || !locators.submitButton || !locators.inputField) {
+                         console.warn(`[${reqId}]   closeEventHandler: Cannot attempt to click stop button: locators (button or input) not available.`); // <-- 修改日志
+                         return;
+                    }
+                    // 检查按钮是否仍然可用 (增加超时)
+                    console.log(`[${reqId}]   closeEventHandler: Checking button state (timeout: 2000ms)...`); // <-- 修改日志
+                    const isEnabled = await locators.submitButton.isEnabled({ timeout: 2000 }); // <-- 增加超时
+                    console.log(`[${reqId}]   closeEventHandler: Button isEnabled result: ${isEnabled}`); // <-- 新增日志
+
+                    if (isEnabled) {
+                         // *** 新增：检查输入框是否为空 (增加超时) ***
+                         console.log(`[${reqId}]   closeEventHandler: Button enabled, checking input value (timeout: 2000ms)...`); // <-- 修改日志
+                         const inputValue = await locators.inputField.inputValue({ timeout: 2000 }); // <-- 增加超时
+                         console.log(`[${reqId}]   closeEventHandler: Input value: "${inputValue}"`); // <-- 新增日志
+                         if (inputValue === '') {
+                              console.log(`[${reqId}]   closeEventHandler: Run/Stop button is enabled AND input is empty. Clicking it to stop generation...`); // <-- 修改日志
+                              // 使用 click({ force: true }) 可能更可靠
+                              await locators.submitButton.click({ timeout: 5000, force: true });
+                              console.log(`[${reqId}]   closeEventHandler: Run/Stop button click attempted.`); // <-- 修改日志
+                         } else {
+                              console.log(`[${reqId}]   closeEventHandler: Run/Stop button is enabled BUT input is NOT empty. Assuming user typed new input, not clicking stop.`); // <-- 修改日志
+                         }
+                         // *** 结束新增检查 ***
+                    } else {
+                         console.log(`[${reqId}]   closeEventHandler: Run/Stop button is already disabled (generation likely finished or close event was late). No click needed.`); // <-- 修改日志
+                    }
+               } catch (clickError) {
+                    // 捕获检查或点击过程中的错误
+                    console.warn(`[${reqId}]   closeEventHandler: Error during stop button check/click: ${clickError.message.split('\n')[0]}`); // <-- 修改日志
+                    // 添加更详细日志并尝试保存快照
+                    console.error(`[${reqId}]   closeEventHandler: Detailed error during check/click:`, clickError); 
+                    await saveErrorSnapshot(`close_handler_click_error_${reqId}`); 
+               }
+          };
+          res.on('close', closeEventHandler);
+          // --- 结束添加监听器 ---
+
           // 6. 定位响应元素
           const { responseElement } = await locateResponseElements(page, locators, reqId);
 
@@ -990,11 +1076,13 @@ async function processQueue() {
                res.flushHeaders();
 
                // 调用流式处理函数
-               await handleStreamingResponse(res, responseElement, page, locators, operationTimer, reqId);
+               // 传递检查函数 () => isCancelled
+               await handleStreamingResponse(res, responseElement, page, locators, operationTimer, reqId, () => isCancelled);
 
           } else {
                // 调用非流式处理函数
-               await handleNonStreamingResponse(res, page, locators, operationTimer, reqId);
+               // 传递检查函数 () => isCancelled
+               await handleNonStreamingResponse(res, page, locators, operationTimer, reqId, () => isCancelled);
           }
 
           console.log(`[${reqId}] ✅ 请求处理成功完成。`);
@@ -1002,12 +1090,26 @@ async function processQueue() {
           clearTimeout(operationTimer);
 
      } catch (error) {
-          clearTimeout(operationTimer); // 确保在任何错误情况下都清除此请求的定时器
-          console.error(`[${reqId}] ❌ 处理队列中的请求时出错: ${error.message}\n${error.stack}`);
-          if (!error.message?.includes('snapshot') && !error.stack?.includes('saveErrorSnapshot') && !error.message?.includes('Playwright not ready')) {
-               // 避免在保存快照失败或已知Playwright问题时再次尝试保存
-               await saveErrorSnapshot(`general_api_error_${reqId}`);
+          // 确保在任何错误情况下都清除此请求的定时器 (如果 close 事件未触发)
+          if (!isCancelled) {
+               clearTimeout(operationTimer);
           }
+          console.error(`[${reqId}] ❌ 处理队列中的请求时出错: ${error.message}\n${error.stack}`);
+
+          // --- 恢复：添加条件判断是否需要保存快照 ---
+          const shouldSaveSnapshot = !(
+              error.message?.includes('Invalid request') || // 跳过请求验证错误
+              error.message?.includes('Playwright not ready') // 跳过 Playwright 初始化/连接错误
+              // 未来可以根据需要添加其他不需要快照的错误类型
+          );
+
+          if (shouldSaveSnapshot && !error.message?.includes('snapshot') && !error.stack?.includes('saveErrorSnapshot')) {
+              // 避免在保存快照本身失败或已知Playwright问题时再次尝试保存
+              await saveErrorSnapshot(`general_api_error_${reqId}`);
+          } else if (!shouldSaveSnapshot) {
+              console.log(`[${reqId}] (Info) Skipping error snapshot for this type of error: ${error.message.split('\n')[0]}`);
+          }
+          // --- 结束恢复 ---
 
           // 发送错误响应，如果尚未发送
           if (!res.headersSent) {
@@ -1036,6 +1138,12 @@ async function processQueue() {
                 res.end();
           }
      } finally {
+          // --- 添加清理逻辑 ---
+          if (closeEventHandler) {
+               res.removeListener('close', closeEventHandler);
+               // console.log(`[${reqId}] Removed 'close' event listener.`); // Optional debug log
+          }
+          // --- 结束清理逻辑 ---
           isProcessing = false; // 标记处理已结束
           console.log(`[${reqId}] ---结束处理队列中的请求---`);
           // 触发处理下一个请求（如果队列中有）
@@ -1048,8 +1156,29 @@ app.post('/v1/chat/completions', async (req, res) => {
     const reqId = Math.random().toString(36).substring(2, 9); // 生成简短的请求 ID
     console.log(`\n[${reqId}] === 收到 /v1/chat/completions 请求 ===`);
 
+    // 创建请求队列项，并添加取消标记和临时监听器引用
+    const queueItem = {
+         req,
+         res,
+         reqId,
+         isCancelledByClient: false,
+         preliminaryCloseHandler: null
+    };
+
+    // --- 添加临时的 'close' 事件监听器 ---
+    queueItem.preliminaryCloseHandler = () => {
+         if (!queueItem.isCancelledByClient) { // 避免重复标记
+              console.log(`[${reqId}] Client disconnected before processing started.`);
+              queueItem.isCancelledByClient = true;
+              // 从 res 对象移除自身，防止后续冲突
+              res.removeListener('close', queueItem.preliminaryCloseHandler);
+         }
+    };
+    res.once('close', queueItem.preliminaryCloseHandler); // 使用 once 确保最多触发一次
+    // --- 结束添加临时监听器 ---
+
     // 将请求加入队列
-    requestQueue.push({ req, res, reqId });
+    requestQueue.push(queueItem); // <-- 推入包含标记的对象
     console.log(`[${reqId}] 请求已加入队列 (当前队列长度: ${requestQueue.length})`);
 
     // 尝试处理队列 (如果当前未在处理)
