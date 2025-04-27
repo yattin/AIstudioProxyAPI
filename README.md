@@ -1,10 +1,10 @@
 # AI Studio Proxy Server
 
-## Star History
-
 [![Star History Chart](https://api.star-history.com/svg?repos=cjackhwang/AIstudioProxyAPI&type=Date)](https://www.star-history.com/#cjackhwang/AIstudioProxyAPI&Date)
 
-[点我查看演示视频](https://drive.google.com/file/d/1efR-cNG2CNboNpogHA1ASzmx45wO579p/view?usp=drive_link)
+⭐StarHistory⭐
+
+[点击查看项目使用演示视频](https://drive.google.com/file/d/1efR-cNG2CNboNpogHA1ASzmx45wO579p/view?usp=drive_link)
 
 这是一个Node.js+Playwright服务器，通过模拟 OpenAI API 的方式来访问 Google AI Studio 网页版，服务器无缝交互转发gemini对话。这使得兼容 OpenAI API 的客户端（如 Open WebUI, NextChat 等）可以使用 AI Studio 的无限额度及能力
 
