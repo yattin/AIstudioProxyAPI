@@ -246,7 +246,8 @@ async function initializePlaywright() {
 
 // --- 中间件 ---
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '20mb' }));
+app.use(express.urlencoded({ limit: '20mb', extended: true })); // Also for urlencoded
 
 // --- Web UI Route ---
 app.get('/', (req, res) => {
@@ -293,17 +294,101 @@ app.get('/health', (req, res) => {
 // --- 新增：API 辅助函数 ---
 
 // 验证聊天请求
+// v2.19: Updated validation to handle array content (text parts only)
 function validateChatRequest(messages) {
-        if (!messages || !Array.isArray(messages) || messages.length === 0) {
-             throw new Error('Invalid request: "messages" array is missing or empty.');
+    const reqId = messages?.[0]?.reqId || 'validation'; // Get reqId if passed, fallback
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+        throw new Error(`[${reqId}] Invalid request: "messages" array is missing or empty.`);
+    }
+    const lastUserMessage = messages.filter(msg => msg.role === 'user').pop();
+    if (!lastUserMessage) {
+        throw new Error(`[${reqId}] Invalid request: No user message found in the "messages" array.`);
+    }
+
+    let userPromptContentInput = lastUserMessage.content;
+    let processedUserPrompt = ""; // Initialize as empty string
+
+    // 1. Handle null/undefined content
+    if (userPromptContentInput === null || userPromptContentInput === undefined) {
+        console.warn(`[${reqId}] (Validation) Warning: Last user message content is null or undefined. Treating as empty string.`);
+        processedUserPrompt = "";
+    }
+    // 2. Handle string content (most common case)
+    else if (typeof userPromptContentInput === 'string') {
+        processedUserPrompt = userPromptContentInput;
+    }
+    // 3. Handle array content (attempt compatibility with OpenAI vision format)
+    else if (Array.isArray(userPromptContentInput)) {
+        console.log(`[${reqId}] (Validation) Info: Last user message content is an array. Processing text parts...`);
+        let textParts = [];
+        let unsupportedParts = false;
+        for (const item of userPromptContentInput) {
+            if (typeof item === 'object' && item !== null && item.type === 'text' && typeof item.text === 'string') {
+                textParts.push(item.text);
+            } else if (typeof item === 'object' && item !== null && item.type === 'image_url') {
+                console.warn(`[${reqId}] (Validation) Warning: Found 'image_url' content part. This proxy cannot process images via AI Studio web UI. Ignoring image.`);
+                unsupportedParts = true;
+                // Optionally, include the URL as text, but it might confuse the AI:
+                // textParts.push(`[Image URL (Unsupported): ${item.image_url?.url || 'N/A'}]`);
+            } else {
+                // Handle other unexpected items in the array - stringify them?
+                 console.warn(`[${reqId}] (Validation) Warning: Found unexpected item in content array (Type: ${typeof item}). Converting to JSON string.`);
+                 try {
+                      textParts.push(JSON.stringify(item));
+                      unsupportedParts = true;
+                 } catch (e) {
+                      console.error(`[${reqId}] (Validation) Error stringifying array item: ${e}. Skipping item.`);
+                 }
+            }
         }
-        const lastUserMessage = messages.filter(msg => msg.role === 'user').pop();
-        if (!lastUserMessage || !lastUserMessage.content) {
-            throw new Error('Invalid request: No valid user message content found in the "messages" array.');
+        processedUserPrompt = textParts.join('\\n'); // Join text parts with newline
+        if (unsupportedParts) {
+             console.warn(`[${reqId}] (Validation) Warning: Some parts of the array content were unsupported or ignored (e.g., images). Only text parts were included in the final prompt.`);
         }
+        if (!processedUserPrompt) {
+             console.warn(`[${reqId}] (Validation) Warning: Processed array content resulted in an empty prompt.`);
+        }
+    }
+    // 4. Handle other object types (fallback to JSON stringify)
+    else if (typeof userPromptContentInput === 'object' && userPromptContentInput !== null) {
+        console.warn(`[${reqId}] (Validation) Warning: Last user message content is an object but not a recognized array format. Converting to JSON string.`);
+        try {
+            processedUserPrompt = JSON.stringify(userPromptContentInput);
+        } catch (stringifyError) {
+            console.error(`[${reqId}] (Validation) Error stringifying object user content: ${stringifyError}. Falling back to empty string.`);
+            processedUserPrompt = "";
+        }
+    }
+    // 5. Handle other primitive types (e.g., number, boolean) - convert to string
+    else {
+        console.warn(`[${reqId}] (Validation) Warning: Last user message content is an unexpected primitive type (${typeof userPromptContentInput}). Converting to string.`);
+        processedUserPrompt = String(userPromptContentInput);
+    }
+
+    // Final check - should always be a string here
+    if (typeof processedUserPrompt !== 'string') {
+         console.error(`[${reqId}] (Validation) CRITICAL ERROR: Failed to process user prompt content into a string. Type after processing: ${typeof processedUserPrompt}. Using empty string.`);
+         processedUserPrompt = ""; // Safeguard
+    }
+
+
+    // Extract system prompt (remains the same logic)
+    const systemPromptContent = messages.find(msg => msg.role === 'system')?.content;
+    // Basic validation for system prompt (ensure it's a string if provided)
+    let processedSystemPrompt = null;
+    if (systemPromptContent !== null && systemPromptContent !== undefined) {
+        if (typeof systemPromptContent === 'string') {
+            processedSystemPrompt = systemPromptContent;
+        } else {
+            console.warn(`[${reqId}] (Validation) Warning: System prompt content is not a string (Type: ${typeof systemPromptContent}). Ignoring system prompt.`);
+            // Optionally stringify it: processedSystemPrompt = JSON.stringify(systemPromptContent);
+        }
+    }
+
+
     return {
-        userPrompt: lastUserMessage.content,
-        systemPrompt: messages.find(msg => msg.role === 'system')?.content
+        userPrompt: processedUserPrompt, // Ensure this is always a string
+        systemPrompt: processedSystemPrompt // Ensure this is null or a string
     };
 }
 
@@ -815,10 +900,31 @@ async function processQueue() {
                throw new Error("Playwright not ready for this request."); // Throw to skip further processing in try block
           }
 
-          const { messages, stream, ...otherParams } = req.body;
+          // --- v2.19: 提取并记录更多参数 ---
+          const {
+              messages,
+              stream = false,
+              model, // 记录 model 参数
+              temperature, // 记录 temperature 参数
+              max_tokens, // 记录 max_tokens 参数
+              top_p, // 记录 top_p 参数
+              frequency_penalty, // 记录 frequency_penalty 参数
+              presence_penalty, // 记录 presence_penalty 参数
+              // 可以根据需要添加更多你想记录的 OpenAI 参数
+              ...otherUnsupportedParams // 捕获其他所有未显式处理的参数
+          } = req.body;
           const isStreaming = stream === true;
 
           console.log(`[${reqId}] 请求模式: ${isStreaming ? '流式 (SSE)' : '非流式 (JSON)'}`);
+          console.log(`[${reqId}] 接收参数: model=${model}, stream=${isStreaming}, temperature=${temperature}, max_tokens=${max_tokens}, top_p=${top_p}, freq_penalty=${frequency_penalty}, pres_penalty=${presence_penalty}`);
+          if (Object.keys(otherUnsupportedParams).length > 0) {
+               // 过滤掉我们已经特殊处理的 system_prompt (如果它存在于 otherUnsupportedParams 中)
+               const { system_prompt: _sysPrompt, ...loggableParams } = otherUnsupportedParams;
+               if (Object.keys(loggableParams).length > 0) {
+                    console.log(`[${reqId}]   其他未处理参数: ${JSON.stringify(loggableParams)}`);
+               }
+          }
+          // --- 结束参数记录 ---
 
           // 2. 设置此请求的总操作超时
           operationTimer = setTimeout(async () => {
@@ -832,25 +938,39 @@ async function processQueue() {
                // Note: Timeout error now managed within processQueue, allowing next item to proceed
           }, RESPONSE_COMPLETION_TIMEOUT);
 
-          // 3. 验证请求
-          const { userPrompt, systemPrompt: extractedSystemPrompt } = validateChatRequest(messages);
-          const systemPrompt = extractedSystemPrompt || otherParams?.system_prompt; // Combine sources
+          // 3. 验证请求 (使用更新后的函数)
+          // Pass reqId to validation for better logging context
+          const validationMessages = messages.map(m => ({ ...m, reqId })); // Add reqId temporarily
+          const { userPrompt, systemPrompt: extractedSystemPrompt } = validateChatRequest(validationMessages);
+          // Combine system prompts if provided in multiple ways
+          // 优先使用请求体根目录的 system_prompt (如果存在于 otherUnsupportedParams 中)
+          const systemPrompt = otherUnsupportedParams?.system_prompt || extractedSystemPrompt;
 
-          console.log(`[${reqId}]   原始 User Prompt (start): \"${userPrompt?.substring(0, 80)}...\"`);
+
+          // --- Logging (Now userPrompt is guaranteed to be a string) ---
+          const userPromptPreview = userPrompt.substring(0, 80);
+          console.log(`[${reqId}]   处理后的 User Prompt (用于提交, start): \"${userPromptPreview}...\" (Total length: ${userPrompt.length})`);
+
           if (systemPrompt) {
-               console.log(`[${reqId}]   System Prompt (start): \"${systemPrompt.substring(0, 80)}...\"`);
+               // systemPrompt from validateChatRequest is also guaranteed string or null
+               const systemPromptPreview = systemPrompt.substring(0, 80);
+               console.log(`[${reqId}]   处理后的 System Prompt (用于提交, start): \"${systemPromptPreview}...\"`);
+          } else {
+               console.log(`[${reqId}]   无 System Prompt。`);
           }
-          if (Object.keys(otherParams).length > 0) {
-                console.log(`[${reqId}]   记录到的额外参数: ${JSON.stringify(otherParams)}`);
-          }
+          // 不再需要单独记录 otherParams，因为已经在上面记录了
+          // if (Object.keys(otherParams).length > 0) {
+          //      console.log(`[${reqId}]   记录到的额外参数: ${JSON.stringify(otherParams)}`);
+          // }
+          // --- End Logging ---
 
-          // 4. 准备 Prompt
+          // 4. 准备 Prompt (使用处理后的 userPrompt 和 systemPrompt)
           let prompt;
           if (isStreaming) {
-               prompt = prepareAIStudioPromptStream(userPrompt, systemPrompt);
+               prompt = prepareAIStudioPromptStream(userPrompt, systemPrompt); // Assumes prepare functions handle null systemPrompt
                console.log(`[${reqId}] 构建的流式 Prompt (Raw): \"${prompt.substring(0, 200)}...\"`);
           } else {
-               prompt = prepareAIStudioPrompt(userPrompt, systemPrompt);
+               prompt = prepareAIStudioPrompt(userPrompt, systemPrompt); // Assumes prepare functions handle null systemPrompt
                console.log(`[${reqId}] 构建的非流式 Prompt (JSON): \"${prompt.substring(0, 200)}...\"`);
           }
 
