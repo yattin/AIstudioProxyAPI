@@ -934,11 +934,25 @@ async function processQueue() {
      console.log(`\n[${reqId}] ---开始处理队列中的请求 (剩余 ${requestQueue.length} 个)---`);
 
      let operationTimer; // 主操作定时器
-     let isCancelled = false; // 处理期间的取消标志
+     // *** 修改：将 isCancelledByClient 的状态传递给处理期间的 isCancelled 标志 ***
+     let isCancelled = isCancelledByClient; 
+     // 如果在开始处理时就已经被取消，添加一条日志
+     if (isCancelled) {
+          console.log(`[${reqId}] Warning: Request was cancelled very shortly before processing logic started.`);
+          // 虽然上面的检查理论上会处理，但这里多一层保险
+     }
+     // *** 结束修改 ***
      let closeEventHandler = null; // 主 close 事件处理器引用
 
      try {
           // 1. 检查 Playwright 状态 (现在可以安全地继续，因为请求未被提前取消)
+          // *** 新增：如果此时 isCancelled 已经是 true，则直接跳到 finally ***
+          if (isCancelled) {
+               console.log(`[${reqId}] Skipping Playwright interaction as request is already marked cancelled.`);
+               throw new Error(`[${reqId}] Request pre-cancelled`); // 抛出错误以跳到 catch/finally
+          }
+          // *** 结束新增检查 ***
+          
           if (!isPlaywrightReady && !isInitializing) {
                console.warn(`[${reqId}] Playwright 未就绪，尝试重新初始化...`);
                await initializePlaywright();
@@ -1085,9 +1099,15 @@ async function processQueue() {
                await handleNonStreamingResponse(res, page, locators, operationTimer, reqId, () => isCancelled);
           }
 
-          console.log(`[${reqId}] ✅ 请求处理成功完成。`);
-          // Clear timeout only on successful completion within try block
-          clearTimeout(operationTimer);
+          // --- 修改：仅在未被取消时记录成功 --- 
+          if (!isCancelled) {
+               console.log(`[${reqId}] ✅ 请求处理成功完成。`);
+               clearTimeout(operationTimer); // 只有真正成功完成才清除计时器
+          } else {
+               console.log(`[${reqId}] ℹ️ 请求处理因客户端断开连接而被中止。`);
+               // operationTimer 应该已经在 closeEventHandler 中被清除了
+          }
+          // --- 结束修改 ---
 
      } catch (error) {
           // 确保在任何错误情况下都清除此请求的定时器 (如果 close 事件未触发)
