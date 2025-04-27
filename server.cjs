@@ -324,7 +324,7 @@ async function interactAndSubmitPrompt(page, prompt, reqId) {
     }
 
     console.log(`[${reqId}]  - 清空并填充输入框...`);
-        await inputField.fill(prompt, { timeout: 10000 });
+        await inputField.fill(prompt, { timeout: 60000 });
 
     console.log(`[${reqId}]  - 等待运行按钮可用...`);
         try {
