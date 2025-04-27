@@ -62,10 +62,16 @@ const CHAT_COMPLETION_ID_PREFIX = 'chatcmpl-';
 // --- 选择器常量 ---
 const INPUT_SELECTOR = 'ms-prompt-input-wrapper textarea';
 const SUBMIT_BUTTON_SELECTOR = 'button[aria-label="Run"]';
-const RESPONSE_CONTAINER_SELECTOR = 'ms-chat-turn .chat-turn-container.model';
-const RESPONSE_TEXT_SELECTOR = 'ms-cmark-node.cmark-node'; // Target the container for raw text
-const LOADING_SPINNER_SELECTOR = 'button[aria-label="Run"] svg .stoppable-spinner'; // Spinner circle
-const ERROR_TOAST_SELECTOR = 'div.toast.warning, div.toast.error'; // 页面错误提示
+const RESPONSE_CONTAINER_SELECTOR = 'ms-chat-turn .chat-turn-container.model'; // 选择器指向 AI 模型回复的容器
+const RESPONSE_TEXT_SELECTOR = 'ms-cmark-node.cmark-node';
+const LOADING_SPINNER_SELECTOR = 'button[aria-label="Run"] svg .stoppable-spinner';
+const ERROR_TOAST_SELECTOR = 'div.toast.warning, div.toast.error';
+// !! 新增：清空聊天记录相关选择器 !!
+const CLEAR_CHAT_BUTTON_SELECTOR = 'button[aria-label="Clear chat"][data-test-clear="outside"]:has(span.material-symbols-outlined:has-text("refresh"))'; // 清空按钮 (带图标确认)
+const CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR = 'button.mdc-button:has-text("Continue")'; // 确认对话框中的 "Continue" 按钮
+// !! 新增：清空验证相关常量 !!
+const CLEAR_CHAT_VERIFY_TIMEOUT_MS = 5000; // 等待清空生效的总超时时间 (ms)
+const CLEAR_CHAT_VERIFY_INTERVAL_MS = 300; // 检查清空状态的轮询间隔 (ms)
 
 // v2.16: JSON Structure Prompt (Restored for non-streaming)
 const prepareAIStudioPrompt = (userPrompt, systemPrompt = null) => {
@@ -975,6 +981,62 @@ async function processQueue() {
 
           const { messages, stream, ...otherParams } = req.body;
           const isStreaming = stream === true;
+
+          // --- 修改：基于消息数量启发式判断并执行清空操作 + 验证 ---
+          const isLikelyNewChat = Array.isArray(messages) && (messages.length === 1 || (messages.length === 2 && messages.some(m => m.role === 'system')));
+
+          if (isLikelyNewChat && CLEAR_CHAT_BUTTON_SELECTOR && CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR) {
+              console.log(`[${reqId}] 检测到可能是新对话 (消息数: ${messages.length})，尝试清空聊天记录...`);
+              try {
+                  const clearButton = page.locator(CLEAR_CHAT_BUTTON_SELECTOR);
+                  console.log(`[${reqId}]   - 查找并点击"Clear chat"按钮...`);
+                  await clearButton.waitFor({ state: 'visible', timeout: 7000 });
+                  await clearButton.click({ timeout: 5000 });
+                  console.log(`[${reqId}]   - "Clear chat"按钮已点击。`);
+
+                  console.log(`[${reqId}]   - 等待确认对话框及"Continue"按钮出现...`);
+                  const confirmButton = page.locator(CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR);
+                  await confirmButton.waitFor({ state: 'visible', timeout: 5000 });
+
+                  console.log(`[${reqId}]   - 点击"Continue"按钮...`);
+                  await confirmButton.click({ timeout: 5000 });
+                  console.log(`[${reqId}]   - "Continue"按钮已点击。开始验证清空效果...`);
+
+                  // --- 新增：验证清空效果 ---
+                  const checkStartTime = Date.now();
+                  let cleared = false;
+                  while (Date.now() - checkStartTime < CLEAR_CHAT_VERIFY_TIMEOUT_MS) {
+                      // 定位所有 AI 回复容器
+                      const modelTurns = page.locator(RESPONSE_CONTAINER_SELECTOR);
+                      const count = await modelTurns.count();
+                      if (count === 0) {
+                          console.log(`[${reqId}]   ✅ 验证成功: 页面上未找到之前的 AI 回复元素 (耗时 ${Date.now() - checkStartTime}ms)。`);
+                          cleared = true;
+                          break; // 验证成功，退出循环
+                      }
+                      // 稍微等待后再次检查
+                      await page.waitForTimeout(CLEAR_CHAT_VERIFY_INTERVAL_MS);
+                  }
+
+                  if (!cleared) {
+                      // 如果超时后仍然找到 AI 回复元素
+                      console.warn(`[${reqId}]   ⚠️ 验证超时: 在 ${CLEAR_CHAT_VERIFY_TIMEOUT_MS}ms 内仍能检测到之前的 AI 回复元素。上下文可能未完全清空。`);
+                      // 保存快照以供调试
+                      await saveErrorSnapshot(`clear_chat_verify_fail_${reqId}`);
+                  }
+                  // --- 结束：验证清空效果 ---
+
+              } catch (clearChatError) {
+                  console.warn(`[${reqId}] ⚠️ 清空聊天记录或验证时出错: ${clearChatError.message.split('\n')[0]}. 将继续执行请求，但上下文可能未被清除。`);
+                  if (clearChatError.message.includes('selector')) {
+                       console.warn(`   (请仔细检查选择器是否仍然有效: CLEAR_CHAT_BUTTON_SELECTOR='${CLEAR_CHAT_BUTTON_SELECTOR}', CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR='${CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR}')`);
+                  }
+                  await saveErrorSnapshot(`clear_chat_fail_or_verify_${reqId}`);
+              }
+          } else if (isLikelyNewChat && (!CLEAR_CHAT_BUTTON_SELECTOR || !CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR)) {
+              console.warn(`[${reqId}] 检测到可能是新对话，但未完整配置清空聊天相关的选择器常量，无法自动重置上下文。`);
+          }
+          // --- 结束：启发式新对话处理 ---
 
           console.log(`[${reqId}] 请求模式: ${isStreaming ? '流式 (SSE)' : '非流式 (JSON)'}`);
 

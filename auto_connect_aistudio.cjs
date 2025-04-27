@@ -323,17 +323,23 @@ async function launchChrome() {
 
     console.log(`正在尝试启动 Chrome...`);
     console.log(`  路径: "${chromeExecutablePath}"`);
-    console.log(`  参数: --remote-debugging-port=${DEBUGGING_PORT}`);
+    // --- 修改：添加启动参数 ---
+    const chromeArgs = [
+        `--remote-debugging-port=${DEBUGGING_PORT}`,
+        `--window-size=460,800` // 指定宽度为 460px，高度暂定为 800px (可以根据需要调整)
+        // 你可以在这里添加其他需要的 Chrome 启动参数
+    ];
+    console.log(`  参数: ${chromeArgs.join(' ')}`); // 打印所有参数
 
     try {
         const chromeProcess = spawn(
             chromeExecutablePath,
-            [`--remote-debugging-port=${DEBUGGING_PORT}`],
+            chromeArgs, // 使用包含窗口大小的参数数组
             { detached: true, stdio: 'ignore' } // Detach to allow script to exit independently if needed
         );
         chromeProcess.unref(); // Allow parent process to exit independently
 
-        console.log(`${GREEN}✅ Chrome 启动命令已发送。稍后将尝试连接...${RESET}`);
+        console.log(`${GREEN}✅ Chrome 启动命令已发送 (指定窗口大小)。稍后将尝试连接...${RESET}`);
         console.log(`${DIM}⏳ 等待 3 秒让 Chrome 进程启动...${RESET}`);
         await new Promise(resolve => setTimeout(resolve, 3000));
         return true; // 表示启动流程已尝试
