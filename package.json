@@ -1,6 +1,8 @@
 {
-  "type": "module",
   "dependencies": {
-    "openai": "^4.95.1"
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "playwright": "^1.44.1",
+    "@playwright/test": "^1.44.1"
   }
 }

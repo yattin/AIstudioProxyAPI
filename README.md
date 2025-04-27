@@ -27,25 +27,29 @@
 *   **非流式响应**: 支持 `stream=false`，一次性返回完整 JSON 响应。
 *   **系统提示词 (System Prompt)**: 支持通过请求体中的 `messages` 数组的 `system` 角色或额外的 `system_prompt` 字段传递系统提示词。
 *   **内部 Prompt 优化**: 自动包装用户输入，指导 AI Studio 输出特定格式（流式为 Markdown 代码块，非流式为 JSON），并包含起始标记 `<<<START_RESPONSE>>>` 以便解析。
-*   **自动连接脚本 (`auto_connect_aistudio.cjs`)**: 
-    *   自动查找并启动 Chrome/Chromium 浏览器，开启调试端口。
+*   **自动连接脚本 (`auto_connect_aistudio.cjs`)**:
+    *   自动查找并启动 Chrome/Chromium 浏览器，开启调试端口，**并设置特定窗口宽度 (460px)** 以优化布局。
     *   自动检测并尝试连接已存在的 Chrome 调试实例。
     *   提供交互式选项，允许用户选择连接现有实例或自动结束冲突进程。
     *   自动查找或打开 AI Studio 的 `New chat` 页面。
     *   自动启动 `server.cjs`。
 *   **服务端 (`server.cjs`)**:
     *   连接到由 `auto_connect_aistudio.cjs` 管理的 Chrome 实例。
+    *   **自动清空上下文**: 当检测到来自客户端的请求可能是"新对话"时（基于消息历史长度），自动模拟点击 AI Studio 页面上的"Clear chat"按钮及其确认对话框，并验证清空效果，以实现更好的会话隔离。
     *   处理 API 请求，通过 Playwright 操作 AI Studio 页面。
     *   解析 AI Studio 的响应，提取有效内容。
     *   提供简单的 Web UI (`/`) 进行基本测试。
     *   提供健康检查端点 (`/health`)。
-*   **错误快照**: 在 Playwright 操作或响应解析出错时，自动在 `errors` 目录下保存页面截图和 HTML，方便调试。
+*   **错误快照**: 在 Playwright 操作、响应解析或**清空聊天**出错时，自动在 `errors` 目录下保存页面截图和 HTML，方便调试。
 *   **依赖检测**: 两个脚本在启动时都会检查所需依赖，并提供安装指导。
 *   **跨平台设计**: 旨在支持 macOS, Linux 和 Windows (WSL 推荐)。
 
 ## ⚠️ 重要提示
 
 *   **非官方项目**: 本项目与 Google 无关，依赖于对 AI Studio Web 界面的自动化操作，可能因 AI Studio 页面更新而失效。
+*   **自动清空功能的脆弱性**: 自动清空上下文的功能依赖于精确的 UI 元素选择器 (`CLEAR_CHAT_BUTTON_SELECTOR`, `CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR` 在 `server.cjs` 中)。如果 AI Studio 页面结构发生变化，此功能可能会失效。届时需要更新这些选择器。
+*   **不支持历史编辑/分叉**: 即使实现了新对话的上下文清空，本代理仍然无法支持客户端进行历史消息编辑并从该点重新生成对话的功能。AI Studio 内部维护的对话历史是线性的。
+*   **固定窗口宽度**: `auto_connect_aistudio.cjs` 会以固定的宽度 (460px) 启动 Chrome 窗口，以确保清空按钮可见。
 *   **安全性**: 启动 Chrome 时开启了远程调试端口 (默认为 `8848`)，请确保此端口仅在受信任的网络环境中使用，或通过防火墙规则限制访问。切勿将此端口暴露到公网。
 *   **稳定性**: 由于依赖浏览器自动化，其稳定性不如官方 API。长时间运行或频繁请求可能导致页面无响应或连接中断，可能需要重启浏览器或服务器。
 *   **AI Studio 限制**: AI Studio 本身可能有请求频率限制、内容策略限制等，代理服务器无法绕过这些限制。
@@ -77,7 +81,7 @@
     # 或
     pnpm install
     ```
-    这将安装 `express`, `playwright`, `@playwright/test`, `cors`。
+    这将安装 `express`, `cors`, `playwright`, `@playwright/test`。(`@playwright/test` 主要用于 `server.cjs` 中的 `expect` 断言功能)。
 
 ### 3. 运行
 
@@ -89,38 +93,33 @@ node auto_connect_aistudio.cjs
 
 这个脚本会执行以下操作：
 
-1.  **检查依赖**: 确认 `express`, `playwright`, `@playwright/test`, `cors` 已安装，且 `server.cjs` 文件存在。
-2.  **检查 Chrome 调试端口 (`8848`)**:
-    *   **如果端口空闲**: 
+1.  **检查依赖**: 确认 `express`, `cors`, `playwright`, `@playwright/test` 已安装，且 `server.cjs` 文件存在。
+2.  **检查 Chrome 调试端口 (`8848`)** 并 **设置窗口大小**:
+    *   **如果端口空闲**:
         *   它会提示您先手动关闭其他可能干扰的 Chrome 实例。
-        *   然后尝试自动查找并启动一个新的 Chrome 实例，并打开远程调试端口。
-    *   **如果端口被占用**: 
-        *   它会提示端口已被占用，并询问您如何处理：
-            *   **[Y] (默认)**: 尝试连接到当前占用端口的现有 Chrome 实例。
-            *   **[n]**: 尝试自动结束占用该端口的进程，然后启动一个新的 Chrome 实例。
-        *   如果选择 `[n]` 且自动结束进程失败，脚本会提示您手动处理后重试。
+        *   然后尝试自动查找并启动一个新的 Chrome 实例（**宽度设置为 460px**），并打开远程调试端口。
+    *   **如果端口被占用**:
+        *   它会提示端口已被占用，并询问您如何处理（连接现有实例或尝试清理端口后启动新实例）。
 3.  **连接 Playwright**: 尝试连接到 Chrome 的调试端口。
-4.  **管理 AI Studio 页面**: 
-    *   在连接的浏览器中查找已打开的 AI Studio 页面。
-    *   如果找到，会尝试导航到 `/prompts/new_chat` 页面。
-    *   如果没有找到合适的页面（或找到了Google登录页），会打开一个新的页面并导航到 `https://aistudio.google.com/prompts/new_chat`。
-    *   **重要**: 如果是首次访问或需要登录，您需要在 Chrome 窗口中手动完成登录操作。
+4.  **管理 AI Studio 页面**: 查找或打开 AI Studio 的 `New chat` 页面，并尝试置于前台。
 5.  **启动 API 服务器**: 如果以上步骤成功，脚本会自动在后台启动 `node server.cjs`。
 
 当 `server.cjs` 成功启动并连接到 Playwright 后，您将在终端看到类似以下的输出（来自 `server.cjs`）：
 
 ```
 =============================================================
-          🚀 AI Studio Proxy Server (v2.17+) 🚀
+          🚀 AI Studio Proxy Server (vX.XX - Queue & Auto Clear) 🚀
 =============================================================
 🔗 监听地址: http://localhost:2048
    - Web UI (测试): http://localhost:2048/
    - API 端点:   http://localhost:2048/v1/chat/completions
    - 模型接口:   http://localhost:2048/v1/models
+   - 健康检查:   http://localhost:2048/health
 -------------------------------------------------------------
 ✅ Playwright 连接成功，服务已准备就绪！
 -------------------------------------------------------------
 ```
+*(请注意版本号可能会更新)*
 
 此时，代理服务已准备就绪。
 
@@ -159,6 +158,7 @@ node auto_connect_aistudio.cjs
     *   **端口被占用且无法自动清理**: 根据脚本提示，手动查找并结束占用 `8848` 端口的进程。
     *   **连接 Playwright 超时**: 确认 Chrome 是否已成功启动并响应，防火墙是否阻止本地连接 `127.0.0.1:8848`。
     *   **打开/导航 AI Studio 页面失败**: 检查网络连接，尝试手动在浏览器中打开 `https://aistudio.google.com/prompts/new_chat` 并完成登录。
+    *   **窗口大小问题**: 如果 460px 宽度不适用于您的显示器或导致其他问题，可以修改 `auto_connect_aistudio.cjs` 中的 `--window-size` 参数。
 *   **`server.cjs` 启动时提示端口被占用 (`EADDRINUSE`)**:
     *   检查是否有其他程序 (包括旧的服务器实例) 正在使用 `2048` 端口 (或你在 `server.cjs` 中设置的 `SERVER_PORT`)。关闭冲突程序或更改端口配置。
 *   **服务器日志显示 Playwright 未就绪或连接失败 (在 `server.cjs` 启动后)**:
@@ -180,6 +180,15 @@ node auto_connect_aistudio.cjs
     *   非流式请求：如果返回的 JSON 中缺少 `response` 字段或无法解析，服务器可能返回空内容或原始 JSON 字符串。检查 `errors` 快照确认 AI Studio 页面的实际输出。
     *   流式请求：如果 AI 未按预期输出 Markdown 代码块或起始标记，流式传输可能提前中断或包含非预期内容。
     *   这可能是项目本身的局限性，尝试调整 Prompt 或稍后重试。
+*   **自动清空上下文失败**:
+    *   服务器日志出现 "清空聊天记录或验证时出错" 或 "验证超时" 的警告。
+    *   **原因**: 很可能是 AI Studio 网页更新导致 `server.cjs` 中的 `CLEAR_CHAT_BUTTON_SELECTOR` 或 `CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR` 失效。
+    *   **解决**:
+        1.  检查 `errors` 目录下对应的错误快照 (截图和 HTML)。
+        2.  使用浏览器开发者工具检查 AI Studio 页面上实际的"Clear chat"按钮和确认对话框中"Continue"按钮的 HTML 结构。
+        3.  更新 `server.cjs` 文件顶部的这两个选择器常量。
+    *   **原因**: 清空操作本身耗时超过了 `CLEAR_CHAT_VERIFY_TIMEOUT_MS` (默认为 5 秒)。
+    *   **解决**: 如果网络或机器较慢，可以尝试在 `server.cjs` 中适当增加这个超时时间。
 
 ## 🤝 贡献
 
