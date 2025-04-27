@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Studio Proxy - Status</title>
+    <style>
+        body {
+            background-color: #1a1a1a; /* 深色背景 */
+            color: #00FF00; /* 亮绿色文本 */
+            font-family: ui-monospace, 'Consolas', 'Menlo', 'Courier New', monospace; /* 优先系统等宽字体 */
+            margin: 0;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 800px;
+            margin: 20px auto; /* 稍微居中容器 */
+            padding: 25px;
+            border: 1px solid #00FF00; /* 绿色边框 */
+            box-shadow: 0 0 10px rgba(0, 255, 0, 0.3); /* 柔和的绿色辉光效果 */
+            background-color: #0d0d0d; /* 稍有区别的深色 */
+            border-radius: 5px; /* 添加圆角 */
+        }
+
+        h1 {
+            color: #FFFFFF; /* 白色标题 */
+            text-align: center;
+            margin-bottom: 20px;
+            border-bottom: 1px dashed #00FF00;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #FFFFFF;
+            margin-top: 25px;
+            margin-bottom: 10px;
+            font-size: 1.1em;
+            border-bottom: 1px solid #444;
+            padding-bottom: 5px;
+        }
+        .status {
+            font-weight: bold;
+            margin-bottom: 20px;
+            padding: 10px;
+            background-color: rgba(0, 255, 0, 0.1); /* 轻微绿色背景 */
+            border-left: 3px solid #00FF00;
+        }
+        .status.ok {
+            color: #00FF00; /* 绿色状态 */
+        }
+        .status.error { /* 备用：用于可能的错误状态 */
+            color: #FF0000; /* 红色状态 */
+            background-color: rgba(255, 0, 0, 0.1);
+            border-left: 3px solid #FF0000;
+        }
+        hr {
+            border: none;
+            border-top: 1px dashed #444; /* 稍亮的虚线 */
+            margin: 30px 0; /* 增大上下边距 */
+        }
+        .endpoints ul {
+            list-style-type: none; /* 移除默认列表符号 */
+            padding-left: 0;
+        }
+        .endpoints li::before {
+            content: '> '; /* 添加终端风格的前缀 */
+            color: #888; /* 暗淡的前缀颜色 */
+        }
+        .endpoints li {
+            margin-bottom: 5px;
+        }
+        strong {
+            color: #FFFFFF; /* 白色强调 */
+        }
+        a {
+            color: #00FFFF; /* 青色链接 */
+            text-decoration: none;
+            transition: color 0.2s ease-in-out; /* 添加颜色过渡效果 */
+        }
+        a:hover {
+            text-decoration: underline;
+            color: #FFFFFF; /* 悬停时变白 */
+        }
+        .description {
+            color: #cccccc; /* 稍浅的灰色描述文字 */
+            font-style: italic;
+        }
+        .footer {
+            margin-top: 30px;
+            text-align: center;
+            font-size: 0.9em;
+            color: #888; /* 暗淡的页脚 */
+        }
+        /* Blinking cursor simulation */
+        .blinking-cursor::after {
+            content: '_';
+            animation: blink 1s step-end infinite;
+            margin-left: 5px;
+        }
+        @keyframes blink {
+            from, to { color: transparent; }
+            50% { color: #00FF00; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>AI Studio Proxy Server</h1>
+        
+        <!-- 假设服务器启动总是成功的 -->
+        <p class="status ok">STATUS: RUNNING | Playwright Connection: [ ACTIVE ] <span class="blinking-cursor"></span></p> 
+        
+        <hr>
+        
+        <p>代理服务器已启动，正在监听请求...</p>
+        
+        <div class="endpoints">
+            <h2>Listening Address & Endpoints:</h2>
+            <p><strong>Base URL:</strong> <a href="http://localhost:2048/" target="_blank" title="Refresh this page">http://localhost:2048/</a></p>
+            <ul>
+                <li><strong>API (Completions):</strong> /v1/chat/completions</li>
+                <li><strong>API (Models):</strong> /v1/models</li>
+                <li><strong>Health Check:</strong> <a href="/health" target="_blank">/health</a></li>
+                <li><strong>Web UI (This Page):</strong> /</li>
+            </ul>
+        </div>
+        
+        <hr>
+        
+        <p class="description">
+            This service proxies requests to Google AI Studio via Playwright automation,<br>
+            providing an OpenAI-compatible API interface.<br>
+            Ensure the Chrome debugging instance and the AI Studio page remain active.
+        </p>
+        
+        <p class="footer">
+            :: G33K_STYL3 ENGAGED :: | <a href="https://github.com/CJackHwang/AIstudioProxyAPI" target="_blank" title="View Project on GitHub">Project on GitHub</a> | <a href="https://github.com/CJackHwang" target="_blank" title="Author's GitHub Profile">Author's GitHub</a>
+        </p>
+    </div>
+</body>
+</html> 
