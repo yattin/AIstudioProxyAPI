@@ -1,6 +1,6 @@
 # AI Studio Proxy Server
 
-[![Star History Chart](https://api.star-history.com/svg?repos=cjackhwang/AIstudioProxyAPI&type=Date)](https://www.star-history.com/#cjackhwang/AIstudioProxyAPI&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=CJackHwang/AIstudioProxyAPI&type=Date)](https://www.star-history.com/#CJackHwang/AIstudioProxyAPI&Date)
 
 ---
 
