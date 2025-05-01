@@ -143,10 +143,33 @@ __pycache__/\n*.py[cod]\n*$py.class\n\n# Python Libraries\n*.egg-info/\n*.egg\n
 # Unit test / coverage reports\nhtmlcov/\n.tox/\n.nox/\n.coverage\n.coverage.*\n.cache\nnosetests.xml\ncoverage.xml\n*.cover\n*.py,cover\n.hypothesis/\n.pytest_cache/\n
 # Environments\n.env\n.venv\nenv/\nvenv/\nENV/\nenv.bak/\nvenv.bak/\n
 # Jupyter Notebook\n.ipynb_checkpoints\nprofile_default/\nipython_config.py\n
-# pyenv\n.python-version\n
-# Celery stuff\ncelerybeat-schedule\ncelerybeat.pid\n
-# SageMath parsed files\n*.sage.py\n
-# Environments\n.env\n.venv\nenv/\nvenv/\nENV/\nenv.bak/\nvenv.bak/
+# pyenv
+.python-version
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Python cache directory
+__pycache__/
+
+# Error snapshots directory (Python specific)
+errors_py/
+
+# Authentication Profiles (Sensitive)
+auth_profiles/
 
 # Camoufox/Playwright Profile Data
 camoufox_profile/ 
