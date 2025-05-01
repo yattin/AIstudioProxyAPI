@@ -466,8 +466,9 @@ async def _initialize_page_logic(browser: AsyncBrowser):
 
         if login_url_pattern in current_url:
             print("\n🛑 需要操作: 已重定向到 Google 登录！(登录状态可能丢失或过期) 🛑") # 中文
-            print("   请在浏览器窗口 (由 camoufox 服务器管理) 中登录您的 Google 账户。") # 中文
-            input("   在您登录并看到 AI Studio 后，在此处按 Enter 键...") # 中文
+            print("   请在 Camoufox 服务器管理的浏览器窗口中登录您的 Google 账户。") # 中文
+            print("   (如果当前是以无头模式运行，您需要先停止脚本，然后使用 'python launch_camoufox.py --headed' 重新启动)") # 增加提示
+            input("   在您登录并看到 AI Studio 后，在此处按 Enter 键继续...") # 中文 (修改提示)
 
             print("   继续... 等待浏览器 URL 包含 AI Studio 模式...") # 中文
             try:
@@ -487,12 +488,14 @@ async def _initialize_page_logic(browser: AsyncBrowser):
             except Exception as wait_err:
                 print(f"   登录尝试后等待 AI Studio URL 时出错: {wait_err}") # 中文
                 last_known_url = found_page.url
-                raise RuntimeError(f"登录提示后未能检测到 AI Studio URL。最后已知 URL: {last_known_url}. 错误: {wait_err}") # 中文
+                # 修改提示信息，强调需要在 Camoufox 管理的浏览器中操作
+                raise RuntimeError(f"登录提示后未能检测到 AI Studio URL。最后已知 URL: {last_known_url}. 请确保您在 Camoufox 服务器管理的浏览器窗口中完成了登录，并且页面已跳转到 AI Studio。错误: {wait_err}") # 中文
 
         elif target_url_base not in current_url:
             print(f"\n⚠️ 警告: 最初到达意外页面: {current_url}") # 中文
             if loaded_state:
-                 print("   这可能是由于加载的存储状态无效。尝试删除状态文件。") # 中文
+                 # 修改提示，建议删除状态文件并用 --headed 重启
+                 print("   这可能是由于加载的存储状态无效。请尝试删除 'auth_state.json' 文件并使用 'python launch_camoufox.py --headed' 模式重启。") # 中文
             raise RuntimeError(f"初始导航后出现意外页面: {current_url}") # 中文
 
         print(f"-> 已确认页面是 AI Studio: {current_url}") # 中文
@@ -822,7 +825,71 @@ async def process_chat_request(req_id: str, request: ChatCompletionRequest, http
     # --- End Client Disconnect Handling ---
 
     try:
-        # --- REMOVED Clear Chat Logic --- 
+        # --- START: Re-implement Clear Chat Logic ---
+        # First, check if we are on the specific /new_chat URL
+        current_url = page.url
+        is_new_chat_url = current_url.endswith("/new_chat")
+
+        if is_new_chat_url:
+            print(f"[{req_id}] 当前在 /new_chat 页面，跳过清空聊天记录操作。") # 中文
+        else:
+            # Only attempt clear if NOT on new_chat URL AND it looks like a new conversation turn
+            is_likely_new_conversation_turn = len(request.messages) == 1 or \
+                                              (len(request.messages) == 2 and any(m.role == 'system' for m in request.messages))
+
+            if is_likely_new_conversation_turn and CLEAR_CHAT_BUTTON_SELECTOR and CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR:
+                print(f"[{req_id}] 不在 /new_chat 页面且检测到可能是新对话轮次 (消息数: {len(request.messages)})，尝试清空聊天记录...") # 中文
+                try:
+                    clear_button = page.locator(CLEAR_CHAT_BUTTON_SELECTOR)
+                    confirm_button = page.locator(CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR)
+
+                    print(f"[{req_id}]   - 查找并点击'清除聊天'按钮...") # 中文
+                    # Increase timeout slightly for visibility check as it might be needed
+                    await expect_async(clear_button).to_be_visible(timeout=8000)
+                    # Ensure the button is enabled before clicking
+                    await expect_async(clear_button).to_be_enabled(timeout=5000) 
+                    await clear_button.click(timeout=5000)
+                    print(f"[{req_id}]   - '清除聊天'按钮已点击。") # 中文
+
+                    print(f"[{req_id}]   - 等待确认对话框及'继续'按钮出现...") # 中文
+                    await expect_async(confirm_button).to_be_visible(timeout=5000)
+
+                    print(f"[{req_id}]   - 点击'继续'按钮...") # 中文
+                    await confirm_button.click(timeout=5000)
+                    print(f"[{req_id}]   - '继续'按钮已点击。开始验证清空效果...") # 中文
+
+                    # --- Verify clear ---
+                    verify_start_time = time.time() * 1000
+                    cleared = False
+                    while time.time() * 1000 - verify_start_time < CLEAR_CHAT_VERIFY_TIMEOUT_MS:
+                        model_turns = page.locator(RESPONSE_CONTAINER_SELECTOR)
+                        count = await model_turns.count()
+                        if count == 0:
+                            print(f"[{req_id}]   ✅ 验证成功: 页面上未找到之前的 AI 回复元素 (耗时 {int(time.time() * 1000 - verify_start_time)}ms)。") # 中文
+                            cleared = True
+                            break
+                        await asyncio.sleep(CLEAR_CHAT_VERIFY_INTERVAL_MS / 1000)
+
+                    if not cleared:
+                        print(f"[{req_id}]   ⚠️ 验证超时: 在 {CLEAR_CHAT_VERIFY_TIMEOUT_MS}ms 内仍能检测到之前的 AI 回复元素。上下文可能未完全清空。") # 中文
+                        await save_error_snapshot(f"clear_chat_verify_fail_{req_id}")
+
+                except PlaywrightAsyncError as clear_err:
+                    # Check if the error is due to the button being disabled (common case on non-empty chats sometimes)
+                    if "element is not enabled" in clear_err.message:
+                         print(f"[{req_id}] ℹ️ 清空聊天按钮当前不可用 (可能已被禁用)，跳过清空操作。错误: {clear_err.message.split('\\n')[0]}")
+                    else:
+                         print(f"[{req_id}] ⚠️ 清空聊天记录或验证时出错: {clear_err.message.split('\\n')[0]}. 将继续执行请求，但上下文可能未被清除。") # 中文
+                         await save_error_snapshot(f"clear_chat_fail_or_verify_{req_id}")
+                except Exception as general_clear_err:
+                    print(f"[{req_id}] ⚠️ 清空聊天记录或验证时发生未知错误: {general_clear_err}. 将继续执行请求，但上下文可能未被清除。") # 中文
+                    traceback.print_exc()
+                    await save_error_snapshot(f"clear_chat_unknown_err_{req_id}")
+
+            elif is_likely_new_conversation_turn:
+                 print(f"[{req_id}] 不在 /new_chat 页面，检测到可能是新对话轮次，但未完整配置清空聊天相关的选择器常量，无法自动重置上下文。") # 中文
+        # --- END: Re-implement Clear Chat Logic ---
+
 
         # 3. Interact and Submit (Modified: Use Keyboard Shortcut first)
         print(f"[{req_id}] 填充提示并点击提交...") # 中文
@@ -836,21 +903,23 @@ async def process_chat_request(req_id: str, request: ChatCompletionRequest, http
         print(f"[{req_id}] 等待一小段时间让UI稳定...") # 中文
         await page.wait_for_timeout(200) # Add small delay
 
-        # --- Try submitting with Control+Enter first ---
+        # --- Try submitting with Control+Enter first --- 
         submitted_successfully = False
         try:
             print(f"[{req_id}] 尝试使用 Control+Enter 快捷键提交...") # 中文
             await page.keyboard.press('Control+Enter')
             # Heuristic check: See if input field clears quickly after sending
-            print(f"[{req_id}] 快捷键提交成功 (输入框已清空)。") # 中文
+            # Increase timeout slightly for this check as clearing might take a moment
+            await expect_async(input_field).to_have_value('', timeout=4000) 
+            print(f"[{req_id}] Control+Enter 提交成功 (输入框已清空)。") # 中文
             submitted_successfully = True
         except PlaywrightAsyncError as key_press_error:
-            print(f"[{req_id}] 警告: Control+Enter 快捷键提交失败或未及时清空输入框: {key_press_error.message.split('\n')[0]}") # 中文
+            print(f"[{req_id}] 警告: Control+Enter 提交失败或未及时清空输入框: {key_press_error.message.split('\\n')[0]}") # 中文
             # Fallback to clicking the button
 
-        # --- Fallback to clicking if shortcut failed ---
+        # --- Fallback to clicking if Control+Enter failed ---
         if not submitted_successfully:
-            print(f"[{req_id}] 快捷键提交失败，回退到模拟点击提交按钮...") # 中文
+            print(f"[{req_id}] Control+Enter 提交失败，回退到模拟点击提交按钮...") # 中文
             print(f"[{req_id}] 确保提交按钮在视图中...") # 中文
             try:
                 await submit_button.scroll_into_view_if_needed(timeout=5000)
@@ -866,16 +935,30 @@ async def process_chat_request(req_id: str, request: ChatCompletionRequest, http
                  print(f"[{req_id}] 模拟点击提交成功 (输入框已清空)。") # 中文
                  submitted_successfully = True
             except PlaywrightAsyncError as click_error:
-                 print(f"[{req_id}] ❌ 错误: 模拟点击提交按钮也失败了: {click_error.message.split('\n')[0]}") # 中文
+                 print(f"[{req_id}] ❌ 错误: 模拟点击提交按钮也失败了: {click_error.message.split('\\n')[0]}") # 中文
                  await save_error_snapshot(f"submit_fallback_click_fail_{req_id}")
-                 raise click_error # Re-raise the error if both methods fail
+                 # Ensure we re-raise only if both methods failed
+                 if not submitted_successfully:
+                     raise click_error 
 
-        # 4. Locate Response Element
-        print(f"[{req_id}] 定位响应元素...") # 中文
-        response_element = page.locator(RESPONSE_CONTAINER_SELECTOR).last.locator(RESPONSE_TEXT_SELECTOR)
-        # Increase timeout slightly for response element appearance after potential submit delay
-        await expect_async(response_element).to_be_attached(timeout=20000) 
-        print(f"[{req_id}] 响应元素已定位。") # 中文
+        # --- Add Delay Post-Submission ---
+        print(f"[{req_id}] 提交后等待 1 秒...") # 中文
+        await page.wait_for_timeout(1000) 
+
+        # 4. Locate Response Element (Refined Wait Strategy)
+        print(f"[{req_id}] 定位响应容器...") # 中文
+        response_container = page.locator(RESPONSE_CONTAINER_SELECTOR).last
+        try:
+            await expect_async(response_container).to_be_attached(timeout=20000)
+            print(f"[{req_id}] 响应容器已定位。正在定位内部文本节点...") # 中文
+            response_element = response_container.locator(RESPONSE_TEXT_SELECTOR)
+            # Optionally, wait for the text node itself shortly after container appears
+            await expect_async(response_element).to_be_attached(timeout=5000) 
+            print(f"[{req_id}] 响应文本节点已定位。") # 中文
+        except PlaywrightAsyncError as locate_err:
+            print(f"[{req_id}] ❌ 定位响应容器或文本节点时出错: {locate_err}") # 中文
+            await save_error_snapshot(f"response_locate_error_{req_id}")
+            raise locate_err # Re-raise the error
 
         # 5. Handle Response (Streaming or Non-streaming)
         if is_streaming:
@@ -925,8 +1008,9 @@ async def process_chat_request(req_id: str, request: ChatCompletionRequest, http
                         
                         current_raw_text = await get_raw_text_content(response_element, last_raw_text, req_id)
 
-                        if current_raw_text != last_raw_text:
-                            last_text_change_timestamp = time.time() * 1000
+                        text_changed = current_raw_text != last_raw_text
+                        if text_changed:
+                            last_text_change_timestamp = time.time() * 1000 # Update timestamp on actual text change
                             potential_new_delta = ""
                             current_content_after_marker = ""
 
@@ -936,35 +1020,47 @@ async def process_chat_request(req_id: str, request: ChatCompletionRequest, http
                                     print(f"[{req_id}]    (流) 找到起始标记 '{start_marker}'.") # 中文
                                     response_started = True
                                 current_content_after_marker = current_raw_text[marker_index + len(start_marker):]
+                                # Calculate delta based on content *after* the marker
                                 potential_new_delta = current_content_after_marker[len(last_sent_response_content):]
                             elif response_started:
+                                 # Marker disappeared after being seen?
                                  potential_new_delta = ""
-                                 print(f"[{req_id}] 警告: 起始标记在被看到后消失了。") # 中文
+                                 print(f"[{req_id}] 警告: 起始标记在被看到后消失了。 Raw: {current_raw_text[:50]}...") # 中文
 
                             if potential_new_delta:
+                                # print(f"[{req_id}] Sending delta (len: {len(potential_new_delta)}): '{potential_new_delta[:50]}...'") # Debug
                                 yield generate_sse_chunk(potential_new_delta, req_id, MODEL_NAME)
                                 last_sent_response_content += potential_new_delta
+                            # else: # Debugging when delta is empty despite text change
+                                # if response_started:
+                                     # print(f"[{req_id}] Delta empty. Current after marker(len:{len(current_content_after_marker)}): '{current_content_after_marker[:50]}...'. Last sent(len:{len(last_sent_response_content)}): '{last_sent_response_content[:50]}...'")
 
                             last_raw_text = current_raw_text
 
+                        # Check spinner status independently
                         if not spinner_disappeared:
                              try:
-                                 if await spinner_locator.is_hidden():
-                                     spinner_disappeared = True
-                                     last_text_change_timestamp = time.time() * 1000
-                                     print(f"[{req_id}]    Spinner 已隐藏。检查静默状态...") # 中文
+                                 # Use a short timeout for the check
+                                 await expect_async(spinner_locator).to_be_hidden(timeout=50) 
+                                 spinner_disappeared = True
+                                 # Don't reset silence timer here, let text changes control it
+                                 print(f"[{req_id}]    Spinner 已隐藏。等待文本静默...") # 中文
                              except PlaywrightAsyncError:
-                                 pass
+                                 pass # Spinner still visible or check timed out
                         
+                        # Silence check: Spinner must be gone AND enough time passed since *last text change*
                         is_silent = spinner_disappeared and (time.time() * 1000 - last_text_change_timestamp > SILENCE_TIMEOUT_MS)
+                        
                         if is_silent:
-                            print(f"[{req_id}] 检测到静默。完成流。") # 中文
+                            print(f"[{req_id}] 检测到静默 (Spinner消失且文本稳定 {SILENCE_TIMEOUT_MS}ms)。完成流。") # 中文
                             stream_finished_naturally = True
                             break
 
                         loop_duration = time.time() * 1000 - loop_start_time
                         wait_time = max(0, POLLING_INTERVAL_STREAM - loop_duration) / 1000
                         await asyncio.sleep(wait_time)
+
+                    # --- End of while loop ---
 
                     if client_disconnected:
                          yield generate_sse_stop_chunk(req_id, MODEL_NAME, "client_disconnect")
@@ -979,19 +1075,35 @@ async def process_chat_request(req_id: str, request: ChatCompletionRequest, http
                         return
                     
                     if stream_finished_naturally:
+                        # Perform a final robust check for content
+                        print(f"[{req_id}] 流自然结束，执行最终内容检查...") # 中文
                         final_raw_text = await get_raw_text_content(response_element, last_raw_text, req_id)
                         final_content_after_marker = ""
+                        final_delta = ""
+                        
                         final_marker_index = final_raw_text.find(start_marker)
                         if final_marker_index != -1:
                              final_content_after_marker = final_raw_text[final_marker_index + len(start_marker):]
-                        final_delta = final_content_after_marker[len(last_sent_response_content):]
+                             final_delta = final_content_after_marker[len(last_sent_response_content):]
+                        elif response_started: # Marker was seen but disappeared
+                             print(f"[{req_id}] 警告: 最终检查时起始标记消失。 Raw: {final_raw_text[:50]}...") # 中文
+
                         if final_delta:
-                             print(f"[{req_id}] 发送最终增量 (长度: {len(final_delta)})") # 中文
+                             print(f"[{req_id}] 发送最终增量 (长度: {len(final_delta)}) '{final_delta[:50]}...'") # 中文
                              yield generate_sse_chunk(final_delta, req_id, MODEL_NAME)
+                             last_sent_response_content += final_delta # Update for the check below
+                        else:
+                             print(f"[{req_id}] 最终检查未发现新的增量内容。") # 中文
+                             
+                        # Check if we finished naturally but never sent anything
+                        if not last_sent_response_content:
+                            print(f"[{req_id}] ⚠️ 警告: 流因静默而自然结束，但从未发送任何有效响应内容 (起始标记后的内容为空)。") # 中文
+                            # This might be a legitimate empty response from the AI, or an issue.
 
                         yield generate_sse_stop_chunk(req_id, MODEL_NAME)
-                        print(f"[{req_id}] ✅ 流自然完成。") # 中文
+                        print(f"[{req_id}] ✅ 流自然完成 ([DONE] sent)。") # 中文
                     else: 
+                        # Timeout case
                         print(f"[{req_id}] ⚠️ 流在 {RESPONSE_COMPLETION_TIMEOUT / 1000} 秒后超时。") # 中文
                         await save_error_snapshot(f"streaming_timeout_{req_id}")
                         yield generate_sse_error_chunk("流处理在服务器上超时。", req_id) # 中文
