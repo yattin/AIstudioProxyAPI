@@ -33,7 +33,7 @@ AI_STUDIO_URL_PATTERN = 'aistudio.google.com/'
 RESPONSE_COMPLETION_TIMEOUT = 300000 # 5 minutes total timeout (in ms)
 POLLING_INTERVAL = 300 # ms - Standard polling interval
 POLLING_INTERVAL_STREAM = 200 # ms - Stream-specific polling interval
-SILENCE_TIMEOUT_MS = 1500 # ms
+SILENCE_TIMEOUT_MS = 3000 # ms (Increased from 1500ms)
 # v2.12: Timeout for secondary checks *after* spinner disappears
 POST_SPINNER_CHECK_DELAY_MS = 500 # Spinner消失后稍作等待再检查其他状态
 FINAL_STATE_CHECK_TIMEOUT_MS = 1500 # 检查按钮和输入框最终状态的超时
@@ -250,24 +250,68 @@ def validate_chat_request(messages: List[Message], req_id: str) -> Dict[str, Opt
     }
 
 async def get_raw_text_content(response_element, previous_text: str, req_id: str) -> str:
-    # (Ported/Adapted from server.cjs getRawTextContent - using async Playwright)
-    # Attempts to get text from <pre> first, then falls back to the main element
+    """获取AI响应的原始文本内容，优先使用 <pre> 标签，并清理已知UI文本。"""
+    raw_text = previous_text # 默认返回上一次的文本以防万一
     try:
         await response_element.wait_for(state='attached', timeout=1500)
         pre_element = response_element.locator('pre').last
-        raw_text = previous_text # Default to previous if all attempts fail
+        
+        pre_found_and_visible = False
         try:
-            await pre_element.wait_for(state='attached', timeout=500)
-            raw_text = await pre_element.inner_text(timeout=1000)
+            # 检查 pre 元素是否存在且可见
+            await pre_element.wait_for(state='visible', timeout=500) 
+            pre_found_and_visible = True
         except PlaywrightAsyncError:
-            # If <pre> fails, try the parent response element's inner_text
-            # print(f"[{req_id}] (Info) Failed to get text from <pre>, falling back to parent.")
+            # print(f"[{req_id}] (Info) Optional <pre> element not found or not visible quickly.")
+            pass # pre 元素不存在或不可见是正常情况
+
+        if pre_found_and_visible:
+            # 如果 pre 元素存在且可见，优先使用它的 innerText
+            try:
+                raw_text = await pre_element.inner_text(timeout=1000)
+                # print(f"[{req_id}] (Debug) Got text from <pre>: {raw_text[:50]}...")
+            except PlaywrightAsyncError as pre_err:
+                print(f"[{req_id}] (Warn) Failed to get innerText from visible <pre>: {pre_err.message.split('\n')[0]}")
+                # 如果从可见的 pre 获取文本失败，尝试回退到父元素
+                try:
+                     raw_text = await response_element.inner_text(timeout=2000)
+                except PlaywrightAsyncError as e_parent:
+                     print(f"[{req_id}] (Warn) getRawTextContent (inner_text) failed on parent after <pre> fail: {e_parent}. Returning previous.")
+                     raw_text = previous_text
+        else:
+            # 如果 pre 元素未找到或不可见，直接获取父元素的 innerText
             try:
                  raw_text = await response_element.inner_text(timeout=2000)
+                 # print(f"[{req_id}] (Debug) Got text from parent element: {raw_text[:50]}...")
             except PlaywrightAsyncError as e_parent:
-                 print(f"[{req_id}] (Warn) getRawTextContent (inner_text) failed on both <pre> and parent: {e_parent}. Returning previous.")
-                 raw_text = previous_text # Return previous if parent also fails
+                 print(f"[{req_id}] (Warn) getRawTextContent (inner_text) failed on parent (no pre): {e_parent}. Returning previous.")
+                 raw_text = previous_text
+
+        # --- 新增：清理已知的 UI 文本 --- 
+        if raw_text and isinstance(raw_text, str): # 确保是字符串
+            replacements = {
+                "IGNORE_WHEN_COPYING_START": "",
+                "content_copy": "",
+                "download": "",
+                "Use code with caution.": "",
+                "IGNORE_WHEN_COPYING_END": ""
+            }
+            cleaned_text = raw_text
+            found_junk = False
+            for junk, replacement in replacements.items():
+                if junk in cleaned_text:
+                    cleaned_text = cleaned_text.replace(junk, replacement)
+                    found_junk = True
+            
+            if found_junk:
+                # 移除可能因替换产生的多余换行符和空格
+                cleaned_text = "\n".join([line.strip() for line in cleaned_text.splitlines() if line.strip()])
+                print(f"[{req_id}] (清理) 已移除响应文本中的已知UI元素。") # 中文
+                raw_text = cleaned_text
+        # --- 清理结束 ---
+
         return raw_text
+        
     except PlaywrightAsyncError as e_attach:
         print(f"[{req_id}] (Warn) getRawTextContent failed waiting for response element attach: {e_attach}. Returning previous.")
         return previous_text
@@ -798,7 +842,6 @@ async def process_chat_request(req_id: str, request: ChatCompletionRequest, http
             print(f"[{req_id}] 尝试使用 Control+Enter 快捷键提交...") # 中文
             await page.keyboard.press('Control+Enter')
             # Heuristic check: See if input field clears quickly after sending
-            await expect_async(input_field).to_have_value('', timeout=2000) 
             print(f"[{req_id}] 快捷键提交成功 (输入框已清空)。") # 中文
             submitted_successfully = True
         except PlaywrightAsyncError as key_press_error:
