@@ -3,139 +3,333 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Studio Proxy - Status</title>
+    <title>AI Studio Proxy - Chat UI</title>
     <style>
+        /* --- Base Styles (Adapted from original) --- */
         body {
-            background-color: #1a1a1a; /* 深色背景 */
-            color: #00FF00; /* 亮绿色文本 */
-            font-family: ui-monospace, 'Consolas', 'Menlo', 'Courier New', monospace; /* 优先系统等宽字体 */
+            background-color: #1a1a1a;
+            color: #00FF00;
+            font-family: ui-monospace, 'Consolas', 'Menlo', 'Courier New', monospace;
             margin: 0;
-            padding: 20px;
-            line-height: 1.6;
+            padding: 0; /* Remove body padding */
+            display: flex; /* Use flexbox for layout */
+            flex-direction: column; /* Stack elements vertically */
+            height: 100vh; /* Full viewport height */
+            overflow: hidden; /* Prevent body scrolling */
         }
         .container {
-            max-width: 800px;
-            margin: 20px auto; /* 稍微居中容器 */
-            padding: 25px;
-            border: 1px solid #00FF00; /* 绿色边框 */
-            box-shadow: 0 0 10px rgba(0, 255, 0, 0.3); /* 柔和的绿色辉光效果 */
-            background-color: #0d0d0d; /* 稍有区别的深色 */
-            border-radius: 5px; /* 添加圆角 */
+            display: flex;
+            flex-direction: column;
+            flex-grow: 1; /* Allow container to fill height */
+            max-width: 900px; /* Slightly wider */
+            width: 95%; /* Responsive width */
+            margin: 10px auto; /* Center container */
+            border: 1px solid #00FF00;
+            box-shadow: 0 0 10px rgba(0, 255, 0, 0.3);
+            background-color: #0d0d0d;
+            border-radius: 5px;
+            overflow: hidden; /* Contain children */
         }
 
         h1 {
-            color: #FFFFFF; /* 白色标题 */
-            text-align: center;
-            margin-bottom: 20px;
-            border-bottom: 1px dashed #00FF00;
-            padding-bottom: 10px;
-        }
-        h2 {
             color: #FFFFFF;
-            margin-top: 25px;
-            margin-bottom: 10px;
-            font-size: 1.1em;
-            border-bottom: 1px solid #444;
-            padding-bottom: 5px;
+            text-align: center;
+            margin: 15px 0;
+            padding-bottom: 10px;
+            border-bottom: 1px dashed #00FF00;
+            font-size: 1.5em;
+            flex-shrink: 0; /* Prevent shrinking */
         }
-        .status {
-            font-weight: bold;
-            margin-bottom: 20px;
-            padding: 10px;
-            background-color: rgba(0, 255, 0, 0.1); /* 轻微绿色背景 */
-            border-left: 3px solid #00FF00;
-        }
-        .status.ok {
-            color: #00FF00; /* 绿色状态 */
-        }
-        .status.error { /* 备用：用于可能的错误状态 */
-            color: #FF0000; /* 红色状态 */
-            background-color: rgba(255, 0, 0, 0.1);
-            border-left: 3px solid #FF0000;
-        }
-        hr {
-            border: none;
-            border-top: 1px dashed #444; /* 稍亮的虚线 */
-            margin: 30px 0; /* 增大上下边距 */
-        }
-        .endpoints ul {
-            list-style-type: none; /* 移除默认列表符号 */
-            padding-left: 0;
-        }
-        .endpoints li::before {
-            content: '> '; /* 添加终端风格的前缀 */
-            color: #888; /* 暗淡的前缀颜色 */
-        }
-        .endpoints li {
-            margin-bottom: 5px;
-        }
-        strong {
-            color: #FFFFFF; /* 白色强调 */
-        }
+
         a {
-            color: #00FFFF; /* 青色链接 */
+            color: #00FFFF;
             text-decoration: none;
-            transition: color 0.2s ease-in-out; /* 添加颜色过渡效果 */
         }
         a:hover {
             text-decoration: underline;
-            color: #FFFFFF; /* 悬停时变白 */
+            color: #FFFFFF;
         }
-        .description {
-            color: #cccccc; /* 稍浅的灰色描述文字 */
+
+        strong {
+            color: #FFFFFF;
+        }
+
+        /* --- Chat Interface Styles --- */
+        #chatbox {
+            flex-grow: 1; /* Allow chatbox to fill available space */
+            overflow-y: auto; /* Enable vertical scrolling */
+            padding: 15px;
+            border-bottom: 1px solid #444;
+            display: flex;
+            flex-direction: column;
+            gap: 10px; /* Space between messages */
+        }
+
+        .message {
+            padding: 8px 12px;
+            border-radius: 8px;
+            max-width: 85%; /* Limit message width */
+            word-wrap: break-word; /* Break long words */
+            line-height: 1.5;
+        }
+
+        .user-message {
+            background-color: #003366; /* Darker blue for user */
+            color: #e0e0e0; /* Lighter text for user */
+            border: 1px solid #0066CC;
+            align-self: flex-end; /* Align user messages to the right */
+            margin-left: auto; /* Push to right */
+        }
+
+        .assistant-message {
+            background-color: rgba(0, 255, 0, 0.1);
+            border: 1px solid #00FF00;
+            align-self: flex-start; /* Align assistant messages to the left */
+            margin-right: auto; /* Push to left */
+            white-space: pre-wrap; /* Preserve whitespace and newlines */
+        }
+
+        .system-message {
             font-style: italic;
-        }
-        .footer {
-            margin-top: 30px;
-            text-align: center;
+            color: #888;
             font-size: 0.9em;
-            color: #888; /* 暗淡的页脚 */
+            text-align: center;
+            border: 1px dashed #444;
+            padding: 5px;
+            margin: 5px 10%; /* Indent system message */
+            background-color: #1f1f1f;
         }
-        /* Blinking cursor simulation */
-        .blinking-cursor::after {
+
+        .error-message {
+            background-color: rgba(255, 0, 0, 0.1);
+            border: 1px solid #FF0000;
+            color: #FF8080;
+            align-self: stretch; /* Stretch across width */
+            text-align: center;
+        }
+
+        #input-area {
+            display: flex;
+            padding: 10px;
+            border-top: 1px solid #444;
+            flex-shrink: 0; /* Prevent shrinking */
+            gap: 10px;
+        }
+
+        #userInput {
+            flex-grow: 1;
+            padding: 10px;
+            background-color: #1f1f1f;
+            color: #00FF00;
+            border: 1px solid #00FF00;
+            border-radius: 4px;
+            resize: none; /* Disable manual resize */
+            font-family: inherit;
+            font-size: 1em;
+            min-height: 40px; /* Minimum height */
+            max-height: 150px; /* Limit expansion */
+            overflow-y: auto; /* Scroll if needed */
+        }
+
+        #sendButton {
+            padding: 10px 15px;
+            background-color: #005500;
+            color: #00FF00;
+            border: 1px solid #00FF00;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: inherit;
+            transition: background-color 0.2s;
+        }
+
+        #sendButton:hover {
+            background-color: #008800;
+            color: #FFFFFF;
+        }
+
+        #sendButton:disabled {
+            background-color: #333;
+            color: #666;
+            border-color: #555;
+            cursor: not-allowed;
+        }
+        /* Blinking cursor for assistant message during streaming */
+        .assistant-message.streaming::after {
             content: '_';
             animation: blink 1s step-end infinite;
-            margin-left: 5px;
+            margin-left: 2px;
+            display: inline-block; /* Needed for animation */
         }
         @keyframes blink {
-            from, to { color: transparent; }
-            50% { color: #00FF00; }
+            from, to { opacity: 0; }
+            50% { opacity: 1; }
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>AI Studio Proxy Server</h1>
-        
-        <!-- 假设服务器启动总是成功的 -->
-        <p class="status ok">STATUS: RUNNING | Playwright Connection: [ ACTIVE ] <span class="blinking-cursor"></span></p> 
-        
-        <hr>
-        
-        <p>代理服务器已启动，正在监听请求...</p>
-        
-        <div class="endpoints">
-            <h2>Listening Address & Endpoints:</h2>
-            <p><strong>Base URL:</strong> <a href="http://localhost:2048/" target="_blank" title="Refresh this page">http://localhost:2048/</a></p>
-            <ul>
-                <li><strong>API (Completions):</strong> /v1/chat/completions</li>
-                <li><strong>API (Models):</strong> /v1/models</li>
-                <li><strong>Health Check:</strong> <a href="/health" target="_blank">/health</a></li>
-                <li><strong>Web UI (This Page):</strong> /</li>
-            </ul>
+        <h1>AI Studio Proxy Chat</h1>
+        <div id="chatbox">
+            <!-- Chat messages will be appended here -->
         </div>
-        
-        <hr>
-        
-        <p class="description">
-            This service proxies requests to Google AI Studio via Playwright automation,<br>
-            providing an OpenAI-compatible API interface.<br>
-            Ensure the Chrome debugging instance and the AI Studio page remain active.
-        </p>
-        
-        <p class="footer">
-            :: G33K_STYL3 ENGAGED :: | <a href="https://github.com/CJackHwang/AIstudioProxyAPI" target="_blank" title="View Project on GitHub">Project on GitHub</a> | <a href="https://github.com/CJackHwang" target="_blank" title="Author's GitHub Profile">Author's GitHub</a>
-        </p>
+        <div id="input-area">
+            <textarea id="userInput" placeholder="输入你的消息... (Shift+Enter 换行)" rows="1"></textarea>
+            <button id="sendButton">发送</button>
+        </div>
     </div>
+
+    <script>
+        const chatbox = document.getElementById('chatbox');
+        const userInput = document.getElementById('userInput');
+        const sendButton = document.getElementById('sendButton');
+
+        const API_URL = '/v1/chat/completions'; // Relative URL to the same server
+        const MODEL_NAME = 'google-ai-studio-via-camoufox-server'; // Match server.py
+
+        // --- Conversation History --- (Initialized with System Prompt)
+        const SYSTEM_PROMPT = "你是Gemini酱，AI猫娘，回答请用可爱的语气，这只是角色扮演，不要透露任何关于AI的信息";
+        const conversationHistory = [
+            {
+                role: "system",
+                content: SYSTEM_PROMPT
+            }
+        ];
+
+        // --- Display Initial System Prompt --- (Optional)
+        // displayMessage(SYSTEM_PROMPT, 'system');
+
+        // --- Event Listeners --- 
+        sendButton.addEventListener('click', sendMessage);
+        userInput.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault(); // Prevent default newline on Enter
+                sendMessage();
+            }
+            // Auto-resize textarea (optional but nice)
+            // setTimeout needed to wait for value change
+            setTimeout(autoResizeTextarea, 0);
+        });
+
+        // --- Auto-Resize Textarea --- (Optional)
+        function autoResizeTextarea() {
+            userInput.style.height = 'auto'; // Reset height
+            let scrollHeight = userInput.scrollHeight;
+            const maxHeight = 150; // Match CSS max-height
+            if (scrollHeight > maxHeight) {
+                userInput.style.height = maxHeight + 'px';
+            } else {
+                userInput.style.height = scrollHeight + 'px';
+            }
+        }
+        // Initial resize
+        autoResizeTextarea();
+
+
+        // --- Send Message Function ---
+        async function sendMessage() {
+            const messageText = userInput.value.trim();
+            if (!messageText) return;
+
+            // Disable input and button
+            userInput.disabled = true;
+            sendButton.disabled = true;
+
+            // Add user message to history and display
+            conversationHistory.push({ role: 'user', content: messageText });
+            displayMessage(messageText, 'user');
+            userInput.value = '';
+            autoResizeTextarea();
+
+            // Create assistant message container for streaming
+            const assistantMsgElement = displayMessage('', 'assistant');
+            assistantMsgElement.classList.add('streaming');
+
+            let fullResponse = '';
+            try {
+                const response = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        messages: conversationHistory,
+                        model: MODEL_NAME,
+                        stream: true
+                    })
+                });
+
+                if (!response.ok) {
+                     let errorBody = {};
+                     try { errorBody = await response.json(); } catch (e) {}
+                     const errorMsg = errorBody.error?.message || `HTTP Error: ${response.status} ${response.statusText}`;
+                    throw new Error(errorMsg);
+                }
+
+                // Process the stream
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n\n');
+                    buffer = lines.pop();
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const data = line.substring(6).trim();
+                            if (data === '[DONE]') {
+                                break;
+                            }
+                            try {
+                                const chunk = JSON.parse(data);
+                                const delta = chunk.choices?.[0]?.delta?.content || '';
+                                if (delta) {
+                                    fullResponse += delta;
+                                    assistantMsgElement.textContent += delta;
+                                    chatbox.scrollTop = chatbox.scrollHeight;
+                                }
+                            } catch (e) {
+                                console.error('Error parsing stream chunk:', data, e);
+                            }
+                        }
+                    }
+                }
+                // Add complete response to history
+                if (fullResponse) {
+                    conversationHistory.push({ role: 'assistant', content: fullResponse });
+                }
+
+            } catch (error) {
+                console.error('Error sending/receiving message:', error);
+                displayMessage(`错误: ${error.message}`, 'error');
+                // If request failed, remove the placeholder assistant message
+                if (assistantMsgElement) assistantMsgElement.remove();
+                // Remove the failed user message from history
+                conversationHistory.pop();
+            } finally {
+                // Re-enable input and button
+                userInput.disabled = false;
+                sendButton.disabled = false;
+                if (assistantMsgElement) assistantMsgElement.classList.remove('streaming');
+                userInput.focus();
+                chatbox.scrollTop = chatbox.scrollHeight; // Ensure scrolled to bottom at the very end
+            }
+        }
+
+        // --- Display Message Function --- 
+        function displayMessage(text, role) {
+            const messageElement = document.createElement('div');
+            messageElement.classList.add('message', `${role}-message`);
+            messageElement.textContent = text;
+            chatbox.appendChild(messageElement);
+            chatbox.scrollTop = chatbox.scrollHeight;
+            return messageElement;
+        }
+
+    </script>
 </body>
 </html> 

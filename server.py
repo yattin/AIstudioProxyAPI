@@ -3,12 +3,17 @@ import asyncio
 import random
 import time
 import json # Added for potential JSON operations
-from typing import List, Optional, Dict, Any, Union
+from typing import List, Optional, Dict, Any, Union, AsyncGenerator
 import os
 import traceback # Keep traceback import
+from contextlib import asynccontextmanager # Import asynccontextmanager
+import sys # Import sys for exiting
+import platform # To check OS type
+# Removed argparse import
+# import argparse
 
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 from pydantic import BaseModel, Field
 # Assuming camoufox is installed and provides sync/async APIs
 # Adjust the import based on actual library structure if needed
@@ -16,14 +21,18 @@ from camoufox.sync_api import Camoufox as CamoufoxSync
 # Import the async module directly
 import camoufox.async_api
 from playwright.sync_api import Page as SyncPage, Browser as SyncBrowser, Playwright as SyncPlaywright, Error as PlaywrightSyncError, expect as expect_sync # Added expect
-from playwright.async_api import Page as AsyncPage, Browser as AsyncBrowser, Playwright as AsyncPlaywright, Error as PlaywrightAsyncError, expect as expect_async # Added expect
+from playwright.async_api import Page as AsyncPage, Browser as AsyncBrowser, Playwright as AsyncPlaywright, Error as PlaywrightAsyncError, expect as expect_async, BrowserContext as AsyncBrowserContext # Added expect, BrowserContext
 from playwright.async_api import async_playwright # Import standard async_playwright
+
+# --- ANSI Colors Removed ---
+# ...
 
 # --- Configuration (Mirrored from server.cjs, adjust as needed) ---
 # SERVER_PORT = 2048 # Port will be handled by uvicorn when running
 AI_STUDIO_URL_PATTERN = 'aistudio.google.com/'
 RESPONSE_COMPLETION_TIMEOUT = 300000 # 5 minutes total timeout (in ms)
-POLLING_INTERVAL_STREAM = 200 # ms
+POLLING_INTERVAL = 300 # ms - Standard polling interval
+POLLING_INTERVAL_STREAM = 200 # ms - Stream-specific polling interval
 SILENCE_TIMEOUT_MS = 1500 # ms
 # v2.12: Timeout for secondary checks *after* spinner disappears
 POST_SPINNER_CHECK_DELAY_MS = 500 # Spinner消失后稍作等待再检查其他状态
@@ -34,6 +43,12 @@ POST_COMPLETION_BUFFER = 1000 # JSON模式下可以缩短检查后等待时间
 CLEAR_CHAT_VERIFY_TIMEOUT_MS = 5000 # 等待清空生效的总超时时间 (ms)
 CLEAR_CHAT_VERIFY_INTERVAL_MS = 300 # 检查清空状态的轮询间隔 (ms)
 
+# --- Configuration ---
+STORAGE_STATE_PATH = os.path.join(os.path.dirname(__file__), "auth_state.json") # Path to save/load auth state
+# Remove USER_DATA_DIR and related path logic as persistence doesn't work
+# USER_DATA_DIR = os.path.join(os.path.dirname(__file__), "camoufox_profile")
+# CAMOUFOX_CACHE_DIR = "/Users/aq/Library/Caches/camoufox"
+# CAMOUFOX_EXECUTABLE_PATH = os.path.join(CAMOUFOX_CACHE_DIR, "Camoufox.app", "Contents", "MacOS", "Camoufox")
 
 # --- Constants (Mirrored from server.cjs) ---
 MODEL_NAME = 'google-ai-studio-via-camoufox-fastapi' # Updated model name
@@ -50,19 +65,17 @@ ERROR_TOAST_SELECTOR = 'div.toast.warning, div.toast.error'
 CLEAR_CHAT_BUTTON_SELECTOR = 'button[aria-label="Clear chat"][data-test-clear="outside"]:has(span.material-symbols-outlined:has-text("refresh"))'
 CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR = 'button.mdc-button:has-text("Continue")'
 
-# --- FastAPI App ---
-app = FastAPI(
-    title="AI Studio Proxy Server (Python/FastAPI/Camoufox)",
-    description="A proxy server to interact with Google AI Studio using Playwright and Camoufox.",
-    version="0.1.0-py"
-)
-
-# --- Global State (Consider alternatives for production, e.g., dependency injection) ---
-# Using async versions for FastAPI's async nature
-browser_instance: Optional[AsyncBrowser] = None
+# --- Global State (Modified) ---
+playwright_manager: Optional[AsyncPlaywright] = None # To manage playwright itself
+browser_instance: Optional[AsyncBrowser] = None # Store the browser instance connected via WebSocket
+context_instance: Optional[AsyncBrowserContext] = None # Context is temporary within init
 page_instance: Optional[AsyncPage] = None
-is_camoufox_ready = False
+is_playwright_ready = False # Renamed from is_camoufox_ready
+is_browser_connected = False
+is_page_ready = False
 is_initializing = False
+# Removed cli_args global variable
+# cli_args = None
 # TODO: Implement request queue and processing state if needed (using asyncio.Queue for async)
 
 
@@ -287,163 +300,313 @@ def generate_sse_error_chunk(message: str, req_id: str, error_type: str = "serve
     return f"data: {json.dumps(error_payload)}\n\n"
 
 
-# --- Camoufox Initialization (Using async Camoufox) ---
-async def initialize_camoufox():
-    global browser_instance, page_instance, is_camoufox_ready, is_initializing, pw_instance # Need to store playwright instance too
-    if is_camoufox_ready or is_initializing:
-        return
-    is_initializing = True
-    pw_instance = None # Store the playwright instance
-    print("--- Initializing Camoufox ---")
+# --- Helper Functions (Pre-checks) ---
+def check_dependencies():
+    """Checks if FastAPI/Uvicorn and Playwright are installed."""
+    print("--- 步骤 1: 检查服务器依赖项 ---")
+    required = {
+        "fastapi": "fastapi",
+        "uvicorn": "uvicorn[standard]",
+        "playwright": "playwright"
+    }
+    missing = []
+    modules_ok = True
+
+    for mod_name, install_name in required.items():
+        print(f"   - 检查 {mod_name}... ", end="")
+        try:
+            __import__(mod_name)
+            print("✓ 已找到")
+        except ImportError:
+            print("❌ 未找到")
+            missing.append(install_name)
+            modules_ok = False
+
+    if not modules_ok:
+        print("\n❌ 错误: 缺少必要的 Python 库!")
+        print("   请运行以下命令安装:")
+        install_cmd = f"pip install {' '.join(missing)}"
+        print(f"   {install_cmd}")
+        sys.exit(1)
+    else:
+        print("✅ 服务器依赖检查通过.")
+    print("---\n")
+
+
+# --- Page Initialization Logic --- (Translate print statements)
+async def _initialize_page_logic(browser: AsyncBrowser):
+    global page_instance, is_page_ready
+    print("--- 初始化页面逻辑 (连接到现有浏览器) ---") # 中文
+
+    temp_context = None
+    loaded_state = None
+
+    if os.path.exists(STORAGE_STATE_PATH):
+        print(f"找到现有状态文件: {STORAGE_STATE_PATH}. 尝试加载...") # 中文
+        try:
+            with open(STORAGE_STATE_PATH, 'r') as f:
+                loaded_state = json.load(f)
+            print("存储状态加载成功。") # 中文
+        except Exception as e:
+            print(f"警告: 从 {STORAGE_STATE_PATH} 加载存储状态失败: {e}. 将在没有已保存状态的情况下继续。") # 中文
+            loaded_state = None
+    else:
+        print("未找到现有存储状态文件。如果需要，将尝试全新登录。") # 中文
+
     try:
-        # Start Playwright context first
-        print("Starting Playwright context...")
-        pw_instance = await async_playwright().start() # Start standard Playwright
+        print(f"使用已连接的浏览器实例。版本: {browser.version}") # 中文
 
-        # Now try launching Camoufox *within* this context?
-        # This assumes Camoufox integrates with an existing Playwright instance,
-        # or uses its own launch parameters passed to the underlying firefox.launch
-        print("Launching Camoufox browser instance via Playwright...")
+        print("创建新的浏览器上下文" + (" (使用已加载状态)。" if loaded_state else "。") ) # 中文
+        try:
+            viewport_size = {'width': 460, 'height': 800}
+            print(f"   尝试设置视口大小: {viewport_size}") # 中文
+            temp_context = await browser.new_context(
+                storage_state=loaded_state,
+                viewport=viewport_size
+            )
+        except Exception as context_err:
+            print(f"警告: 使用已加载状态创建上下文失败: {context_err}. 尝试不使用状态...") # 中文
+            if loaded_state:
+                loaded_state = None
+                temp_context = await browser.new_context()
+            else:
+                raise
+        print("新的浏览器上下文已创建。") # 中文
+        if not temp_context:
+            raise RuntimeError("未能创建浏览器上下文。") # 中文
 
-        # Option 1: Camoufox is a launcher configuration passed to playwright's launch? (Less likely based on API)
-        # browser_instance = await pw_instance.firefox.launch(
-        #     # How to pass camoufox config here? Needs investigation.
-        #     headless=False
-        # )
-
-        # Option 2: Camoufox class IS the launcher (Let's retry this, maybe class name was the only issue?)
-        # **Reverting to previous attempt with correct class name, as async with isn't suitable**
-        camoufox_launcher = camoufox.async_api.AsyncCamoufox(headless=False)
-        # What METHOD should be called? Let's check dir() again inside the try block
-        print(f"Methods available on AsyncCamoufox instance: {dir(camoufox_launcher)}")
-        # Maybe it needs to be awaited directly? or has a different method?
-        # Trying .launch() again just to confirm the AttributeError was real.
-        browser_instance = await camoufox_launcher.launch() # This will likely fail again, but confirms the error.
-
-        # --- If the above .launch() fails, we need to know the correct method ---
-        # --- The dir() output will help ---
-
-        print(f"Browser launched: {browser_instance.version}") # This line might not be reached
-
-        context = browser_instance.contexts[0]
-        print("Default context obtained.")
-
-        # Restore page finding logic
         found_page = None
-        pages = context.pages
-        print(f"-> Found {len(pages)} existing pages. Searching for AI Studio ({AI_STUDIO_URL_PATTERN})...")
+        pages = temp_context.pages
+        print(f"-> 在上下文中找到 {len(pages)} 个现有页面。正在搜索 AI Studio ({AI_STUDIO_URL_PATTERN})...") # 中文
         target_url_base = f"https://{AI_STUDIO_URL_PATTERN}"
-        target_full_url = f"{target_url_base}prompts/new_chat" # Example target
+        target_full_url = f"{target_url_base}prompts/new_chat"
+        login_url_pattern = 'accounts.google.com'
+        current_url = ""
 
         for p in pages:
             try:
-                current_url = await p.url()
-                print(f"   Checking page: {current_url}")
-                # Looser check for base domain first
-                if not p.is_closed() and target_url_base in current_url:
-                     print(f"-> Found potential AI Studio page: {current_url}")
-                     found_page = p
-                     # Try to navigate to the specific prompts page if not already there
-                     if "/prompts/" not in current_url:
-                          print(f"   Navigating to {target_full_url}...")
-                          try:
-                               await p.goto(target_full_url, wait_until="domcontentloaded", timeout=35000)
-                               print(f"   Navigation successful: {await p.url()}")
-                          except Exception as nav_err:
-                               print(f"   Warning: Navigation failed: {nav_err}. Using current page.")
-                     break # Found a suitable page
+                page_url_check = p.url
+                print(f"   检查页面: {page_url_check}") # 中文
+                if not p.is_closed() and target_url_base in page_url_check:
+                    print(f"-> 找到潜在的 AI Studio 页面: {page_url_check}") # 中文
+                    found_page = p
+                    current_url = page_url_check
+                    if "/prompts/" not in current_url:
+                       print(f"   导航现有页面到 {target_full_url}...") # 中文
+                       try:
+                           await p.goto(target_full_url, wait_until="domcontentloaded", timeout=35000)
+                           current_url = p.url
+                           print(f"   导航成功: {current_url}") # 中文
+                           if login_url_pattern in current_url:
+                                 print("警告: 现有页面重定向到登录页。") # 中文
+                                 await p.close()
+                                 found_page = None
+                                 current_url = ""
+                                 break
+                       except Exception as nav_err:
+                           print(f"   警告: 在现有页面上导航失败: {nav_err}.") # 中文
+                           found_page = None
+                           current_url = ""
+                    break
             except Exception as e:
-                # Ignore pages that cause errors (e.g., about:blank during init)
                 if not p.is_closed():
-                     print(f"   Warning: Error checking page URL for '{getattr(p, 'url', 'N/A')}': {e}")
+                    print(f"   警告: 检查页面 URL 时出错: {e}") # 中文
 
         if not found_page:
-            print(f"-> AI Studio page not found. Opening and navigating new page to {target_full_url}...")
-            found_page = await context.new_page()
+            print(f"-> 正在打开新页面...") # 中文
+            found_page = await temp_context.new_page()
+            print(f"   导航新页面到 {target_full_url}...") # 中文
             await found_page.goto(target_full_url, wait_until="domcontentloaded", timeout=60000)
-            print(f"-> Navigated new page to AI Studio: {await found_page.url()}")
+            current_url = found_page.url
+            print(f"-> 新页面导航尝试完成。当前 URL: {current_url}") # 中文
+
+        if login_url_pattern in current_url:
+            print("\n🛑 需要操作: 已重定向到 Google 登录！(登录状态可能丢失或过期) 🛑") # 中文
+            print("   请在浏览器窗口 (由 camoufox 服务器管理) 中登录您的 Google 账户。") # 中文
+            input("   在您登录并看到 AI Studio 后，在此处按 Enter 键...") # 中文
+
+            print("   继续... 等待浏览器 URL 包含 AI Studio 模式...") # 中文
+            try:
+                await found_page.wait_for_url(f"**/{AI_STUDIO_URL_PATTERN}**", timeout=20000)
+                current_url = found_page.url
+                print(f"   登录后确认 URL: {current_url}") # 中文
+                if login_url_pattern in current_url:
+                    raise RuntimeError("手动登录尝试后仍在登录页面。") # 中文
+
+                print("   登录成功！正在保存认证状态...") # 中文
+                try:
+                    await temp_context.storage_state(path=STORAGE_STATE_PATH)
+                    print(f"   认证状态已保存到: {STORAGE_STATE_PATH}") # 中文
+                except Exception as save_err:
+                    print(f"   警告: 保存认证状态失败: {save_err}") # 中文
+
+            except Exception as wait_err:
+                print(f"   登录尝试后等待 AI Studio URL 时出错: {wait_err}") # 中文
+                last_known_url = found_page.url
+                raise RuntimeError(f"登录提示后未能检测到 AI Studio URL。最后已知 URL: {last_known_url}. 错误: {wait_err}") # 中文
+
+        elif target_url_base not in current_url:
+            print(f"\n⚠️ 警告: 最初到达意外页面: {current_url}") # 中文
+            if loaded_state:
+                 print("   这可能是由于加载的存储状态无效。尝试删除状态文件。") # 中文
+            raise RuntimeError(f"初始导航后出现意外页面: {current_url}") # 中文
+
+        print(f"-> 已确认页面是 AI Studio: {current_url}") # 中文
+        await found_page.bring_to_front()
+        print("-> 已尝试将页面置于前台。") # 中文
+        await expect_async(found_page.locator(INPUT_SELECTOR)).to_be_visible(timeout=15000)
+        print("-> 核心输入区域可见。") # 中文
 
         page_instance = found_page
-        await page_instance.bring_to_front()
-        print("-> Attempted to bring page to front.")
+        is_page_ready = True
+        print(f"✅ 页面逻辑初始化成功。") # 中文
 
-        # Basic readiness check
-        print("-> Checking for input area visibility...")
-        await expect_async(page_instance.locator(INPUT_SELECTOR)).to_be_visible(timeout=15000)
-        print("-> Core input area visible.")
-
-        is_camoufox_ready = True
-        print("✅ Camoufox initialization successful.")
-
-    except AttributeError as ae:
-         print(f"❌ Camoufox initialization failed: Method not found.")
-         print(f"   Error details: {ae}")
-         # Print dir() again on error if available
-         if 'camoufox_launcher' in locals():
-              print(f"   Methods available on AsyncCamoufox instance: {dir(camoufox_launcher)}")
-         else:
-              print("   Could not inspect AsyncCamoufox instance.")
-         if browser_instance: await browser_instance.close()
-         if pw_instance: await pw_instance.stop() # Stop playwright if started
-         browser_instance = None
-         page_instance = None
-         pw_instance = None
-         is_camoufox_ready = False
-    except Exception as e:
-        print(f"❌ Camoufox general initialization failed: {e}")
-        traceback.print_exc()
-        if browser_instance: await browser_instance.close()
-        if pw_instance: await pw_instance.stop()
-        browser_instance = None
+    except RuntimeError as e:
+        print(f"❌ 页面逻辑初始化失败: {e}") # 中文
         page_instance = None
-        pw_instance = None
-        is_camoufox_ready = False
+        is_page_ready = False
+        raise e
+    except Exception as e:
+        print(f"❌ 常规页面逻辑初始化失败: {e}") # 中文
+        traceback.print_exc()
+        page_instance = None
+        is_page_ready = False
+        raise e
+
+# --- Page Shutdown Logic --- (Translate print statements)
+async def _close_page_logic():
+    global page_instance, is_page_ready
+    print("--- 运行页面逻辑关闭 --- ") # 中文
+    page_instance = None
+    is_page_ready = False
+    print("页面逻辑状态已重置。") # 中文
+
+# --- Lifespan context manager --- (Translate print statements)
+@asynccontextmanager
+async def lifespan(app_param: FastAPI):
+    global playwright_manager, browser_instance, page_instance
+    global is_playwright_ready, is_browser_connected, is_page_ready, is_initializing
+
+    is_initializing = True
+    print("\n" + "="*60)
+    print(f"          🚀 AI Studio Proxy Server (Python/FastAPI) 🚀")
+    print("="*60)
+    print(f"FastAPI 生命周期: 启动中...") # 中文
+    try:
+        print(f"   启动 Playwright...") # 中文
+        playwright_manager = await async_playwright().start()
+        is_playwright_ready = True
+        print(f"   ✅ Playwright 已启动。") # 中文
+
+        ws_endpoint = os.environ.get('CAMOUFOX_WS_ENDPOINT')
+        if not ws_endpoint:
+             raise ValueError("未找到或环境变量 CAMOUFOX_WS_ENDPOINT 为空。") # 中文
+
+        print(f"   连接到 Camoufox 服务器于: {ws_endpoint}") # 中文
+        try:
+            browser_instance = await playwright_manager.firefox.connect(ws_endpoint, timeout=30000)
+            is_browser_connected = True
+            print(f"   ✅ 已连接到浏览器实例: 版本 {browser_instance.version}") # 中文
+        except Exception as connect_err:
+            print(f"   ❌ 连接到 Camoufox 服务器 {ws_endpoint} 时出错: {connect_err}") # 中文
+            is_browser_connected = False
+            raise RuntimeError(f"未能连接到 Camoufox 服务器") from connect_err # 中文
+
+        await _initialize_page_logic(browser_instance)
+
+        print(f"✅ FastAPI 生命周期: 启动完成。") # 中文
+        is_initializing = False
+        yield
+
+    except Exception as startup_err:
+        print(f"❌ FastAPI 生命周期: 启动期间出错: {startup_err}") # 中文
+        is_initializing = False
+        if browser_instance and browser_instance.is_connected():
+            try: await browser_instance.close()
+            except: pass
+        if playwright_manager:
+            try: await playwright_manager.stop()
+            except: pass
+        raise RuntimeError(f"应用程序启动失败: {startup_err}") from startup_err # 中文
     finally:
         is_initializing = False
 
-# --- API Endpoints ---
+    print(f"\nFastAPI 生命周期: 关闭中...") # 中文
+    await _close_page_logic()
 
-@app.on_event("startup")
-async def startup_event():
-    # Initialize Camoufox when the FastAPI server starts
-    print("FastAPI server starting up. Initializing Camoufox...")
-    # Use asyncio.create_task for non-blocking initialization in background
-    asyncio.create_task(initialize_camoufox())
+    if browser_instance and browser_instance.is_connected():
+        print(f"   正在关闭与浏览器实例的连接...") # 中文
+        try:
+            await browser_instance.close()
+            print(f"   ✅ 浏览器连接已关闭。") # 中文
+        except Exception as close_err:
+            print(f"   ❌ 关闭浏览器连接时出错: {close_err}") # 中文
+        finally:
+            browser_instance = None
+            is_browser_connected = False
+    else:
+        print(f"   ⚠️ 未找到活动的浏览器连接以关闭。") # 中文
 
+    if playwright_manager:
+        print(f"   停止 Playwright...") # 中文
+        try:
+            await playwright_manager.stop()
+            print(f"   ✅ Playwright 已停止。") # 中文
+        except Exception as stop_err:
+            print(f"   ❌ 停止 Playwright 时出错: {stop_err}") # 中文
+        finally:
+            playwright_manager = None
+            is_playwright_ready = False
+    else:
+        print(f"   ⚠️ 未找到 Playwright 管理器。") # 中文
+
+    print(f"✅ FastAPI 生命周期: 关闭完成。") # 中文
+
+
+# --- FastAPI App ---
+app = FastAPI(
+    title="AI Studio Proxy Server (Python/FastAPI/Camoufox)",
+    description="A proxy server to interact with Google AI Studio using Playwright and Camoufox.",
+    version="0.1.0-py",
+    lifespan=lifespan # Use the updated lifespan context manager
+)
+
+# --- Serve Static HTML for Web UI --- (New Route)
+@app.get("/", response_class=FileResponse)
+async def read_index():
+    # Assumes index.html is in the same directory as server.py
+    index_html_path = os.path.join(os.path.dirname(__file__), "index.html")
+    if not os.path.exists(index_html_path):
+        raise HTTPException(status_code=404, detail="index.html not found")
+    return FileResponse(index_html_path)
+
+# --- API Endpoints --- (Translate print statements)
 @app.get("/health")
 async def health_check():
-    # More detailed health check
-    page_valid = page_instance is not None and not page_instance.is_closed()
-    browser_connected = browser_instance is not None and browser_instance.is_connected()
-    status_val = "OK" if is_camoufox_ready and page_valid and browser_connected else "Error"
-
+    status_val = "OK" if is_playwright_ready and is_browser_connected and is_page_ready else "Error"
     status = {
         "status": status_val,
         "message": "",
-        "camoufoxReady": is_camoufox_ready,
-        "browserConnected": browser_connected,
-        "pageValid": page_valid,
+        "playwrightReady": is_playwright_ready,
+        "browserConnected": is_browser_connected,
+        "pageReady": is_page_ready,
         "initializing": is_initializing,
-        # "queueLength": 0 # Add queue status later
-        # "processing": False
     }
     if status_val == "OK":
-        status["message"] = "Service running, Camoufox connected, page valid."
+        status["message"] = "服务运行中，Playwright 活动，浏览器已连接，页面已初始化。" # 中文
         return JSONResponse(content=status, status_code=200)
     else:
         reasons = []
-        if not is_camoufox_ready: reasons.append("Camoufox not initialized or ready")
-        if not page_valid: reasons.append("Target page not found or closed")
-        if not browser_connected: reasons.append("Browser disconnected")
-        if is_initializing: reasons.append("Camoufox is currently initializing")
-        status["message"] = f"Service Unavailable. Issues: {', '.join(reasons)}."
+        if not is_playwright_ready: reasons.append("Playwright 未初始化") # 中文
+        if not is_browser_connected: reasons.append("浏览器断开或不可用") # 中文
+        if not is_page_ready: reasons.append("目标页面未初始化或未就绪") # 中文
+        if is_initializing: reasons.append("初始化当前正在进行中") # 中文
+        status["message"] = f"服务不可用。问题: {', '.join(reasons)}." # 中文
         return JSONResponse(content=status, status_code=503)
-
 
 @app.get("/v1/models")
 async def list_models():
-    # Mimic OpenAI models endpoint
-    print("[API] Received /v1/models request.")
+    print("[API] 收到 /v1/models 请求。") # 中文
     return {
         "object": "list",
         "data": [
@@ -460,151 +623,263 @@ async def list_models():
         ]
     }
 
-# --- Placeholder for the main chat completion logic ---
-# We will migrate the complex logic from server.cjs processQueue here step-by-step
+# --- Helper: Detect Error ---
+async def detect_and_extract_page_error(page: AsyncPage, req_id: str):
+    """检查可见的错误/警告提示框并提取消息。"""
+    error_toast_locator = page.locator(ERROR_TOAST_SELECTOR).last
+    try:
+        await error_toast_locator.wait_for(state='visible', timeout=1500)
+        print(f"[{req_id}]    检测到错误/警告提示框元素。") # 中文
+        message_locator = error_toast_locator.locator('span.content-text')
+        error_message = await message_locator.text_content(timeout=1000)
+        if error_message:
+             print(f"[{req_id}]    提取的错误消息: {error_message}") # 中文
+             return error_message.strip()
+        else:
+             print(f"[{req_id}]    警告: 检测到提示框，但无法从 span.content-text 提取特定消息。") # 中文
+             return "检测到错误提示框，但无法提取特定消息。" # 中文
+    except PlaywrightAsyncError:
+        return None
+    except Exception as e:
+        print(f"[{req_id}]    警告: 检查页面错误时出错: {e}") # 中文
+        return None
+
+# --- Helper: Try Parse JSON ---
+def try_parse_json(text: str, req_id: str):
+    """Attempts to find and parse the outermost JSON object/array in text."""
+    if not text or not isinstance(text, str):
+        return None
+    text = text.strip()
+
+    start_index = -1
+    end_index = -1
+
+    first_brace = text.find('{')
+    first_bracket = text.find('[')
+
+    # Prioritize object if both found and object starts earlier
+    if first_brace != -1 and (first_bracket == -1 or first_brace < first_bracket):
+        start_index = first_brace
+        end_index = text.rfind('}')
+    elif first_bracket != -1:
+        start_index = first_bracket
+        end_index = text.rfind(']')
+
+    if start_index == -1 or end_index == -1 or end_index < start_index:
+        # print(f"[{req_id}] (JSON Parse) Could not find valid start/end markers.") # Optional debug
+        return None
+
+    json_text = text[start_index : end_index + 1]
+
+    try:
+        return json.loads(json_text)
+    except json.JSONDecodeError as e:
+        # print(f"[{req_id}] (JSON Parse) Failed for extracted text: {e}") # Optional debug
+        return None
+
+# --- Snapshot Helper --- (Translate logs)
+async def save_error_snapshot(error_name: str = 'error'):
+    """发生错误时保存屏幕截图和 HTML 快照。"""
+    name_parts = error_name.split('_')
+    req_id = name_parts[-1] if len(name_parts) > 1 and len(name_parts[-1]) == 7 else None
+    base_error_name = error_name if not req_id else '_'.join(name_parts[:-1])
+    log_prefix = f"[{req_id}]" if req_id else "[无请求ID]" # 中文
+
+    if not browser_instance or not browser_instance.is_connected() or not page_instance or page_instance.is_closed():
+        print(f"{log_prefix} 无法保存快照 ({base_error_name})，浏览器/页面不可用。") # 中文
+        return
+
+    print(f"{log_prefix} 尝试保存错误快照 ({base_error_name})...") # 中文
+    timestamp = int(time.time() * 1000)
+    error_dir = os.path.join(os.path.dirname(__file__), 'errors_py')
+    try:
+        if not os.path.exists(error_dir):
+            os.makedirs(error_dir, exist_ok=True)
+
+        filename_suffix = f"{req_id}_{timestamp}" if req_id else f"{timestamp}"
+        filename_base = f"{base_error_name}_{filename_suffix}"
+        screenshot_path = os.path.join(error_dir, f"{filename_base}.png")
+        html_path = os.path.join(error_dir, f"{filename_base}.html")
+
+        try:
+            await page_instance.screenshot(path=screenshot_path, full_page=True, timeout=15000)
+            print(f"{log_prefix}   快照已保存到: {screenshot_path}") # 中文
+        except Exception as ss_err:
+            print(f"{log_prefix}   保存屏幕截图失败 ({base_error_name}): {ss_err}") # 中文
+
+        try:
+            content = await page_instance.content()
+            with open(html_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            print(f"{log_prefix}   HTML 已保存到: {html_path}") # 中文
+        except Exception as html_err:
+            print(f"{log_prefix}   保存 HTML 失败 ({base_error_name}): {html_err}") # 中文
+
+    except Exception as dir_err:
+        print(f"{log_prefix}   创建错误目录或保存快照时出错: {dir_err}") # 中文
+
+# --- Main Chat Completion Logic --- (Remove Clear Chat, add delay, translate logs)
 async def process_chat_request(req_id: str, request: ChatCompletionRequest, http_request: Request):
-    print(f"[{req_id}] Processing chat request...")
+    print(f"[{req_id}] 处理聊天请求...") # 中文
     is_streaming = request.stream
 
-    # Ensure page is still valid before proceeding
-    if not page_instance or page_instance.is_closed():
-         print(f"[{req_id}] Error: Page became invalid during processing.")
-         raise HTTPException(status_code=503, detail=f"[{req_id}] AI Studio page lost during processing.")
+    if not page_instance or page_instance.is_closed() or not is_page_ready:
+        print(f"[{req_id}] 错误: 页面在处理期间变得无效 (is_closed={page_instance.is_closed()}, is_page_ready={is_page_ready}).") # 中文
+        raise HTTPException(status_code=503, detail=f"[{req_id}] AI Studio 页面在处理过程中丢失或未就绪。") # 中文
+
+    page = page_instance
 
     # 1. Validation
     try:
          validation_result = validate_chat_request(request.messages, req_id)
          user_prompt = validation_result["userPrompt"]
          system_prompt = validation_result["systemPrompt"]
-         if user_prompt is None: # Should be string or empty string now
-             raise ValueError("Processed user prompt is unexpectedly None.")
+         if user_prompt is None:
+             raise ValueError("处理后的用户提示意外为 None。") # 中文
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"[{req_id}] Invalid request: {e}")
+        raise HTTPException(status_code=400, detail=f"[{req_id}] 无效请求: {e}") # 中文
 
-    # Correct the print statements to avoid nested quote issues
-    print(f"[{req_id}] User Prompt (Validated, len={len(user_prompt)}): '{user_prompt[:80]}...'")
+    print(f"[{req_id}] 用户提示 (已验证, 长度={len(user_prompt)}): '{user_prompt[:80]}...'") # 中文
     if system_prompt:
-        print(f"[{req_id}] System Prompt (Validated, len={len(system_prompt)}): '{system_prompt[:80]}...'")
+        print(f"[{req_id}] 系统提示 (已验证, 长度={len(system_prompt)}): '{system_prompt[:80]}...'") # 中文
 
     # 2. Prepare Prompt
     if is_streaming:
          prepared_prompt = prepare_ai_studio_prompt_stream(user_prompt, system_prompt)
-         print(f"[{req_id}] Prepared Streaming Prompt (start): '{prepared_prompt[:150]}...'")
+         print(f"[{req_id}] 准备好的流式提示 (开始): '{prepared_prompt[:150]}...'") # 中文
     else:
          prepared_prompt = prepare_ai_studio_prompt(user_prompt, system_prompt)
-         print(f"[{req_id}] Prepared Non-Streaming Prompt (start): '{prepared_prompt[:150]}...'")
+         print(f"[{req_id}] 准备好的非流式提示 (开始): '{prepared_prompt[:150]}...'") # 中文
 
-    # --- Client Disconnect Handling ---
+    # --- Client Disconnect Handling --- (Translate logs)
     client_disconnected = False
     disconnect_event = asyncio.Event()
-
+    disconnect_task = None
     async def check_disconnect():
-        nonlocal client_disconnected
+        nonlocal client_disconnected, disconnect_task
         try:
-            # Poll the state; raises RequestDisconnect if client disconnects
             while True:
-                await http_request.is_disconnected() # Check state
-                # If is_disconnected() returns True (or doesn't raise), it means disconnected
-                client_disconnected = True
-                disconnect_event.set()
-                print(f"[{req_id}] Client disconnected (detected by poll).")
-                break # Stop polling once disconnected
-        except Exception: # Catches RequestDisconnect or others
-             client_disconnected = True
-             disconnect_event.set()
-             print(f"[{req_id}] Client disconnected (detected by exception).")
-        # except asyncio.CancelledError:
-             # print(f"[{req_id}] Disconnect checker cancelled.") # Task cancelled, likely during shutdown
-
+                disconnected = await http_request.is_disconnected()
+                if disconnected:
+                    client_disconnected = True
+                    disconnect_event.set()
+                    print(f"[{req_id}] 客户端断开连接 (通过轮询检测到)。") # 中文
+                    break
+                await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+             if not client_disconnected:
+                 client_disconnected = True
+                 disconnect_event.set()
+                 print(f"[{req_id}] 客户端断开连接 (通过异常检测到: {type(e).__name__})。") # 中文
 
     disconnect_task = asyncio.create_task(check_disconnect())
     # --- End Client Disconnect Handling ---
 
-    # Add helper function import for saving snapshots
-    async def save_error_snapshot(error_name: str = 'error', page: Optional[AsyncPage] = page_instance, prefix: str = req_id):
-         # Simple snapshot helper, adapt path/naming as needed
-         if not page or page.is_closed():
-             print(f"[{prefix}] Cannot save snapshot ({error_name}), page unavailable.")
-             return
-         print(f"[{prefix}] Attempting to save error snapshot ({error_name})...")
-         timestamp = int(time.time() * 1000)
-         error_dir = os.path.join(os.path.dirname(__file__), 'errors_py') # Separate dir for python errors
-         try:
-             if not os.path.exists(error_dir):
-                 os.makedirs(error_dir, exist_ok=True)
-             filename_base = f"{error_name}_{prefix}_{timestamp}"
-             screenshot_path = os.path.join(error_dir, f"{filename_base}.png")
-             html_path = os.path.join(error_dir, f"{filename_base}.html")
-
-             try:
-                 await page.screenshot(path=screenshot_path, full_page=True, timeout=15000)
-                 print(f"[{prefix}]   Snapshot saved to: {screenshot_path}")
-             except Exception as ss_err:
-                 print(f"[{prefix}]   Failed to save screenshot ({error_name}): {ss_err}")
-             try:
-                 content = await page.content(timeout=15000)
-                 with open(html_path, 'w', encoding='utf-8') as f:
-                     f.write(content)
-                 print(f"[{prefix}]   HTML saved to: {html_path}")
-             except Exception as html_err:
-                 print(f"[{prefix}]   Failed to save HTML ({error_name}): {html_err}")
-         except Exception as dir_err:
-             print(f"[{prefix}]   Error creating error directory or saving snapshot: {dir_err}")
-
     try:
-        # --- TODO: Optional: Implement Clear Chat Logic ---
-        # is_likely_new_chat = ... (logic from server.cjs)
-        # if is_likely_new_chat and CLEAR_CHAT_BUTTON_SELECTOR and CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR:
-        #     try:
-        #         print(f"[{req_id}] Attempting to clear chat...")
-        #         await page_instance.locator(CLEAR_CHAT_BUTTON_SELECTOR).click(timeout=7000)
-        #         await page_instance.locator(CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR).click(timeout=5000)
-        #         # TODO: Add verification logic (check if response containers are gone)
-        #         print(f"[{req_id}] Clear chat buttons clicked (verification pending).")
-        #     except Exception as clear_err:
-        #         print(f"[{req_id}] Warning: Failed to clear chat: {clear_err}")
-        #         # Add snapshot saving here if desired
+        # --- REMOVED Clear Chat Logic --- 
 
-        # 3. Interact and Submit
-        print(f"[{req_id}] Filling prompt and clicking submit...")
-        input_field = page_instance.locator(INPUT_SELECTOR)
-        submit_button = page_instance.locator(SUBMIT_BUTTON_SELECTOR)
+        # 3. Interact and Submit (Modified: Use Keyboard Shortcut first)
+        print(f"[{req_id}] 填充提示并点击提交...") # 中文
+        input_field = page.locator(INPUT_SELECTOR)
+        submit_button = page.locator(SUBMIT_BUTTON_SELECTOR)
 
         await expect_async(input_field).to_be_visible(timeout=10000)
         await input_field.fill(prepared_prompt, timeout=60000)
         await expect_async(submit_button).to_be_enabled(timeout=10000)
-        await submit_button.click(timeout=10000)
-        print(f"[{req_id}] Prompt submitted.")
 
-        # 4. Locate Response Element (Might need retry logic like in server.cjs)
-        print(f"[{req_id}] Locating response elements...")
-        # Simplified location for now
-        response_element = page_instance.locator(RESPONSE_CONTAINER_SELECTOR).last.locator(RESPONSE_TEXT_SELECTOR)
-        await expect_async(response_element).to_be_attached(timeout=15000) # Wait for it to appear in DOM
-        print(f"[{req_id}] Response element located.")
+        print(f"[{req_id}] 等待一小段时间让UI稳定...") # 中文
+        await page.wait_for_timeout(200) # Add small delay
+
+        # --- Try submitting with Control+Enter first ---
+        submitted_successfully = False
+        try:
+            print(f"[{req_id}] 尝试使用 Control+Enter 快捷键提交...") # 中文
+            await page.keyboard.press('Control+Enter')
+            # Heuristic check: See if input field clears quickly after sending
+            await expect_async(input_field).to_have_value('', timeout=2000) 
+            print(f"[{req_id}] 快捷键提交成功 (输入框已清空)。") # 中文
+            submitted_successfully = True
+        except PlaywrightAsyncError as key_press_error:
+            print(f"[{req_id}] 警告: Control+Enter 快捷键提交失败或未及时清空输入框: {key_press_error.message.split('\n')[0]}") # 中文
+            # Fallback to clicking the button
+
+        # --- Fallback to clicking if shortcut failed ---
+        if not submitted_successfully:
+            print(f"[{req_id}] 快捷键提交失败，回退到模拟点击提交按钮...") # 中文
+            print(f"[{req_id}] 确保提交按钮在视图中...") # 中文
+            try:
+                await submit_button.scroll_into_view_if_needed(timeout=5000)
+                print(f"[{req_id}] 提交按钮已滚动到视图中 (如果需要)。") # 中文
+            except Exception as scroll_err:
+                print(f"[{req_id}] 警告: 将提交按钮滚动到视图中失败: {scroll_err}") # 中文
+
+            print(f"[{req_id}] 点击提交按钮 (force=True)...") # 中文
+            try:
+                 await submit_button.click(timeout=10000, force=True)
+                 # Add a slightly longer check after click fallback
+                 await expect_async(input_field).to_have_value('', timeout=3000)
+                 print(f"[{req_id}] 模拟点击提交成功 (输入框已清空)。") # 中文
+                 submitted_successfully = True
+            except PlaywrightAsyncError as click_error:
+                 print(f"[{req_id}] ❌ 错误: 模拟点击提交按钮也失败了: {click_error.message.split('\n')[0]}") # 中文
+                 await save_error_snapshot(f"submit_fallback_click_fail_{req_id}")
+                 raise click_error # Re-raise the error if both methods fail
+
+        # 4. Locate Response Element
+        print(f"[{req_id}] 定位响应元素...") # 中文
+        response_element = page.locator(RESPONSE_CONTAINER_SELECTOR).last.locator(RESPONSE_TEXT_SELECTOR)
+        # Increase timeout slightly for response element appearance after potential submit delay
+        await expect_async(response_element).to_be_attached(timeout=20000) 
+        print(f"[{req_id}] 响应元素已定位。") # 中文
 
         # 5. Handle Response (Streaming or Non-streaming)
         if is_streaming:
-            print(f"[{req_id}] Processing SSE stream...")
-
+            print(f"[{req_id}] 处理 SSE 流...") # 中文
             async def stream_generator():
                 last_raw_text = ""
                 last_sent_response_content = ""
                 response_started = False
-                start_marker = '<<<START_RESPONSE>>>'
                 spinner_disappeared = False
-                last_text_change_timestamp = time.time() * 1000 # ms
+                last_text_change_timestamp = time.time() * 1000
                 stream_finished_naturally = False
-                start_time = time.time() * 1000 # ms
-                spinner_locator = page_instance.locator(LOADING_SPINNER_SELECTOR)
+                start_time = time.time() * 1000
+                spinner_locator = page.locator(LOADING_SPINNER_SELECTOR)
+                start_marker = '<<<START_RESPONSE>>>'
+                loop_counter = 0
+                last_scroll_time = 0 # Track last scroll time
+                scroll_interval_ms = 3000 # Scroll every 3 seconds
 
                 try:
                     while time.time() * 1000 - start_time < RESPONSE_COMPLETION_TIMEOUT:
+                        current_loop_time_ms = time.time() * 1000 # Get current time in ms
                         if client_disconnected:
-                             print(f"[{req_id}] Stopping stream generator due to client disconnect.")
-                             break # Exit loop if client disconnected
+                             print(f"[{req_id}] 由于客户端断开连接，停止流生成器。") # 中文
+                             break
 
                         loop_start_time = time.time() * 1000
+                        loop_counter += 1
+
+                        # --- Periodic Scroll --- 
+                        if current_loop_time_ms - last_scroll_time > scroll_interval_ms:
+                            try:
+                                # print(f"[{req_id}] (Stream) Scrolling to bottom...") # Optional debug log
+                                await page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
+                                last_scroll_time = current_loop_time_ms
+                            except Exception as scroll_e:
+                                print(f"[{req_id}] (Stream) 警告: 滚动到底部失败: {scroll_e}")
+                        # --- End Periodic Scroll ---
+
+                        if loop_counter % 10 == 0:
+                             page_err_stream_periodic = await detect_and_extract_page_error(page, req_id)
+                             if page_err_stream_periodic:
+                                  print(f"[{req_id}] ❌ 流处理期间检测到错误 (周期性检查): {page_err_stream_periodic}") # 中文
+                                  await save_error_snapshot(f"page_error_stream_periodic_{req_id}")
+                                  yield generate_sse_error_chunk(f"AI Studio 错误: {page_err_stream_periodic}", req_id, "upstream_error") # 中文
+                                  yield "data: [DONE]\n\n"
+                                  return
+                        
                         current_raw_text = await get_raw_text_content(response_element, last_raw_text, req_id)
 
                         if current_raw_text != last_raw_text:
@@ -615,13 +890,13 @@ async def process_chat_request(req_id: str, request: ChatCompletionRequest, http
                             marker_index = current_raw_text.find(start_marker)
                             if marker_index != -1:
                                 if not response_started:
-                                    print(f"[{req_id}]    (Stream) Found start marker '{start_marker}'.")
+                                    print(f"[{req_id}]    (流) 找到起始标记 '{start_marker}'.") # 中文
                                     response_started = True
                                 current_content_after_marker = current_raw_text[marker_index + len(start_marker):]
                                 potential_new_delta = current_content_after_marker[len(last_sent_response_content):]
                             elif response_started:
-                                 potential_new_delta = "" # Marker disappeared?
-                                 print(f"[{req_id}] Warning: Marker disappeared after being seen.")
+                                 potential_new_delta = ""
+                                 print(f"[{req_id}] 警告: 起始标记在被看到后消失了。") # 中文
 
                             if potential_new_delta:
                                 yield generate_sse_chunk(potential_new_delta, req_id, MODEL_NAME)
@@ -629,36 +904,38 @@ async def process_chat_request(req_id: str, request: ChatCompletionRequest, http
 
                             last_raw_text = current_raw_text
 
-                        # Check spinner
                         if not spinner_disappeared:
                              try:
-                                 await expect_async(spinner_locator).to_be_hidden(timeout=50)
-                                 spinner_disappeared = True
-                                 last_text_change_timestamp = time.time() * 1000 # Reset silence timer
-                                 print(f"[{req_id}]    Spinner hidden. Checking for silence...")
+                                 if await spinner_locator.is_hidden():
+                                     spinner_disappeared = True
+                                     last_text_change_timestamp = time.time() * 1000
+                                     print(f"[{req_id}]    Spinner 已隐藏。检查静默状态...") # 中文
                              except PlaywrightAsyncError:
-                                 pass # Spinner still visible
-
-                        # Silence Check
+                                 pass
+                        
                         is_silent = spinner_disappeared and (time.time() * 1000 - last_text_change_timestamp > SILENCE_TIMEOUT_MS)
                         if is_silent:
-                            print(f"[{req_id}] Silence detected. Finishing stream.")
+                            print(f"[{req_id}] 检测到静默。完成流。") # 中文
                             stream_finished_naturally = True
-                            break # Exit loop
+                            break
 
-                        # Control polling interval
                         loop_duration = time.time() * 1000 - loop_start_time
-                        wait_time = max(0, POLLING_INTERVAL_STREAM - loop_duration) / 1000 # convert to seconds
+                        wait_time = max(0, POLLING_INTERVAL_STREAM - loop_duration) / 1000
                         await asyncio.sleep(wait_time)
-
-                    # --- Loop End ---
 
                     if client_disconnected:
                          yield generate_sse_stop_chunk(req_id, MODEL_NAME, "client_disconnect")
-                         return # Don't send final DONE
+                         return
 
+                    page_err_stream_final = await detect_and_extract_page_error(page, req_id)
+                    if page_err_stream_final:
+                        print(f"[{req_id}] ❌ 在完成流之前检测到错误: {page_err_stream_final}") # 中文
+                        await save_error_snapshot(f"page_error_stream_final_{req_id}")
+                        yield generate_sse_error_chunk(f"AI Studio 错误: {page_err_stream_final}", req_id, "upstream_error") # 中文
+                        yield "data: [DONE]\n\n"
+                        return
+                    
                     if stream_finished_naturally:
-                        # Final sync check (simple version)
                         final_raw_text = await get_raw_text_content(response_element, last_raw_text, req_id)
                         final_content_after_marker = ""
                         final_marker_index = final_raw_text.find(start_marker)
@@ -666,350 +943,283 @@ async def process_chat_request(req_id: str, request: ChatCompletionRequest, http
                              final_content_after_marker = final_raw_text[final_marker_index + len(start_marker):]
                         final_delta = final_content_after_marker[len(last_sent_response_content):]
                         if final_delta:
-                             print(f"[{req_id}] Sending final delta (len: {len(final_delta)})")
+                             print(f"[{req_id}] 发送最终增量 (长度: {len(final_delta)})") # 中文
                              yield generate_sse_chunk(final_delta, req_id, MODEL_NAME)
 
                         yield generate_sse_stop_chunk(req_id, MODEL_NAME)
-                        print(f"[{req_id}] ✅ Stream finished naturally.")
-                    else: # Timeout
-                        print(f"[{req_id}] ⚠️ Stream timed out after {RESPONSE_COMPLETION_TIMEOUT / 1000}s.")
-                        await save_error_snapshot("streaming_timeout") # Added snapshot
-                        yield generate_sse_error_chunk("Stream processing timed out on server.", req_id)
+                        print(f"[{req_id}] ✅ 流自然完成。") # 中文
+                    else: 
+                        print(f"[{req_id}] ⚠️ 流在 {RESPONSE_COMPLETION_TIMEOUT / 1000} 秒后超时。") # 中文
+                        await save_error_snapshot(f"streaming_timeout_{req_id}")
+                        yield generate_sse_error_chunk("流处理在服务器上超时。", req_id) # 中文
                         yield generate_sse_stop_chunk(req_id, MODEL_NAME, "timeout")
 
                     yield "data: [DONE]\n\n"
 
                 except asyncio.CancelledError:
-                     print(f"[{req_id}] Stream generator cancelled (likely client disconnect).")
-                     yield "data: [DONE]\n\n" # Send DONE even on cancellation for SSE compliance
+                     print(f"[{req_id}] 流生成器已取消 (可能客户端断开连接)。") # 中文
+                     yield "data: [DONE]\n\n"
                 except Exception as e:
-                    print(f"[{req_id}] ❌ Error during streaming generation: {e}")
-                    await save_error_snapshot("streaming_error") # Added snapshot
+                    print(f"[{req_id}] ❌ 流式生成期间出错: {e}") # 中文
+                    await save_error_snapshot(f"streaming_error_{req_id}")
                     traceback.print_exc()
-                    yield generate_sse_error_chunk(f"Server error during streaming: {e}", req_id)
-                    yield "data: [DONE]\n\n" # Send DONE even on error
-
+                    yield generate_sse_error_chunk(f"流式处理期间服务器错误: {e}", req_id) # 中文
+                    yield "data: [DONE]\n\n"
 
             return StreamingResponse(stream_generator(), media_type="text/event-stream")
 
         else: # Non-streaming
-            print(f"[{req_id}] Processing non-streaming response...")
+            print(f"[{req_id}] 处理非流式响应...") # 中文
             start_time_ns = time.time()
             final_state_reached = False
             final_state_check_initiated = False
-            spinner_locator = page_instance.locator(LOADING_SPINNER_SELECTOR)
-            input_field = page_instance.locator(INPUT_SELECTOR) # Ensure locator is available
-            submit_button = page_instance.locator(SUBMIT_BUTTON_SELECTOR) # Ensure locator is available
+            spinner_locator = page.locator(LOADING_SPINNER_SELECTOR)
+            input_field = page.locator(INPUT_SELECTOR)
+            submit_button = page.locator(SUBMIT_BUTTON_SELECTOR)
+            last_scroll_time_ns = 0 # Track last scroll time
+            scroll_interval_ms_ns = 3000 # Scroll every 3 seconds
 
-            # --- Refined Non-Streaming Wait Logic ---
             while time.time() - start_time_ns < RESPONSE_COMPLETION_TIMEOUT / 1000:
+                current_loop_time_ms_ns = time.time() * 1000
                 if client_disconnected:
-                    print(f"[{req_id}] Non-streaming cancelled due to client disconnect.")
-                    raise HTTPException(status_code=499, detail=f"[{req_id}] Client closed request")
+                    print(f"[{req_id}] 由于客户端断开连接，非流式处理已取消。") # 中文
+                    raise HTTPException(status_code=499, detail=f"[{req_id}] 客户端关闭了请求") # 中文
+
+                # --- Periodic Scroll --- 
+                if current_loop_time_ms_ns - last_scroll_time_ns > scroll_interval_ms_ns:
+                    try:
+                        # print(f"[{req_id}] (Non-Stream) Scrolling to bottom...") # Optional debug log
+                        await page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
+                        last_scroll_time_ns = current_loop_time_ms_ns
+                    except Exception as scroll_e:
+                        print(f"[{req_id}] (Non-Stream) 警告: 滚动到底部失败: {scroll_e}")
+                # --- End Periodic Scroll ---
 
                 spinner_hidden = False
                 input_empty = False
                 button_disabled = False
 
-                # 1. Check Spinner Hidden
                 try:
                     await expect_async(spinner_locator).to_be_hidden(timeout=SPINNER_CHECK_TIMEOUT_MS)
                     spinner_hidden = True
-                except PlaywrightAsyncError: pass # Spinner still visible or check timed out
+                except PlaywrightAsyncError: pass
 
-                # 2. If Spinner Hidden, check Input Empty and Button Disabled
                 if spinner_hidden:
                     try:
                         await expect_async(input_field).to_have_value('', timeout=FINAL_STATE_CHECK_TIMEOUT_MS)
                         input_empty = True
-                    except PlaywrightAsyncError: pass # Input not empty or check timed out
+                    except PlaywrightAsyncError: pass
 
-                    if input_empty: # Only check button if input is empty
+                    if input_empty:
                         try:
                             await expect_async(submit_button).to_be_disabled(timeout=FINAL_STATE_CHECK_TIMEOUT_MS)
                             button_disabled = True
-                        except PlaywrightAsyncError: pass # Button not disabled or check timed out
+                        except PlaywrightAsyncError: pass
 
-                # 3. Potential Final State Detected
                 if spinner_hidden and input_empty and button_disabled:
                     if not final_state_check_initiated:
                         final_state_check_initiated = True
-                        print(f"[{req_id}]    Potential final state detected. Waiting {POST_COMPLETION_BUFFER}ms to confirm...")
+                        print(f"[{req_id}]    检测到潜在最终状态。等待 {POST_COMPLETION_BUFFER} 毫秒以确认...") # 中文
                         await asyncio.sleep(POST_COMPLETION_BUFFER / 1000)
-                        print(f"[{req_id}]    {POST_COMPLETION_BUFFER}ms wait finished. Re-checking state rigorously...")
+                        print(f"[{req_id}]    {POST_COMPLETION_BUFFER} 毫秒等待结束。严格重新检查状态...") # 中文
                         try:
-                            # Rigorous Re-check
                             await expect_async(spinner_locator).to_be_hidden(timeout=500)
                             await expect_async(input_field).to_have_value('', timeout=500)
                             await expect_async(submit_button).to_be_disabled(timeout=500)
-                            print(f"[{req_id}]    State confirmed. Checking text stability for {SILENCE_TIMEOUT_MS}ms...")
+                            print(f"[{req_id}]    状态已确认。检查文本稳定性 {SILENCE_TIMEOUT_MS} 毫秒...") # 中文
 
-                            # Text Silence Check
                             text_stable = False
                             silence_check_start_time = time.time()
                             last_check_text = await get_raw_text_content(response_element, '', req_id)
 
                             while time.time() - silence_check_start_time < SILENCE_TIMEOUT_MS / 1000:
-                                await asyncio.sleep(POLLING_INTERVAL_STREAM / 1000) # Use stream interval for checking
+                                await asyncio.sleep(POLLING_INTERVAL / 1000)
                                 current_check_text = await get_raw_text_content(response_element, '', req_id)
                                 if current_check_text == last_check_text:
-                                    # Text hasn't changed since last check interval
                                     if time.time() - silence_check_start_time >= SILENCE_TIMEOUT_MS / 1000:
-                                         print(f"[{req_id}]    Text stable for {SILENCE_TIMEOUT_MS}ms. Processing complete.")
+                                         print(f"[{req_id}]    文本稳定 {SILENCE_TIMEOUT_MS} 毫秒。处理完成。") # 中文
                                          text_stable = True
-                                         break # Exit silence check loop
+                                         break
                                 else:
-                                    # Text changed, reset silence timer start *and* update text
-                                    print(f"[{req_id}]    (Silence Check) Text changed. Resetting timer.")
+                                    print(f"[{req_id}]    (静默检查) 文本已更改。重置计时器。") # 中文
                                     silence_check_start_time = time.time()
                                     last_check_text = current_check_text
 
                             if text_stable:
                                 final_state_reached = True
-                                break # Exit main non-streaming wait loop
+                                break
                             else:
-                                print(f"[{req_id}]    ⚠️ Warning: Text silence check timed out after {SILENCE_TIMEOUT_MS}ms. Proceeding anyway.")
-                                final_state_reached = True # Proceed even if unstable after check duration
-                                break # Exit main non-streaming wait loop
+                                print(f"[{req_id}]    ⚠️ 警告: 文本静默检查在 {SILENCE_TIMEOUT_MS} 毫秒后超时。无论如何继续。") # 中文
+                                final_state_reached = True
+                                break
 
                         except PlaywrightAsyncError as recheck_error:
-                            print(f"[{req_id}]    State changed during confirmation ({recheck_error}). Continuing poll.")
-                            final_state_check_initiated = False # Reset flag
+                            print(f"[{req_id}]    状态在确认期间发生变化 ({recheck_error})。继续轮询。") # 中文
+                            final_state_check_initiated = False
                         except Exception as stability_err:
-                             print(f"[{req_id}]    Error during text stability check: {stability_err}")
+                             print(f"[{req_id}]    文本稳定性检查期间出错: {stability_err}") # 中文
                              traceback.print_exc()
-                             final_state_check_initiated = False # Reset flag
+                             final_state_check_initiated = False
 
-                else: # Not in potential final state, or state changed during confirmation
+                else:
                     if final_state_check_initiated:
-                         print(f"[{req_id}]    Final state conditions no longer met. Resetting confirmation flag.")
+                         print(f"[{req_id}]    最终状态条件不再满足。重置确认标志。") # 中文
                          final_state_check_initiated = False
-                    # Wait longer if not actively checking final state
-                    await asyncio.sleep(POLLING_INTERVAL_STREAM * 2 / 1000)
+                    await asyncio.sleep(POLLING_INTERVAL * 2 / 1000)
 
-            # --- End of Non-Streaming Wait Logic Loop ---
+            if client_disconnected:
+                 raise HTTPException(status_code=499, detail=f"[{req_id}] 客户端关闭了请求") # 中文
 
-            if client_disconnected: # Re-check after loop
-                 raise HTTPException(status_code=499, detail=f"[{req_id}] Client closed request")
-
-            # Check for Page Errors (like toasts) BEFORE parsing
-            # TODO: Implement detectAndExtractPageError if needed
+            print(f"[{req_id}] 在最终解析前检查页面错误...") # 中文
+            page_err_nonstream = await detect_and_extract_page_error(page, req_id)
+            if page_err_nonstream:
+                 print(f"[{req_id}] ❌ 在最终解析前检测到错误: {page_err_nonstream}") # 中文
+                 await save_error_snapshot(f"page_error_nonstream_{req_id}")
+                 raise HTTPException(status_code=502, detail=f"[{req_id}] AI Studio 错误: {page_err_nonstream}") # 中文
 
             if not final_state_reached:
-                 print(f"[{req_id}] ⚠️ Non-streaming wait timed out after {RESPONSE_COMPLETION_TIMEOUT / 1000}s. Attempting to get content anyway.")
-                 await save_error_snapshot("nonstream_final_state_timeout")
+                 print(f"[{req_id}] ⚠️ 非流式等待超时。尝试内容检索。") # 中文
+                 await save_error_snapshot(f"nonstream_final_state_timeout_{req_id}")
             else:
-                 print(f"[{req_id}] ✅ Final state reached. Getting and parsing final content...")
+                 print(f"[{req_id}] ✅ 最终状态已到达。获取并解析最终内容...") # 中文
 
-            # --- Get and Parse Final Content ---
-            final_content_for_user = "" # Default empty
+            final_content_for_user = ""
             try:
-                # Add retry logic here if needed, like in server.cjs
                  final_raw_text = await get_raw_text_content(response_element, '', req_id)
-                 print(f"[{req_id}] Final Raw Text (len={len(final_raw_text)}): '{final_raw_text[:100]}...'")
+                 print(f"[{req_id}] 最终原始文本 (长度={len(final_raw_text)}): '{final_raw_text[:100]}...'") # 中文
 
                  if not final_raw_text or not final_raw_text.strip():
-                     print(f"[{req_id}] Warning: Got empty raw text from response element.")
-                     # Maybe check for page errors again here
-                     # final_check_error = await detectAndExtractPageError(...)
-                     # if final_check_error: raise UpstreamError(...)
-                     final_content_for_user = "" # Keep it empty
-
+                     print(f"[{req_id}] 警告: 从响应元素获取的原始文本为空。") # 中文
+                     final_content_for_user = ""
                  else:
-                    # --- JSON Parsing Logic (from server.cjs) ---
-                    parsed_json = None
+                    parsed_json = try_parse_json(final_raw_text, req_id)
                     ai_response_text_from_json = None
-                    try:
-                        # Attempt to find and parse JSON within the raw text
-                        text_to_parse = final_raw_text.strip()
-                        start_index = -1
-                        end_index = -1
-                        first_brace = text_to_parse.find('{')
-                        first_bracket = text_to_parse.find('[')
 
-                        if first_brace != -1 and (first_bracket == -1 or first_brace < first_bracket):
-                            start_index = first_brace
-                            end_index = text_to_parse.rfind('}')
-                        elif first_bracket != -1:
-                            start_index = first_bracket
-                            end_index = text_to_parse.rfind(']')
-
-                        if start_index != -1 and end_index != -1 and end_index >= start_index:
-                             json_text = text_to_parse[start_index : end_index + 1]
-                             try:
-                                 parsed_json = json.loads(json_text)
-                                 print(f"[{req_id}]    Successfully parsed JSON block.")
-                             except json.JSONDecodeError as json_err:
-                                 print(f"[{req_id}]    Warning: Failed to parse extracted JSON text: {json_err}")
-                                 await save_error_snapshot("json_parse_fail")
-                                 # Fallback: Use raw text if JSON parsing fails but text exists
-                                 ai_response_text_from_json = final_raw_text
-                        else:
-                             print(f"[{req_id}]    Warning: Could not find valid JSON start/end markers in raw text.")
-                             # Fallback: Use raw text if no JSON structure found
-                             ai_response_text_from_json = final_raw_text
-
-                    except Exception as parse_find_err:
-                         print(f"[{req_id}]    Error during JSON finding/parsing: {parse_find_err}")
-                         await save_error_snapshot("json_find_parse_error")
-                         # Fallback: Use raw text on error
-                         ai_response_text_from_json = final_raw_text
-
-                    # Extract 'response' field if JSON was parsed
                     if parsed_json:
                          if isinstance(parsed_json.get("response"), str):
                               ai_response_text_from_json = parsed_json["response"]
-                              print(f"[{req_id}]    Extracted 'response' field from JSON.")
+                              print(f"[{req_id}]    从 JSON 中提取了 'response' 字段。") # 中文
                          else:
-                             # JSON valid but no 'response' string - use stringified JSON
                              try:
                                  ai_response_text_from_json = json.dumps(parsed_json)
-                                 print(f"[{req_id}]    Warning: 'response' field not found/not string in JSON. Using stringified JSON.")
+                                 print(f"[{req_id}]    警告: 在 JSON 中未找到/非字符串 'response' 字段。使用字符串化的 JSON。") # 中文
                              except Exception as stringify_err:
-                                  print(f"[{req_id}]    Error stringifying parsed JSON: {stringify_err}")
-                                  ai_response_text_from_json = final_raw_text # Fallback
-
-                    # --- End JSON Parsing Logic ---
-
-                    # Remove marker if present
+                                  print(f"[{req_id}]    字符串化解析的 JSON 时出错: {stringify_err}") # 中文
+                                  ai_response_text_from_json = final_raw_text
+                    else:
+                        print(f"[{req_id}]    警告: 无法从原始文本解析 JSON。使用原始文本作为响应。") # 中文
+                        ai_response_text_from_json = final_raw_text
+                    
                     start_marker = '<<<START_RESPONSE>>>'
                     if ai_response_text_from_json and ai_response_text_from_json.startswith(start_marker):
                         final_content_for_user = ai_response_text_from_json[len(start_marker):]
-                        print(f"[{req_id}]    Removed start marker.")
-                    elif ai_response_text_from_json: # Use the text (even if no marker)
+                        print(f"[{req_id}]    移除了起始标记。") # 中文
+                    elif ai_response_text_from_json:
                         final_content_for_user = ai_response_text_from_json
-                        print(f"[{req_id}]    Warning: Start marker not found in final text.")
-                    else: # Should not happen if raw_text was not empty, but safeguard
+                        print(f"[{req_id}]    警告: 在最终文本中未找到起始标记。") # 中文
+                    else:
                          final_content_for_user = ""
 
-
             except Exception as e:
-                print(f"[{req_id}] ❌ Error getting final non-streaming content: {e}")
-                await save_error_snapshot("get_final_content_error")
+                print(f"[{req_id}] ❌ 获取/解析最终非流式内容时出错: {e}") # 中文
+                await save_error_snapshot(f"get_final_content_error_{req_id}")
                 traceback.print_exc()
-                raise HTTPException(status_code=500, detail=f"[{req_id}] Error processing final response: {e}")
+                raise HTTPException(status_code=500, detail=f"[{req_id}] 处理最终响应时出错: {e}") # 中文
 
-            # Construct and return final JSON payload
             response_payload = {
-                "id": f"{CHAT_COMPLETION_ID_PREFIX}{req_id}-{int(time.time())}", # Add timestamp to ID
+                "id": f"{CHAT_COMPLETION_ID_PREFIX}{req_id}-{int(time.time())}",
                 "object": "chat.completion",
                 "created": int(time.time()),
                 "model": MODEL_NAME,
                 "choices": [{
                     "index": 0,
                     "message": {"role": "assistant", "content": final_content_for_user},
-                    "finish_reason": "stop", # Assume stop unless timeout occurred before final state
+                    "finish_reason": "stop",
                 }],
-                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}, # Placeholder
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
             }
             return JSONResponse(content=response_payload)
 
     except PlaywrightAsyncError as e:
-        print(f"[{req_id}] ❌ Playwright Error during processing: {e}")
-        await save_error_snapshot("playwright_error") # Added snapshot
-        raise HTTPException(status_code=500, detail=f"[{req_id}] Playwright Error: {e}")
+        print(f"[{req_id}] ❌ Playwright 处理期间出错: {e}") # 中文
+        await save_error_snapshot(f"playwright_error_{req_id}") # Pass req_id here
+        raise HTTPException(status_code=500, detail=f"[{req_id}] Playwright 错误: {e}") # 中文
     except HTTPException:
-         raise # Re-raise HTTPExceptions (like validation errors or client disconnect)
+         raise
     except Exception as e:
-        print(f"[{req_id}] ❌ Unexpected Error during processing: {e}")
-        await save_error_snapshot("unexpected_error") # Added snapshot
+        print(f"[{req_id}] ❌ 处理期间意外错误: {e}") # 中文
+        await save_error_snapshot(f"unexpected_error_{req_id}") # Pass req_id here
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"[{req_id}] Unexpected Server Error: {e}")
+        raise HTTPException(status_code=500, detail=f"[{req_id}] 意外服务器错误: {e}") # 中文
     finally:
-         # Cancel the disconnect checker task if it's still running
          if disconnect_task and not disconnect_task.done():
               disconnect_task.cancel()
-              try:
-                  await disconnect_task # Allow cancellation to propagate
-              except asyncio.CancelledError:
-                  pass # Expected cancellation
-         print(f"[{req_id}] --- Finished processing chat request ---")
+              try: await disconnect_task
+              except asyncio.CancelledError: pass
+         print(f"[{req_id}] --- 完成处理聊天请求 --- ") # 中文
 
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: ChatCompletionRequest, http_request: Request):
     req_id = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=7))
-    print(f"[{req_id}] === Received /v1/chat/completions request === Mode: {'Streaming' if request.stream else 'Non-streaming'}")
+    print(f"[{req_id}] === 收到 /v1/chat/completions 请求 === 模式: {'流式' if request.stream else '非流式'}") # 中文
 
-    # --- Basic Readiness Check ---
     if is_initializing:
-        print(f"[{req_id}] ⏳ Camoufox is still initializing. Request may be delayed or fail.")
-        # Optionally wait or raise 503 immediately
-        # await asyncio.sleep(1) # Simple wait
-        # Or: raise HTTPException(status_code=503, detail="Service initializing, please retry shortly.")
-    if not is_camoufox_ready or not page_instance or page_instance.is_closed():
-         print(f"[{req_id}] ❌ Request failed: Camoufox not ready or page closed.")
-         # Attempt re-initialization maybe? Or just fail.
-         # asyncio.create_task(initialize_camoufox()) # Trigger re-init in background?
-         raise HTTPException(status_code=503, detail=f"[{req_id}] Camoufox connection not active. Please ensure browser is running and retry.")
+        print(f"[{req_id}] ⏳ 服务仍在初始化。请求可能延迟或失败。") # 中文
+        raise HTTPException(status_code=503, detail=f"[{req_id}] 服务初始化中，请稍后重试。") # 中文
+    if not is_playwright_ready or not is_browser_connected or not is_page_ready:
+         print(f"[{req_id}] ❌ 请求失败: 服务未完全就绪 (Playwright:{is_playwright_ready}, Browser:{is_browser_connected}, Page:{is_page_ready}).") # 中文
+         raise HTTPException(status_code=503, detail=f"[{req_id}] 与 Camoufox 浏览器/页面的连接未激活。请确保 camoufox 服务器正在运行并重试。") # 中文
 
-    # --- TODO: Implement Request Queueing Logic ---
-    # For now, process sequentially (FastAPI handles concurrent requests up to worker limits)
-    # If strict ordering or resource limiting is needed, implement an asyncio.Queue here
-    # like in server.cjs (requestQueue, isProcessing, processQueue).
-
-    # --- Process the request ---
-    # Use asyncio.wait_for for overall timeout, mirroring RESPONSE_COMPLETION_TIMEOUT
     try:
         return await asyncio.wait_for(
              process_chat_request(req_id, request, http_request),
-             timeout=RESPONSE_COMPLETION_TIMEOUT / 1000 # Convert ms to seconds
+             timeout=RESPONSE_COMPLETION_TIMEOUT / 1000
         )
     except asyncio.TimeoutError:
-        print(f"[{req_id}] ❌ Overall request timed out after {RESPONSE_COMPLETION_TIMEOUT / 1000}s.")
-        # If streaming, the generator might have already sent DONE.
-        # If non-streaming, send a 504.
+        print(f"[{req_id}] ❌ 整体请求在 {RESPONSE_COMPLETION_TIMEOUT / 1000} 秒后超时。") # 中文
         if request.stream:
-            # Use helper functions to generate SSE error and DONE messages
-            error_chunk = generate_sse_error_chunk("Overall request timeout.", req_id, "timeout_error")
-            done_chunk = "data: [DONE]\n\n" # Standard DONE message
-            # Return a streaming response containing the error and DONE
+            error_chunk = generate_sse_error_chunk("整体请求超时。", req_id, "timeout_error") # 中文
+            done_chunk = "data: [DONE]\n\n"
             return StreamingResponse(iter([error_chunk, done_chunk]), media_type="text/event-stream", status_code=504)
         else:
-            raise HTTPException(status_code=504, detail=f"[{req_id}] Overall request processing timed out.")
+            raise HTTPException(status_code=504, detail=f"[{req_id}] 整体请求处理超时。") # 中文
     except HTTPException as http_exc:
-         # Re-raise specific HTTP errors from processing function
          raise http_exc
     except Exception as e:
-         # Catch any other unexpected errors during processing
-         print(f"[{req_id}] ❌ Unexpected error at completion endpoint level: {e}")
-         raise HTTPException(status_code=500, detail=f"[{req_id}] Unexpected server error during request handling.")
+         print(f"[{req_id}] ❌ 完成端点级别发生意外错误: {e}") # 中文
+         raise HTTPException(status_code=500, detail=f"[{req_id}] 请求处理期间意外的服务器错误。") # 中文
 
-
-# --- Graceful shutdown ---
-@app.on_event("shutdown")
-async def shutdown_event():
-    global browser_instance, page_instance, is_camoufox_ready, pw_instance
-    print("--- FastAPI server shutting down ---")
-    if browser_instance and browser_instance.is_connected():
-        print("Closing Camoufox browser...")
-        try:
-            await browser_instance.close()
-            print("Browser closed.")
-        except Exception as e:
-            print(f"Error closing browser: {e}")
-    if pw_instance:
-         print("Stopping Playwright...")
-         try:
-              await pw_instance.stop()
-              print("Playwright stopped.")
-         except Exception as e:
-              print(f"Error stopping Playwright: {e}")
-
-    browser_instance = None
-    page_instance = None
-    pw_instance = None
-    is_camoufox_ready = False
-    print("Shutdown complete.")
-
-# --- Add __main__ block to run with uvicorn ---
+# --- __main__ block --- (Translate print statements)
 if __name__ == "__main__":
+    check_dependencies()
+
+    SERVER_PORT = 2048
+    print(f"--- 步骤 2: 准备启动 FastAPI/Uvicorn (端口: {SERVER_PORT}) ---") # 中文
     import uvicorn
-    print("Starting server with Uvicorn...")
-    # Make sure to install uvicorn: pip install "uvicorn[standard]" fastapi playwright camoufox browserforge
-    # Run with: python server.py
-    # Or for development with auto-reload: uvicorn server:app --reload --port 2048
-    # Note: --reload might interfere with global state and browser instances if not handled carefully.
-    # For production, run without --reload: uvicorn server:app --host 0.0.0.0 --port 2048 --workers 1
-    # Using workers > 1 with Playwright/Camoufox global instance is problematic, stick to 1 worker.
-    uvicorn.run("server:app", host="127.0.0.1", port=2048, log_level="info", workers=1) 
+
+    try:
+        uvicorn.run(
+            "server:app",
+            host="127.0.0.1",
+            port=SERVER_PORT,
+            log_level="info",
+            workers=1,
+            use_colors=False
+        )
+    except OSError as e:
+        if e.errno == 48:
+            print(f"\n❌ 错误：端口 {SERVER_PORT} 已被占用！") # 中文 (Keep f-string correction)
+            print("   Uvicorn 无法绑定到该端口。") # 中文
+            print("   请手动查找并结束占用该端口的进程:") # 中文
+            print(f"     1. 查找进程 PID: lsof -t -i:{SERVER_PORT}")
+            print(f"     2. 结束进程 (替换 <PID>): kill -9 <PID>")
+            print("   然后重新运行此脚本。") # 中文
+            sys.exit(1)
+        else:
+            print(f"❌ 发生未处理的 OS 错误: {e}") # 中文
+            raise e
+    except Exception as e:
+         print(f"❌ 启动服务器时发生意外错误: {e}") # 中文
+         traceback.print_exc()
+         sys.exit(1) 
