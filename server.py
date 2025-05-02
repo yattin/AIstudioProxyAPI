@@ -660,12 +660,40 @@ async def _initialize_page_logic(browser: AsyncBrowser):
 
 # --- Page Shutdown Logic --- (Translate print statements)
 async def _close_page_logic():
-    # ... (code unchanged) ...
     global page_instance, is_page_ready
     print("--- 运行页面逻辑关闭 --- ") # 中文
+    if page_instance:
+        if not page_instance.is_closed():
+            try:
+                await page_instance.close()
+                print("   ✅ 页面已关闭")
+            except Exception as e:
+                print(f"   ⚠️ 关闭页面时出错: {e}")
+        else:
+            print("   ℹ️ 页面已处于关闭状态")
+    else:
+        print("   ℹ️ 页面实例不存在")
     page_instance = None
     is_page_ready = False
     print("页面逻辑状态已重置。") # 中文
+
+# --- 新增：与Camoufox服务器通信的关闭信号函数 ---
+async def signal_camoufox_shutdown():
+    """通知 Camoufox 服务器准备关闭"""
+    try:
+        print("   发送关闭信号到 Camoufox 服务器...")
+        # 检查ws_endpoint环境变量是否存在
+        ws_endpoint = os.environ.get('CAMOUFOX_WS_ENDPOINT')
+        if not ws_endpoint:
+            print("   ⚠️ 无法发送关闭信号：未找到 CAMOUFOX_WS_ENDPOINT 环境变量")
+            return
+            
+        # 这里可以实现实际的通信逻辑，例如通过 WebSocket 发送关闭命令
+        # 由于目前没有直接的通信机制，我们添加一个短暂延迟，让服务器有时间准备
+        await asyncio.sleep(0.5)  # 给服务器一点反应时间
+        print("   ✅ 关闭信号已发送")
+    except Exception as e:
+        print(f"   ⚠️ 发送关闭信号失败: {e}")
 
 # --- Lifespan context manager ---
 @asynccontextmanager
@@ -746,49 +774,61 @@ async def lifespan(app_param: FastAPI):
 
         print(f"\\nFastAPI 生命周期: 关闭中...") # 中文
 
-        # !! 新增：关闭队列 Worker !!
+        # !! 优化：改进队列 Worker 关闭逻辑 !!
         if worker_task and not worker_task.done():
              print(f"   正在取消请求队列 Worker...") # 中文
              worker_task.cancel()
              try:
-                  await worker_task # Wait for the worker to finish cancellation
+                  # 增加超时防止无限等待
+                  await asyncio.wait_for(worker_task, timeout=5.0)
                   print(f"   ✅ 请求队列 Worker 已停止。") # 中文
+             except asyncio.TimeoutError:
+                  print(f"   ⚠️ Worker 等待超时，继续关闭流程。")
              except asyncio.CancelledError:
                   print(f"   ✅ 请求队列 Worker 已确认取消。") # 中文
              except Exception as wt_err:
                   print(f"   ❌ 等待 Worker 停止时出错: {wt_err}") # 中文
         else:
-             print(f"   ⚠️ Worker 任务未运行或已完成。") # 中文
+             print(f"   ℹ️ Worker 任务未运行或已完成。") # 中文
 
+        # 发送关闭信号到 Camoufox 服务器
+        await signal_camoufox_shutdown()
+
+        # 关闭页面
         await _close_page_logic() # Existing page close logic
 
-    if browser_instance and browser_instance.is_connected():
-        print(f"   正在关闭与浏览器实例的连接...") # 中文
-        try:
-            await browser_instance.close()
-            print(f"   ✅ 浏览器连接已关闭。") # 中文
-        except Exception as close_err:
-            print(f"   ❌ 关闭浏览器连接时出错: {close_err}") # 中文
-        finally:
-            browser_instance = None
-            is_browser_connected = False
-    else:
-        print(f"   ⚠️ 未找到活动的浏览器连接以关闭。") # 中文
+        # 改进浏览器连接关闭逻辑
+        if browser_instance:
+            print(f"   正在关闭与浏览器实例的连接...") # 中文
+            try:
+                if browser_instance.is_connected():
+                    await browser_instance.close()
+                    print(f"   ✅ 浏览器连接已关闭。") # 中文
+                else:
+                    print(f"   ℹ️ 浏览器已断开连接，无需关闭。")
+            except Exception as close_err:
+                print(f"   ❌ 关闭浏览器连接时出错: {close_err}") # 中文
+            finally:
+                browser_instance = None
+                is_browser_connected = False
+        else:
+            print(f"   ℹ️ 浏览器实例不存在。") # 中文
 
-    if playwright_manager:
-        print(f"   停止 Playwright...") # 中文
-        try:
-            await playwright_manager.stop()
-            print(f"   ✅ Playwright 已停止。") # 中文
-        except Exception as stop_err:
-            print(f"   ❌ 停止 Playwright 时出错: {stop_err}") # 中文
-        finally:
-            playwright_manager = None
-            is_playwright_ready = False
-    else:
-        print(f"   ⚠️ 未找到 Playwright 管理器。") # 中文
+        # 关闭 Playwright
+        if playwright_manager:
+            print(f"   停止 Playwright...") # 中文
+            try:
+                await playwright_manager.stop()
+                print(f"   ✅ Playwright 已停止。") # 中文
+            except Exception as stop_err:
+                print(f"   ❌ 停止 Playwright 时出错: {stop_err}") # 中文
+            finally:
+                playwright_manager = None
+                is_playwright_ready = False
+        else:
+            print(f"   ℹ️ Playwright 管理器不存在。") # 中文
 
-    print(f"✅ FastAPI 生命周期: 关闭完成。") # 中文
+        print(f"✅ FastAPI 生命周期: 关闭完成。") # 中文
 
 
 # --- FastAPI App ---

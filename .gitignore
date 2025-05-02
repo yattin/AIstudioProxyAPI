@@ -169,7 +169,12 @@ __pycache__/
 errors_py/
 
 # Authentication Profiles (Sensitive)
-auth_profiles/
+auth_profiles/active/
+auth_profiles/saved/
 
-# Camoufox/Playwright Profile Data
-camoufox_profile/ 
+# Camoufox/Playwright Profile Data (Assume these are generated/temporary)
+camoufox_profile/
+chrome_temp_profile/
+
+# Deprecated Javascript Version node_modules
+deprecated_javascript_version/node_modules/ 
