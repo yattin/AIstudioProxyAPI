@@ -301,7 +301,7 @@ def generate_sse_chunk(delta: str, req_id: str, model: str) -> str:
         "model": model,
         "choices": [{"index": 0, "delta": {"content": delta}, "finish_reason": None}]
     }
-    return f"data: {json.dumps(chunk)}\\n\\n"
+    return f"data: {json.dumps(chunk)}\n\n"
 
 def generate_sse_stop_chunk(req_id: str, model: str, reason: str = "stop") -> str:
     # ... (code unchanged) ...
@@ -312,12 +312,12 @@ def generate_sse_stop_chunk(req_id: str, model: str, reason: str = "stop") -> st
         "model": model,
         "choices": [{"index": 0, "delta": {}, "finish_reason": reason}]
     }
-     return f"data: {json.dumps(chunk)}\\n\\n"
+     return f"data: {json.dumps(chunk)}\n\n"
 
 def generate_sse_error_chunk(message: str, req_id: str, error_type: str = "server_error") -> str:
     # ... (code unchanged) ...
     error_payload = {"error": {"message": f"[{req_id}] {message}", "type": error_type}}
-    return f"data: {json.dumps(error_payload)}\\n\\n"
+    return f"data: {json.dumps(error_payload)}\n\n"
 
 # --- Helper Functions (Pre-checks) ---
 def check_dependencies():
@@ -952,6 +952,7 @@ async def queue_worker():
         request_item = None
         result_future = None # Initialize future here
         req_id = "UNKNOWN" # Default req_id
+        completion_event = None # <<< 新增：用于接收完成事件
         try:
             # 从队列中获取下一个请求项
             request_item = await request_queue.get()
@@ -982,33 +983,39 @@ async def queue_worker():
                 elif result_future and result_future.done(): # Check future before processing
                      print(f"[{req_id}] (Worker) 请求 Future 在处理开始前已完成/取消。跳过。", flush=True) # 中文
                 elif result_future: # Ensure future exists
-                    # 调用核心处理逻辑
-                    await _process_request_from_queue(
+                    # 调用核心处理逻辑，并接收返回的事件
+                    # <<< 修改：接收 completion_event >>>
+                    completion_event = await _process_request_from_queue(
                         req_id, request_data, http_request, result_future
                     )
+                    # <<< 新增：如果收到完成事件，等待它 >>>
+                    if completion_event:
+                         print(f"[{req_id}] (Worker) 等待流式生成器完成信号...", flush=True)
+                         try:
+                              # 添加超时以防万一
+                              await asyncio.wait_for(completion_event.wait(), timeout=RESPONSE_COMPLETION_TIMEOUT / 1000 + 10) # 比总超时稍长
+                              print(f"[{req_id}] (Worker) 流式生成器完成信号已收到。", flush=True)
+                         except asyncio.TimeoutError:
+                              print(f"[{req_id}] (Worker) ❌ 错误：等待流式生成器完成信号超时！锁可能未正确释放。", flush=True)
+                              # 即使超时，也需要继续执行以释放锁并处理下一个请求
+                         except Exception as wait_err:
+                              print(f"[{req_id}] (Worker) ❌ 错误：等待流式完成事件时出错: {wait_err}", flush=True)
                 else:
                     print(f"[{req_id}] (Worker) 错误：Future 对象丢失。无法处理请求。", flush=True)
-                    # Mark task as done even if future is lost
-                    request_queue.task_done()
-                    continue
+                    # Mark task as done even if future is lost (handled in finally)
 
-            print(f"[{req_id}] (Worker) 处理完成，已释放锁。", flush=True) # 中文
+            print(f"[{req_id}] (Worker) 处理完成或等待结束，已释放锁。", flush=True) # 中文
 
+        # ... (现有异常处理：CancelledError, Exception)
         except asyncio.CancelledError:
-             print("--- 队列 Worker 收到取消信号，正在退出 ---", flush=True) # 中文
-             # 如果 worker 被取消，尝试取消当前正在处理的请求的 future
-             if result_future and not result_future.done():
-                  print(f"[{req_id}] (Worker) 取消当前处理请求的 Future...", flush=True)
-                  result_future.set_exception(HTTPException(status_code=503, detail=f"[{req_id}] 服务器关闭中，请求被取消"))
+             # ...
              break # 退出循环
         except Exception as e:
-             # Worker 自身的未捕获错误
-             print(f"[Worker Error] Worker 循环中发生意外错误 (Req ID: {req_id}): {e}", flush=True) # 中文
-             traceback.print_exc()
-             # 尝试通知客户端（如果可能）
-             if result_future and not result_future.done():
-                  result_future.set_exception(HTTPException(status_code=500, detail=f"[{req_id}] Worker 内部错误: {e}")) # 中文
-             # 避免 worker 因单个请求处理错误而崩溃，继续处理下一个
+             # ... (Worker 自身的未捕获错误)
+             # <<< 新增：在 Worker 错误时，如果事件存在且未设置，尝试设置它 >>>
+             if completion_event and not completion_event.is_set():
+                  print(f"[{req_id}] (Worker) Setting completion event due to worker loop error.")
+                  completion_event.set()
         finally:
              # Ensure task_done is called even if future was missing or error occurred before processing
              if request_item:
@@ -1028,6 +1035,7 @@ async def _process_request_from_queue(
     print(f"[{req_id}] (Worker) 开始处理来自队列的请求...", flush=True) # 中文
     is_streaming = request.stream
     page: Optional[AsyncPage] = None # Initialize page variable
+    completion_event: Optional[asyncio.Event] = None # <<< 新增：完成事件
 
     # 在开始重度操作前快速检查客户端是否已断开连接
     # This check is redundant if worker already checked, but keep as safeguard
@@ -1134,34 +1142,69 @@ async def _process_request_from_queue(
 
     # Helper for interruptible Playwright actions with timeout
     async def interruptible_wait_for(awaitable, timeout):
+        awaitable_task = asyncio.create_task(awaitable)
+        disconnect_wait_task = asyncio.create_task(client_disconnected_event.wait())
         try:
-            # Wait for awaitable or disconnect event
-            awaitable_task = asyncio.create_task(awaitable)
-            disconnect_wait_task = asyncio.create_task(client_disconnected_event.wait())
             done, pending = await asyncio.wait(
                 [awaitable_task, disconnect_wait_task],
-                timeout=timeout # Use provided timeout for the wait
+                timeout=timeout,
+                return_when=asyncio.FIRST_COMPLETED
             )
 
+            # Cancel pending tasks
             for task in pending:
                 task.cancel()
                 try: await task
                 except asyncio.CancelledError: pass
+                except Exception as e: # Catch potential errors during cancellation await
+                    print(f"[{req_id}] Warning: Error awaiting cancelled task {task}: {e}")
 
-            # Check results
+            # Check results MORE CAREFULLY
             if awaitable_task in done:
-                 # Check for exceptions from the awaitable task
-                 return await awaitable_task # Return result or raise exception
+                # The task finished. Get its result or exception.
+                try:
+                    result = awaitable_task.result() # Get result if no exception
+                    # Check disconnect *after* successful completion, just in case event was set right at the end
+                    check_client_disconnected(f"Check disconnect after awaitable task completed successfully (timeout={timeout}s): ")
+                    return result
+                except asyncio.CancelledError: # Task might have been cancelled externally
+                     print(f"[{req_id}] (Worker) Awaitable task was cancelled externally.")
+                     check_client_disconnected("Awaitable task cancelled check: ")
+                     raise # Re-raise CancelledError
+                except Exception as e:
+                    # The awaitable task finished by raising an exception
+                    # print(f"[{req_id}] (Worker) Awaitable task finished with exception: {type(e).__name__}", flush=True) # Debug log
+                    raise e # Re-raise the original exception from the awaitable
+
             elif disconnect_wait_task in done:
-                 check_client_disconnected(f"Wait cancelled by disconnect (timeout={timeout}s): ")
+                # Disconnect happened first or concurrently
+                check_client_disconnected(f"Wait cancelled by disconnect (timeout={timeout}s): ")
+                # The check_client_disconnected call should raise ClientDisconnectedError
+                # If it somehow doesn't, raise it explicitly
+                raise ClientDisconnectedError(f"[{req_id}] Client disconnected event set during wait.")
+
             else:
-                 # Timeout occurred
-                 print(f"[{req_id}] (Worker) 操作超时 ({timeout}s)。", flush=True)
-                 raise asyncio.TimeoutError(f"Operation timed out after {timeout}s")
+                # Overall timeout happened *before* either task completed
+                print(f"[{req_id}] (Worker) 操作超时 ({timeout}s)。Awaitable or disconnect did not complete.", flush=True)
+                # Ensure the awaitable task is cancelled if it was the one pending
+                if awaitable_task in pending:
+                     print(f"[{req_id}] (Worker) Cancelling pending awaitable task due to overall timeout.")
+                     awaitable_task.cancel()
+                     try: await awaitable_task
+                     except asyncio.CancelledError: pass
+                     except Exception as e: print(f"[{req_id}] Exception during cancellation of timed-out awaitable: {e}")
+                raise asyncio.TimeoutError(f"Operation timed out after {timeout}s")
 
         except asyncio.CancelledError:
-             check_client_disconnected("Wait cancelled: ")
-             raise
+            # This top-level catch handles cancellation of the interruptible_wait_for itself
+            print(f"[{req_id}] (Worker) interruptible_wait_for task itself was cancelled.")
+            # Ensure sub-tasks are cancelled
+            if not awaitable_task.done(): awaitable_task.cancel()
+            if not disconnect_wait_task.done(): disconnect_wait_task.cancel()
+            try: await asyncio.gather(awaitable_task, disconnect_wait_task, return_exceptions=True)
+            except asyncio.CancelledError: pass
+            check_client_disconnected("Wait cancelled: ")
+            raise
 
     try:
         # 1. Validation
@@ -1274,246 +1317,500 @@ async def _process_request_from_queue(
         input_field = page.locator(INPUT_SELECTOR)
         submit_button = page.locator(SUBMIT_BUTTON_SELECTOR)
 
-        await interruptible_wait_for(expect_async(input_field).to_be_visible(timeout=10000), timeout=10.5)
-        await interruptible_wait_for(input_field.fill(prepared_prompt, timeout=60000), timeout=60.5)
-        await interruptible_wait_for(expect_async(submit_button).to_be_enabled(timeout=10000), timeout=10.5)
+        print(f"[{req_id}] (Worker) 等待输入框可见...")
+        start_wait_time = time.monotonic()
+        try:
+            await interruptible_wait_for(expect_async(input_field).to_be_visible(timeout=10000), timeout=10.5)
+            duration = time.monotonic() - start_wait_time
+            print(f"[{req_id}] (Worker) 输入框可见，耗时: {duration:.2f} 秒。")
+        except Exception as e:
+            duration = time.monotonic() - start_wait_time
+            print(f"[{req_id}] (Worker) 等待输入框可见失败或超时，耗时: {duration:.2f} 秒。错误: {e}")
+            raise # Re-raise the exception
+
+        print(f"[{req_id}] (Worker) 填充提示...")
+        start_fill_time = time.monotonic()
+        try:
+            await interruptible_wait_for(input_field.fill(prepared_prompt, timeout=60000), timeout=60.5) # Reverted back to fill
+            duration = time.monotonic() - start_fill_time
+            print(f"[{req_id}] (Worker) 填充完成，耗时: {duration:.2f} 秒。")
+        except Exception as e:
+            duration = time.monotonic() - start_fill_time
+            print(f"[{req_id}] (Worker) 填充失败或超时，耗时: {duration:.2f} 秒。错误: {e}")
+            raise
+
+        print(f"[{req_id}] (Worker) 等待提交按钮可用...") # Added log before wait
+        start_wait_enabled_time = time.monotonic()
+        try:
+            await interruptible_wait_for(expect_async(submit_button).to_be_enabled(timeout=10000), timeout=10.5)
+            duration = time.monotonic() - start_wait_enabled_time # Corrected variable name
+            print(f"[{req_id}] (Worker) 提交按钮可用，耗时: {duration:.2f} 秒。") # Added log after wait
+        except Exception as e:
+            duration = time.monotonic() - start_wait_enabled_time # Corrected variable name
+            print(f"[{req_id}] (Worker) 等待提交按钮可用失败或超时，耗时: {duration:.2f} 秒。错误: {e}")
+            raise # Re-raise the exception
 
         print(f"[{req_id}] (Worker) 短暂等待 UI 稳定...", flush=True) # 中文
         await interruptible_sleep(0.2)
 
         # --- Try submitting with shortcut ---
         submitted_successfully = False
-        shortcut_key = "Meta" if platform.system() == "Darwin" else "Control"
-        shortcut_name = "Command" if shortcut_key == "Meta" else "Control"
+        # 移除 platform.system() 的判断
+
         try:
-            print(f"[{req_id}] (Worker) 尝试 {shortcut_name}+Enter 提交...", flush=True) # 中文
-            await interruptible_wait_for(input_field.focus(timeout=5000), timeout=5.5)
+            # 在页面上执行 JavaScript 来获取 navigator.platform
+            navigator_platform = await page.evaluate("navigator.platform")
+            print(f"[{req_id}] (Worker) 检测到浏览器平台信息: '{navigator_platform}'", flush=True) # 中文
+
+            # 根据浏览器汇报的平台信息决定快捷键
+            # 通常 'MacIntel', 'MacPPC', 'Macintosh' 等表示 macOS 环境
+            is_mac_like_platform = "mac" in navigator_platform.lower()
+
+            shortcut_key = "Meta" if is_mac_like_platform else "Control"
+            shortcut_name = "Command" if is_mac_like_platform else "Control"
+
+            print(f"[{req_id}] (Worker) 尝试使用快捷键 {shortcut_name}+Enter 提交...") # 中文
+            print(f"[{req_id}] (Worker)   - 等待输入框聚焦...")
+            start_focus_time = time.monotonic()
+            try:
+                await interruptible_wait_for(input_field.focus(timeout=5000), timeout=5.5)
+                duration = time.monotonic() - start_focus_time
+                print(f"[{req_id}] (Worker)   - 输入框聚焦完成，耗时: {duration:.2f} 秒。")
+            except Exception as e:
+                duration = time.monotonic() - start_focus_time
+                print(f"[{req_id}] (Worker)   - 输入框聚焦失败或超时，耗时: {duration:.2f} 秒。错误: {e}")
+                raise # Re-raise to be caught below
+
             # Keyboard press is usually fast, less need for interruptible_wait_for unless issues arise
-            await page.keyboard.press(f'{shortcut_key}+Enter')
-            print(f"[{req_id}] (Worker) {shortcut_name}+Enter 已发送。", flush=True) # 中文
-            submitted_successfully = True
+            print(f"[{req_id}] (Worker)   - 发送快捷键...")
+            start_press_time = time.monotonic()
+            try:
+                await page.keyboard.press(f'{shortcut_key}+Enter')
+                duration = time.monotonic() - start_press_time
+                print(f"[{req_id}] (Worker)   - {shortcut_name}+Enter 已发送，耗时: {duration:.2f} 秒。") # 中文
+            except Exception as e:
+                duration = time.monotonic() - start_press_time
+                print(f"[{req_id}] (Worker)   - {shortcut_name}+Enter 发送失败，耗时: {duration:.2f} 秒。错误: {e}")
+                raise # Re-raise to be caught below
+
+            # 增加短暂延时检查输入框是否清空，作为快捷键是否生效的初步判断
+            print(f"[{req_id}] (Worker)   - 检查输入框是否清空...")
+            start_clear_check_time = time.monotonic()
+            try:
+                await interruptible_wait_for(expect_async(input_field).to_have_value('', timeout=1000), timeout=1.2) # 1秒内应该清空
+                duration = time.monotonic() - start_clear_check_time
+                print(f"[{req_id}] (Worker)   - 快捷键提交后输入框已清空，判定成功，耗时: {duration:.2f} 秒。")
+                submitted_successfully = True
+            except (PlaywrightAsyncError, asyncio.TimeoutError) as e:
+                 duration = time.monotonic() - start_clear_check_time
+                 print(f"[{req_id}] (Worker)   - 警告: 快捷键提交后输入框未在预期内清空 (耗时: {duration:.2f} 秒)。可能快捷键未生效或页面响应慢。错误: {type(e).__name__}")
+                 # submitted_successfully 保持 False，将触发后续的点击回退
+            except Exception as e: # Catch other potential errors during check
+                duration = time.monotonic() - start_clear_check_time
+                print(f"[{req_id}] (Worker)   - 警告: 检查输入框清空时发生错误 (耗时: {duration:.2f} 秒)。错误: {e}")
+                # submitted_successfully 保持 False
+
         except PlaywrightAsyncError as key_press_error:
-            print(f"[{req_id}] (Worker) 警告: {shortcut_name}+Enter 提交出错: {key_press_error.message.split('\\n')[0]}", flush=True) # 中文
+            print(f"[{req_id}] (Worker) 警告: {shortcut_name}+Enter 提交(聚焦/按键)出错: {key_press_error.message.split('\\n')[0]}", flush=True) # 中文
         except asyncio.TimeoutError:
-            print(f"[{req_id}] (Worker) 警告: {shortcut_name}+Enter 提交超时。", flush=True)
+            print(f"[{req_id}] (Worker) 警告: {shortcut_name}+Enter 提交(聚焦/按键)或检查清空超时。", flush=True)
+        except Exception as eval_err:
+             print(f"[{req_id}] (Worker) 警告: 获取 navigator.platform 或执行快捷键时出错: {eval_err}", flush=True)
+
         check_client_disconnected("After Shortcut Attempt: ")
 
         # --- Fallback to clicking ---
         if not submitted_successfully:
-            print(f"[{req_id}] (Worker) 回退到模拟点击提交按钮...", flush=True) # 中文
+            print(f"[{req_id}] (Worker) 快捷键提交失败或未确认生效，回退到模拟点击提交按钮...", flush=True) # 中文
+            print(f"[{req_id}] (Worker)   - 滚动提交按钮至视图...")
+            start_scroll_time = time.monotonic()
             try:
                 await interruptible_wait_for(submit_button.scroll_into_view_if_needed(timeout=5000), timeout=5.5)
+                duration = time.monotonic() - start_scroll_time
+                print(f"[{req_id}] (Worker)   - 滚动完成，耗时: {duration:.2f} 秒。")
             except Exception as scroll_err:
-                print(f"[{req_id}] (Worker) 警告: 滚动提交按钮失败: {scroll_err}", flush=True) # 中文
+                duration = time.monotonic() - start_scroll_time
+                print(f"[{req_id}] (Worker)   - 警告: 滚动提交按钮失败 (耗时: {duration:.2f} 秒): {scroll_err}") # 中文
+                # Continue anyway, click might still work
+
             check_client_disconnected("After Scroll Fallback: ")
+
+            print(f"[{req_id}] (Worker)   - 点击提交按钮...")
+            start_click_time = time.monotonic()
+            click_exception = None
             try:
                 await interruptible_wait_for(submit_button.click(timeout=10000, force=True), timeout=10.5)
-                await interruptible_wait_for(expect_async(input_field).to_have_value('', timeout=3000), timeout=3.5)
-                print(f"[{req_id}] (Worker) 模拟点击提交成功。", flush=True) # 中文
-                submitted_successfully = True
-            except PlaywrightAsyncError as click_error:
-                print(f"[{req_id}] (Worker) ❌ 错误: 模拟点击提交按钮失败: {click_error.message.split('\\n')[0]}", flush=True) # 中文
-                await save_error_snapshot(f"submit_fallback_click_fail_{req_id}")
-                if not submitted_successfully: raise click_error
-            except asyncio.TimeoutError:
-                print(f"[{req_id}] (Worker) ❌ 错误: 模拟点击提交或检查输入框超时。", flush=True)
-                if not submitted_successfully: raise PlaywrightAsyncError("Submit fallback click or input clear check timed out")
+                duration = time.monotonic() - start_click_time
+                print(f"[{req_id}] (Worker)   - 点击完成，耗时: {duration:.2f} 秒。")
+            except Exception as e:
+                duration = time.monotonic() - start_click_time
+                print(f"[{req_id}] (Worker)   - 点击失败或超时，耗时: {duration:.2f} 秒。错误: {e}")
+                click_exception = e # Store exception to raise later if needed
+
+            if not click_exception:
+                print(f"[{req_id}] (Worker)   - 检查输入框是否清空 (点击后)...")
+                start_clear_check_click_time = time.monotonic()
+                try:
+                    await interruptible_wait_for(expect_async(input_field).to_have_value('', timeout=3000), timeout=3.5)
+                    duration = time.monotonic() - start_clear_check_click_time
+                    print(f"[{req_id}] (Worker)   - 模拟点击提交成功 (输入框已清空)，耗时: {duration:.2f} 秒。") # 中文
+                    submitted_successfully = True
+                except (PlaywrightAsyncError, asyncio.TimeoutError) as e:
+                    duration = time.monotonic() - start_clear_check_click_time
+                    print(f"[{req_id}] (Worker)   - 警告: 点击提交后输入框未在预期内清空 (耗时: {duration:.2f} 秒)。错误: {type(e).__name__}")
+                except Exception as e:
+                    duration = time.monotonic() - start_clear_check_click_time
+                    print(f"[{req_id}] (Worker)   - 警告: 点击后检查输入框清空时发生错误 (耗时: {duration:.2f} 秒)。错误: {e}")
+
+            # Raise the click exception only if the submission wasn't ultimately successful
+            if click_exception and not submitted_successfully:
+                 print(f"[{req_id}] (Worker) ❌ 错误: 模拟点击提交按钮失败且后续未确认成功。重新抛出点击错误。")
+                 raise click_exception
+            elif not submitted_successfully: # If click didn't raise error but clear check failed
+                 print(f"[{req_id}] (Worker) ❌ 错误: 模拟点击提交后未能确认输入框清空。")
+                 raise PlaywrightAsyncError("Submit fallback click successful but input clear check failed or timed out")
+
         check_client_disconnected("After Submit Logic: ")
 
         # --- Add Delay Post-Submission ---
-        print(f"[{req_id}] (Worker) 提交后等待 1 秒...", flush=True) # 中文
-        await interruptible_sleep(1.0)
+        # print(f"[{req_id}] (Worker) 提交后等待 1 秒...", flush=True) # 中文 # REMOVED
+        # await interruptible_sleep(1.0) # REMOVED
 
         # 4. Locate Response Element (Use interruptible helpers)
         print(f"[{req_id}] (Worker) 定位响应容器...", flush=True) # 中文
         response_container = page.locator(RESPONSE_CONTAINER_SELECTOR).last
+        print(f"[{req_id}] (Worker)   - 等待响应容器附加...")
+        start_locate_container_time = time.monotonic()
         try:
             await interruptible_wait_for(expect_async(response_container).to_be_attached(timeout=20000), timeout=20.5)
-            print(f"[{req_id}] (Worker) 响应容器已定位。定位内部文本节点...", flush=True) # 中文
+            duration = time.monotonic() - start_locate_container_time
+            print(f"[{req_id}] (Worker)   - 响应容器已定位，耗时: {duration:.2f} 秒。") # 中文
+            print(f"[{req_id}] (Worker)   - 定位内部文本节点...") # 中文
             response_element = response_container.locator(RESPONSE_TEXT_SELECTOR)
-            await interruptible_wait_for(expect_async(response_element).to_be_attached(timeout=5000), timeout=5.5)
-            print(f"[{req_id}] (Worker) 响应文本节点已定位。", flush=True) # 中文
+
+            print(f"[{req_id}] (Worker)   - 等待响应文本节点附加...")
+            start_locate_text_time = time.monotonic()
+            try:
+                await interruptible_wait_for(expect_async(response_element).to_be_attached(timeout=15000), timeout=15.5)
+                duration = time.monotonic() - start_locate_text_time
+                print(f"[{req_id}] (Worker)   - 响应文本节点已定位，耗时: {duration:.2f} 秒。") # 中文
+            except Exception as e:
+                duration = time.monotonic() - start_locate_text_time
+                print(f"[{req_id}] (Worker)   - 定位响应文本节点失败或超时，耗时: {duration:.2f} 秒。错误: {e}")
+                raise # Re-raise the inner exception
+
         except PlaywrightAsyncError as locate_err:
-            print(f"[{req_id}] (Worker) ❌ 定位响应元素 Playwright 错误: {locate_err}", flush=True) # 中文
+            duration = time.monotonic() - start_locate_container_time # Use outer start time
+            print(f"[{req_id}] (Worker) ❌ 定位响应元素 Playwright 错误 (容器或文本)，耗时: {duration:.2f} 秒: {locate_err}", flush=True) # 中文
             await save_error_snapshot(f"response_locate_error_{req_id}")
             raise locate_err
         except asyncio.TimeoutError:
-            print(f"[{req_id}] (Worker) ❌ 定位响应元素超时。", flush=True)
+            duration = time.monotonic() - start_locate_container_time # Use outer start time
+            print(f"[{req_id}] (Worker) ❌ 定位响应元素超时 (容器或文本)，耗时: {duration:.2f} 秒。", flush=True)
             await save_error_snapshot(f"response_locate_timeout_{req_id}")
             raise PlaywrightAsyncError("Locating response element timed out")
+        except Exception as e: # Catch other unexpected errors during location
+            duration = time.monotonic() - start_locate_container_time
+            print(f"[{req_id}] (Worker) ❌ 定位响应元素时发生意外错误，耗时: {duration:.2f} 秒: {e}", flush=True)
+            await save_error_snapshot(f"response_locate_unexpected_error_{req_id}")
+            raise
+
         check_client_disconnected("After Locate Response: ")
 
         # 5. Handle Response (Streaming or Non-streaming)
         if is_streaming:
             print(f"[{req_id}] (Worker) 处理 SSE 流...", flush=True) # 中文
+            completion_event = asyncio.Event() # <<< 新增：为流式请求创建事件
 
-            async def stream_generator() -> AsyncGenerator[str, None]:
-                # This generator runs independently once started by the endpoint handler.
-                # It needs its *own* check for the disconnect event passed from the parent.
-                last_raw_text = ""
-                last_sent_response_content = ""
-                response_started = False
-                spinner_disappeared = False
-                last_text_change_timestamp = time.time() * 1000
-                stream_finished_naturally = False
-                start_time = time.time() * 1000
-                spinner_locator = page.locator(LOADING_SPINNER_SELECTOR)
-                start_marker = '<<<START_RESPONSE>>>'
-                loop_counter = 0
-                last_scroll_time = 0
-                scroll_interval_ms = 3000
+            # 修改：将 completion_event 通过闭包传递给生成器函数
+            async def create_stream_generator(event_to_set: asyncio.Event) -> AsyncGenerator[str, None]:
+                # 创建一个闭包，捕获 event_to_set 参数
+                async def stream_generator() -> AsyncGenerator[str, None]:
+                    # This generator runs independently once started by the endpoint handler.
+                    # It needs its *own* check for the disconnect event passed from the parent.
+                    last_raw_text = ""
+                    last_sent_response_content = ""
+                    response_started = False # Tracks if <<<START_RESPONSE>>> has been seen
+                    spinner_disappeared = False
+                    last_text_change_timestamp = time.time() * 1000
+                    stream_finished_naturally = False
+                    start_time = time.time() * 1000
+                    spinner_locator = page.locator(LOADING_SPINNER_SELECTOR)
+                    start_marker = '<<<START_RESPONSE>>>'
+                    loop_counter = 0
+                    last_scroll_time = 0
+                    scroll_interval_ms = 3000
 
-                try:
-                    while time.time() * 1000 - start_time < RESPONSE_COMPLETION_TIMEOUT:
-                        if client_disconnected_event.is_set(): # Check event directly inside generator
-                            print(f"[{req_id}] (Worker Stream Gen) 检测到断开连接，停止。", flush=True)
-                            break
-
-                        current_loop_time_ms = time.time() * 1000
-                        loop_start_time = time.time() * 1000
-                        loop_counter += 1
-
-                        # --- Periodic Scroll --- 
-                        if current_loop_time_ms - last_scroll_time > scroll_interval_ms:
-                            try:
-                                # Use regular await here, timeout is less critical
-                                await page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
-                                last_scroll_time = current_loop_time_ms
-                            except Exception as scroll_e:
-                                print(f"[{req_id}] (Worker Stream Gen) 滚动失败: {scroll_e}", flush=True)
-                        if client_disconnected_event.is_set(): break
-
-                        # --- Periodic Error Check ---
-                        if loop_counter % 10 == 0:
-                            page_err_stream_periodic = await detect_and_extract_page_error(page, req_id)
-                            if page_err_stream_periodic:
-                                print(f"[{req_id}] (Worker Stream Gen) ❌ 错误: {page_err_stream_periodic}", flush=True) # 中文
-                                await save_error_snapshot(f"page_error_stream_periodic_{req_id}")
-                                yield generate_sse_error_chunk(f"AI Studio 错误: {page_err_stream_periodic}", req_id, "upstream_error") # 中文
-                                yield "data: [DONE]\\n\\n"
-                                return
-                        if client_disconnected_event.is_set(): break
-
-                        # --- Get Text Content --- (Short timeout, handle failure)
-                        try:
-                            # Make this faster, rely on loop for retries
-                            current_raw_text = await asyncio.wait_for(get_raw_text_content(response_element, last_raw_text, req_id), timeout=1.5)
-                        except asyncio.TimeoutError:
-                            print(f"[{req_id}] (Worker Stream Gen) 获取文本超时，使用上次文本。", flush=True)
-                            current_raw_text = last_raw_text
-                        except Exception as getTextErr:
-                            print(f"[{req_id}] (Worker Stream Gen) 获取文本失败: {getTextErr}", flush=True)
-                            current_raw_text = last_raw_text # Use previous on error
-                        if client_disconnected_event.is_set(): break
-
-                        # --- Process Text Change and Send Delta ---
-                        text_changed = current_raw_text != last_raw_text
-                        if text_changed:
-                            last_text_change_timestamp = time.time() * 1000
-                            potential_new_delta = ""
-                            current_content_after_marker = ""
-                            marker_index = current_raw_text.find(start_marker)
-                            if marker_index != -1:
-                                if not response_started:
-                                    print(f"[{req_id}] (Worker Stream Gen) 找到起始标记。", flush=True) # 中文
-                                    response_started = True
-                                current_content_after_marker = current_raw_text[marker_index + len(start_marker):]
-                                potential_new_delta = current_content_after_marker[len(last_sent_response_content):]
-                            elif response_started:
-                                 potential_new_delta = ""
-                                 print(f"[{req_id}] (Worker Stream Gen) 警告: 起始标记消失。", flush=True) # 中文
-
-                            if potential_new_delta:
-                                yield generate_sse_chunk(potential_new_delta, req_id, MODEL_NAME)
-                                last_sent_response_content += potential_new_delta
-                            last_raw_text = current_raw_text
-                        if client_disconnected_event.is_set(): break
-
-                        # --- Check Spinner Status ---
-                        if not spinner_disappeared:
-                             try:
-                                 await expect_async(spinner_locator).to_be_hidden(timeout=0.1)
-                                 spinner_disappeared = True
-                                 print(f"[{req_id}] (Worker Stream Gen) Spinner 已隐藏。", flush=True) # 中文
-                             except (AssertionError, PlaywrightAsyncError): pass
-                        if client_disconnected_event.is_set(): break
-
-                        # --- Silence Check ---
-                        is_silent = spinner_disappeared and (time.time() * 1000 - last_text_change_timestamp > SILENCE_TIMEOUT_MS)
-                        if is_silent:
-                            print(f"[{req_id}] (Worker Stream Gen) 检测到静默，完成流。", flush=True) # 中文
-                            stream_finished_naturally = True
-                            break
-
-                        # --- Interruptible Sleep ---
-                        loop_duration = time.time() * 1000 - loop_start_time
-                        wait_time = max(0, POLLING_INTERVAL_STREAM - loop_duration) / 1000
-                        # Use simple sleep inside generator loop, rely on event check
-                        await asyncio.sleep(wait_time)
-                        if client_disconnected_event.is_set(): break
-
-                    # --- End of while loop ---
-
-                    if client_disconnected_event.is_set():
-                         print(f"[{req_id}] (Worker Stream Gen) 流处理因客户端断开而中止。", flush=True) # 中文
-                         yield "data: [DONE]\\n\\n"
-                         return
-
-                    page_err_stream_final = await detect_and_extract_page_error(page, req_id)
-                    if page_err_stream_final:
-                        print(f"[{req_id}] (Worker Stream Gen) ❌ 完成前错误: {page_err_stream_final}", flush=True) # 中文
-                        await save_error_snapshot(f"page_error_stream_final_{req_id}")
-                        yield generate_sse_error_chunk(f"AI Studio 错误: {page_err_stream_final}", req_id, "upstream_error") # 中文
-                    elif stream_finished_naturally:
-                        print(f"[{req_id}] (Worker Stream Gen) 流自然结束，最终内容检查...", flush=True) # 中文
-                        final_raw_text = await get_raw_text_content(response_element, last_raw_text, req_id)
-                        final_content_after_marker = ""
-                        final_delta = ""
-                        final_marker_index = final_raw_text.find(start_marker)
-                        if final_marker_index != -1:
-                             final_content_after_marker = final_raw_text[final_marker_index + len(start_marker):]
-                             final_delta = final_content_after_marker[len(last_sent_response_content):]
-                        elif response_started:
-                             print(f"[{req_id}] (Worker Stream Gen) 警告: 最终检查时起始标记消失。", flush=True) # 中文
-                        if final_delta:
-                             print(f"[{req_id}] (Worker Stream Gen) 发送最终增量 (长度: {len(final_delta)})", flush=True) # 中文
-                             yield generate_sse_chunk(final_delta, req_id, MODEL_NAME)
-                        else:
-                             print(f"[{req_id}] (Worker Stream Gen) 最终检查无新内容。", flush=True) # 中文
-                        yield generate_sse_stop_chunk(req_id, MODEL_NAME)
-                        print(f"[{req_id}] (Worker Stream Gen) ✅ 流自然完成。", flush=True) # 中文
-                    else: # Timeout case
-                        print(f"[{req_id}] (Worker Stream Gen) ⚠️ 流超时。", flush=True) # 中文
-                        await save_error_snapshot(f"streaming_timeout_{req_id}")
-                        yield generate_sse_error_chunk("流处理在服务器上超时。", req_id) # 中文
-                        yield generate_sse_stop_chunk(req_id, MODEL_NAME, "timeout")
-
-                    yield "data: [DONE]\\n\\n"
-
-                except asyncio.CancelledError:
-                    print(f"[{req_id}] (Worker Stream Gen) 流生成器被取消。", flush=True) # 中文
-                    # Don't yield anything if cancelled? Or send special error?
-                    # Yielding DONE might be confusing. Let the endpoint handle 499.
-                except Exception as e:
-                    print(f"[{req_id}] (Worker Stream Gen) ❌ 流式生成意外错误: {e}", flush=True) # 中文
-                    await save_error_snapshot(f"streaming_error_{req_id}")
-                    traceback.print_exc()
-                    # Don't set future exception here, yield error chunk
+                    # 新增: 发送初始流信息以符合OpenAI API格式
                     try:
-                        yield generate_sse_error_chunk(f"流式处理期间服务器错误: {e}", req_id) # 中文
-                        yield "data: [DONE]\\n\\n"
-                    except Exception as yield_err:
-                         print(f"[{req_id}] (Worker Stream Gen) 尝试 yield 错误块时出错: {yield_err}", flush=True) # 中文
-                         # If yielding fails, NOW set exception on the future
-                         if not result_future.done():
-                              result_future.set_exception(HTTPException(status_code=500, detail=f"[{req_id}] Stream generation error and yield failed: {e}"))
+                        # 发送一个初始化消息（包含model字段）
+                        init_chunk = {
+                            "id": f"{CHAT_COMPLETION_ID_PREFIX}{req_id}-{int(time.time())}-init",
+                            "object": "chat.completion.chunk",
+                            "created": int(time.time()),
+                            "model": MODEL_NAME,
+                            "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]
+                        }
+                        yield f"data: {json.dumps(init_chunk)}\n\n"
+                        print(f"[{req_id}] (Worker Stream Gen) 已发送流初始化信息。", flush=True)
+                    except Exception as init_err:
+                        print(f"[{req_id}] (Worker Stream Gen) ❌ 发送流初始化信息失败: {init_err}", flush=True)
+                        # 继续执行，这不是致命错误
+
+                    try: # Main try block for the generator logic
+                        while time.time() * 1000 - start_time < RESPONSE_COMPLETION_TIMEOUT:
+                            if client_disconnected_event.is_set(): # Check event directly inside generator
+                                print(f"[{req_id}] (Worker Stream Gen) 检测到断开连接，停止。", flush=True)
+                                break
+
+                            current_loop_time_ms = time.time() * 1000
+                            loop_start_time = time.time() * 1000
+                            loop_counter += 1
+
+                            # --- Periodic Scroll --- 
+                            if current_loop_time_ms - last_scroll_time > scroll_interval_ms:
+                                try:
+                                    # Use regular await here, timeout is less critical
+                                    await page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
+                                    last_scroll_time = current_loop_time_ms
+                                except Exception as scroll_e:
+                                    print(f"[{req_id}] (Worker Stream Gen) 滚动失败: {scroll_e}", flush=True)
+                            if client_disconnected_event.is_set(): break
+
+                            # --- Periodic Error Check ---
+                            if loop_counter % 10 == 0:
+                                page_err_stream_periodic = await detect_and_extract_page_error(page, req_id)
+                                if page_err_stream_periodic:
+                                    print(f"[{req_id}] (Worker Stream Gen) ❌ 错误: {page_err_stream_periodic}", flush=True) # 中文
+                                    await save_error_snapshot(f"page_error_stream_periodic_{req_id}")
+                                    yield generate_sse_error_chunk(f"AI Studio 错误: {page_err_stream_periodic}", req_id, "upstream_error") # 中文
+                                    yield "data: [DONE]\n\n"
+                                    return
+                            if client_disconnected_event.is_set(): break
+
+                            # --- Get Text Content --- (Short timeout, handle failure)
+                            fetched_raw_text = "" # Initialize
+                            try:
+                                # Make this faster, rely on loop for retries
+                                fetched_raw_text = await asyncio.wait_for(get_raw_text_content(response_element, last_raw_text, req_id), timeout=1.5)
+                            except asyncio.TimeoutError:
+                                print(f"[{req_id}] (Worker Stream Gen) 获取文本超时，使用上次文本。", flush=True)
+                                fetched_raw_text = last_raw_text
+                            except Exception as getTextErr:
+                                print(f"[{req_id}] (Worker Stream Gen) 获取文本失败: {getTextErr}", flush=True)
+                                fetched_raw_text = last_raw_text # Use previous on error
+
+                            # <<< ADDED DEBUG LOG >>>
+                            print(f"[{req_id}] (Worker Stream Gen DEBUG) Fetched Raw Text (len={len(fetched_raw_text)}): '{fetched_raw_text[:150].replace('\n', '\\n')}...'", flush=True)
+                            # <<< END DEBUG LOG >>>
+
+                            current_raw_text = fetched_raw_text # Use the fetched text for processing
+                            if client_disconnected_event.is_set(): break
+
+                            # --- 关键修改: 更新文本处理和分块发送逻辑 ---
+                            text_changed = current_raw_text != last_raw_text
+                            if text_changed:
+                                last_text_change_timestamp = time.time() * 1000
+                                
+                                # 查找起始标记，只提取标记后的内容
+                                marker_index = current_raw_text.find(start_marker)
+                                if marker_index != -1:
+                                    if not response_started:
+                                        print(f"[{req_id}] (Worker Stream Gen) 找到起始标记。", flush=True)
+                                        response_started = True
+                                    
+                                    # 获取标记后的完整内容
+                                    current_content_after_marker = current_raw_text[marker_index + len(start_marker):]
+                                    
+                                    # 计算新增的内容（与上次发送的内容相比）
+                                    potential_new_delta = current_content_after_marker[len(last_sent_response_content):]
+                                    
+                                    if potential_new_delta:
+                                        try:
+                                            print(f"[{req_id}] (Worker Stream Gen DEBUG) Sending Delta (len={len(potential_new_delta)}): '{potential_new_delta[:100].replace('\n', '\\n')}...'", flush=True)
+                                            chunk_str = generate_sse_chunk(potential_new_delta, req_id, MODEL_NAME)
+                                            yield chunk_str
+                                            last_sent_response_content += potential_new_delta
+                                        except Exception as yield_err:
+                                            print(f"[{req_id}] (Worker Stream Gen) ❌ ERROR yielding data chunk: {yield_err}", flush=True)
+                                            traceback.print_exc()
+                                            try:
+                                                yield generate_sse_error_chunk(f"Error during SSE yield: {yield_err}", req_id, "internal_server_error")
+                                                yield "data: [DONE]\n\n"
+                                            except Exception as yield_final_err:
+                                                print(f"[{req_id}] (Worker Stream Gen) ❌ ERROR yielding error chunk after yield error: {yield_final_err}", flush=True)
+                                                return
+                                    elif response_started:
+                                        # 如果之前找到过标记，但现在找不到了，这是异常情况
+                                        print(f"[{req_id}] (Worker Stream Gen) 警告: 起始标记消失。", flush=True)
+                                        
+                                    # 无论如何，更新 last_raw_text
+                                    last_raw_text = current_raw_text
+                                if client_disconnected_event.is_set(): break
+
+                            # --- Check Spinner Status ---
+                            if not spinner_disappeared:
+                                 try:
+                                     # Use a very short timeout for the check itself
+                                     await expect_async(spinner_locator).to_be_hidden(timeout=0.1)
+                                     spinner_disappeared = True
+                                     print(f"[{req_id}] (Worker Stream Gen) Spinner 已隐藏。", flush=True) # 中文
+                                 except (AssertionError, PlaywrightAsyncError): pass # Spinner still visible or locator error
+                                 except Exception as spinner_check_err:
+                                     print(f"[{req_id}] (Worker Stream Gen) 检查 spinner 状态时出错: {spinner_check_err}", flush=True)
+                            if client_disconnected_event.is_set(): break
+
+                            # --- Silence Check ---
+                            is_silent = spinner_disappeared and (time.time() * 1000 - last_text_change_timestamp > SILENCE_TIMEOUT_MS)
+                            if is_silent:
+                                print(f"[{req_id}] (Worker Stream Gen) 检测到静默，完成流。", flush=True) # 中文
+                                stream_finished_naturally = True
+                                break
+
+                            # --- Interruptible Sleep ---
+                            loop_duration = time.time() * 1000 - loop_start_time
+                            wait_time = max(0, POLLING_INTERVAL_STREAM - loop_duration) / 1000
+                            # Use simple sleep inside generator loop, rely on event check
+                            await asyncio.sleep(wait_time)
+                            if client_disconnected_event.is_set(): break
+
+                        # --- End of while loop ---
+
+                        if client_disconnected_event.is_set():
+                             print(f"[{req_id}] (Worker Stream Gen) 流处理因客户端断开而中止。", flush=True) # 中文
+                             try: yield "data: [DONE]\n\n" # Still try to yield DONE
+                             except Exception as yield_done_err: print(f"[{req_id}] Error yielding DONE on disconnect: {yield_done_err}", flush=True)
+                             return
+
+                        # Check for final page errors (already done)
+                        page_err_stream_final = await detect_and_extract_page_error(page, req_id)
+                        if page_err_stream_final:
+                            print(f"[{req_id}] (Worker Stream Gen) ❌ 完成前错误: {page_err_stream_final}", flush=True) # 中文
+                            await save_error_snapshot(f"page_error_stream_final_{req_id}")
+                            try:
+                                yield generate_sse_error_chunk(f"AI Studio 错误: {page_err_stream_final}", req_id, "upstream_error") # 中文
+                                yield "data: [DONE]\n\n"
+                            except Exception as yield_err: print(f"[{req_id}] Error yielding final page error chunk: {yield_err}", flush=True)
+
+                        elif stream_finished_naturally:
+                            print(f"[{req_id}] (Worker Stream Gen) 流自然结束，最终内容检查...", flush=True) # 中文
+                            # 获取最终文本内容，再次检查分块
+                            final_raw_text = await get_raw_text_content(response_element, last_raw_text, req_id)
+                            print(f"[{req_id}] (Worker Stream Gen DEBUG) Final Raw Text Check (len={len(final_raw_text)}): '{final_raw_text[:150].replace('\n', '\\n')}...'", flush=True)
+                            
+                            # 最终检查是否有新增内容
+                            final_marker_index = final_raw_text.find(start_marker)
+                            if final_marker_index != -1:
+                                # 获取标记后的完整最终内容
+                                final_content_after_marker = final_raw_text[final_marker_index + len(start_marker):]
+                                # 计算与上次发送相比的新增内容
+                                final_delta = final_content_after_marker[len(last_sent_response_content):]
+                                
+                                if final_delta:
+                                    try:
+                                        print(f"[{req_id}] (Worker Stream Gen DEBUG) Sending Final Delta (len={len(final_delta)}): '{final_delta[:100].replace('\n', '\\n')}...'", flush=True)
+                                        yield generate_sse_chunk(final_delta, req_id, MODEL_NAME)
+                                    except Exception as yield_err:
+                                        print(f"[{req_id}] (Worker Stream Gen) ❌ ERROR yielding final delta chunk: {yield_err}", flush=True)
+                                        traceback.print_exc()
+                                        try: yield generate_sse_error_chunk(f"Error yielding final delta: {yield_err}", req_id, "internal_server_error")
+                                        except Exception: pass
+                                else:
+                                    print(f"[{req_id}] (Worker Stream Gen) 最终检查无新内容。", flush=True)
+                            elif response_started:
+                                print(f"[{req_id}] (Worker Stream Gen) 警告: 最终检查时起始标记消失。", flush=True)
+
+                            # 发送完成信号
+                            try:
+                                # 创建停止块
+                                stop_chunk = {
+                                    "id": f"{CHAT_COMPLETION_ID_PREFIX}{req_id}-{int(time.time())}-stop",
+                                    "object": "chat.completion.chunk",
+                                    "created": int(time.time()),
+                                    "model": MODEL_NAME,
+                                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
+                                }
+                                yield f"data: {json.dumps(stop_chunk)}\n\n"
+                                print(f"[{req_id}] (Worker Stream Gen) ✅ 流自然完成 (stop chunk yielded)。", flush=True)
+                                # 确保在 stop chunk 后面加上 [DONE]
+                                yield "data: [DONE]\n\n"
+                            except Exception as yield_err:
+                                print(f"[{req_id}] (Worker Stream Gen) ❌ ERROR yielding stop chunk: {yield_err}", flush=True)
+                                traceback.print_exc()
+                                try: 
+                                    yield generate_sse_error_chunk(f"Error yielding stop chunk: {yield_err}", req_id, "internal_server_error")
+                                    yield "data: [DONE]\n\n"
+                                except Exception: pass
+                        else: # 超时情况
+                            print(f"[{req_id}] (Worker Stream Gen) ⚠️ 流超时。", flush=True)
+                            await save_error_snapshot(f"streaming_timeout_{req_id}")
+                            try:
+                                yield generate_sse_error_chunk("流处理在服务器上超时。", req_id)
+                                # 发送停止块
+                                stop_chunk = {
+                                    "id": f"{CHAT_COMPLETION_ID_PREFIX}{req_id}-{int(time.time())}-timeout",
+                                    "object": "chat.completion.chunk",
+                                    "created": int(time.time()),
+                                    "model": MODEL_NAME,
+                                    "choices": [{"index": 0, "delta": {}, "finish_reason": "timeout"}]
+                                }
+                                yield f"data: {json.dumps(stop_chunk)}\n\n"
+                                yield "data: [DONE]\n\n"
+                            except Exception as yield_err: 
+                                print(f"[{req_id}] Error yielding timeout error/stop chunk: {yield_err}", flush=True)
+
+                        # Wrap final DONE yield
+                        try:
+                             yield "data: [DONE]\n\n"
+                        except Exception as yield_err:
+                             print(f"[{req_id}] (Worker Stream Gen) ❌ ERROR yielding final [DONE] chunk: {yield_err}", flush=True)
+                             traceback.print_exc()
+
+                    except asyncio.CancelledError:
+                        print(f"[{req_id}] (Worker Stream Gen) 流生成器被取消。", flush=True) # 中文
+                        # Attempt to yield DONE even on cancellation? Maybe not.
+                    except Exception as e:
+                        print(f"[{req_id}] (Worker Stream Gen) ❌ 流式生成意外错误 (在主 try 块捕获): {e}", flush=True) # 中文
+                        traceback.print_exc()
+                        # Attempt to yield error chunk if main loop fails
+                        try:
+                            yield generate_sse_error_chunk(f"流式处理期间服务器意外错误: {e}", req_id) # 中文
+                            # yield "data: [DONE]\n\n" # Also remove the DONE here after error chunk? Let finally handle it.
+                        except Exception as yield_final_err:
+                             print(f"[{req_id}] (Worker Stream Gen) 尝试 yield 最终错误块时出错: {yield_final_err}", flush=True) # 中文
+                             if not result_future.done():
+                                  result_future.set_exception(HTTPException(status_code=500, detail=f"[{req_id}] Stream generation error and yield failed: {e}"))
+                    finally:
+                        # 在 finally 块中设置事件，表示生成器完成
+                        print(f"[{req_id}] (Worker Stream Gen) Setting completion event in finally block.")
+                        if not event_to_set.is_set():
+                            event_to_set.set()
+                        
+                        # 确保总是发送一个最终的 [DONE]
+                        yielded_done = False
+                        if 'yield_err' not in locals() and 'yield_final_err' not in locals() and not client_disconnected_event.is_set() and not isinstance(locals().get('e'), asyncio.CancelledError):
+                             try:
+                                  yield "data: [DONE]\n\n"
+                                  yielded_done = True
+                                  print(f"[{req_id}] (Worker Stream Gen) Yielded [DONE] in finally, adding small delay...", flush=True)
+                                  await asyncio.sleep(0.1) # Add a small delay
+                                  print(f"[{req_id}] (Worker Stream Gen) Delay finished.", flush=True)
+                             except Exception as yield_err_final:
+                                  print(f"[{req_id}] (Worker Stream Gen) ❌ ERROR yielding final [DONE] chunk or during delay in finally: {yield_err_final}", flush=True)
+                                  traceback.print_exc()
+                        elif not yielded_done:
+                             print(f"[{req_id}] (Worker Stream Gen) Skipping final [DONE] due to previous error, cancellation, or disconnect.", flush=True)
+                
+                return stream_generator  # 返回生成器函数本身，而不是调用它
 
             # Set the generator function itself as the result
             if not result_future.done():
-                result_future.set_result(stream_generator)
+                 # 修改：将创建生成器函数的调用结果(即生成器函数)设置到 result_future
+                 result_future.set_result(await create_stream_generator(completion_event))
             else:
                  print(f"[{req_id}] (Worker) Future 已完成/取消，无法设置流生成器结果。", flush=True)
-
+                 if completion_event and not completion_event.is_set():
+                      completion_event.set() # 如果 Future 已经完成，确保事件被设置，防止 worker 死锁
 
         else: # Non-streaming
             print(f"[{req_id}] (Worker) 处理非流式响应...", flush=True) # 中文
@@ -1754,6 +2051,13 @@ async def _process_request_from_queue(
               except asyncio.CancelledError: pass
               # print(f"[{req_id}] (Worker) Disconnect check task cleanup attempted.") # Debug log
          print(f"[{req_id}] (Worker) --- 完成处理请求 (退出 _process_request_from_queue) --- ", flush=True) # 中文
+         # <<< 新增：在 finally 中最后检查并设置事件，以防万一 >>>
+         if is_streaming and completion_event and not completion_event.is_set():
+              print(f"[{req_id}] (Worker) Setting completion event in outer finally block as a safeguard.")
+              completion_event.set()
+
+    # <<< 新增：返回 completion_event (仅对流式请求) >>>
+    return completion_event
 
 
 @app.post("/v1/chat/completions")
