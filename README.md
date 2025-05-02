@@ -197,3 +197,53 @@ node auto_connect_aistudio.cjs
 ## 📄 License
 
 [MIT](LICENSE) <!-- 你需要添加一个 MIT 许可证文件 --> 
+
+## 控制日志输出
+
+服务器支持通过环境变量或命令行参数控制日志输出级别。这对于调试和减少日志噪音非常有用。
+
+### 命令行参数
+
+```bash
+# 启用详细调试日志
+python server.py --debug-logs
+
+# 启用更详细的跟踪日志（包含所有调试信息）
+python server.py --trace-logs
+
+# 自定义日志输出间隔
+python server.py --log-interval 50 --log-time-interval 5.0
+
+# 修改监听地址和端口
+python server.py --host 0.0.0.0 --port 3000
+```
+
+### 环境变量
+
+也可以通过环境变量控制日志：
+
+```bash
+# Linux/macOS
+export DEBUG_LOGS_ENABLED=true
+export TRACE_LOGS_ENABLED=true
+export LOG_INTERVAL=50
+export LOG_TIME_INTERVAL=5.0
+python server.py
+
+# Windows
+set DEBUG_LOGS_ENABLED=true
+set TRACE_LOGS_ENABLED=true
+set LOG_INTERVAL=50
+set LOG_TIME_INTERVAL=5.0
+python server.py
+```
+
+## 常见问题
+
+### 日志过多
+- 默认情况下，详细日志是禁用的。如果遇到问题需要调试，可使用 `--debug-logs` 参数启用详细日志。
+- 对于非常详细的内部日志，可使用 `--trace-logs` 参数。
+
+### 调整日志频率
+- `--log-interval` 控制按循环次数的日志输出频率（默认每20次循环输出一次）
+- `--log-time-interval` 控制按时间的日志输出频率（默认每3秒输出一次）

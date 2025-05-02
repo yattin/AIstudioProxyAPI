@@ -22,21 +22,30 @@ from pydantic import BaseModel, Field
 from playwright.async_api import Page as AsyncPage, Browser as AsyncBrowser, Playwright as AsyncPlaywright, Error as PlaywrightAsyncError, expect as expect_async, BrowserContext as AsyncBrowserContext
 from playwright.async_api import async_playwright
 
+# --- 全局日志控制配置 ---
+# 通过环境变量控制全局日志级别
+DEBUG_LOGS_ENABLED = os.environ.get('DEBUG_LOGS_ENABLED', 'false').lower() in ('true', '1', 'yes')
+TRACE_LOGS_ENABLED = os.environ.get('TRACE_LOGS_ENABLED', 'false').lower() in ('true', '1', 'yes')
+# 用于流生成器的日志间隔 (次数)
+LOG_INTERVAL = int(os.environ.get('LOG_INTERVAL', '20'))  # 默认每20次迭代输出一次日志
+# 用于流生成器的时间间隔 (秒)
+LOG_TIME_INTERVAL = float(os.environ.get('LOG_TIME_INTERVAL', '3.0'))  # 默认每3秒输出一次日志
+
 # --- Configuration (Mirrored from server.cjs, adjust as needed) ---
 # SERVER_PORT = 2048 # Port will be handled by uvicorn when running
 AI_STUDIO_URL_PATTERN = 'aistudio.google.com/'
 RESPONSE_COMPLETION_TIMEOUT = 300000 # 5 minutes total timeout (in ms)
 POLLING_INTERVAL = 300 # ms - Standard polling interval
-POLLING_INTERVAL_STREAM = 200 # ms - Stream-specific polling interval
+POLLING_INTERVAL_STREAM = 180 # ms - Stream-specific polling interval
 SILENCE_TIMEOUT_MS = 3000 # ms (Increased from 1500ms)
 # v2.12: Timeout for secondary checks *after* spinner disappears
 POST_SPINNER_CHECK_DELAY_MS = 500 # Spinner消失后稍作等待再检查其他状态
 FINAL_STATE_CHECK_TIMEOUT_MS = 1500 # 检查按钮和输入框最终状态的超时
 SPINNER_CHECK_TIMEOUT_MS = 1000 # 检查Spinner状态的超时
-POST_COMPLETION_BUFFER = 1000 # JSON模式下可以缩短检查后等待时间
+POST_COMPLETION_BUFFER = 700 # JSON模式下可以缩短检查后等待时间
 # !! 新增：清空验证相关常量 !! (Mirrored)
 CLEAR_CHAT_VERIFY_TIMEOUT_MS = 5000 # 等待清空生效的总超时时间 (ms)
-CLEAR_CHAT_VERIFY_INTERVAL_MS = 300 # 检查清空状态的轮询间隔 (ms)
+CLEAR_CHAT_VERIFY_INTERVAL_MS = 400 # 检查清空状态的轮询间隔 (ms)
 
 # --- Configuration ---
 # STORAGE_STATE_PATH = os.path.join(os.path.dirname(__file__), "auth_state.json") # Old path, replaced by profile logic
@@ -45,7 +54,7 @@ ACTIVE_AUTH_DIR = os.path.join(AUTH_PROFILES_DIR, 'active')
 SAVED_AUTH_DIR = os.path.join(AUTH_PROFILES_DIR, 'saved')
 
 # --- Constants (Mirrored from server.cjs, verify if still valid in Firefox/Camoufox) ---
-MODEL_NAME = 'google-ai-studio-via-camoufox-fastapi' # Updated model name
+MODEL_NAME = 'AI-Studio_Camoufox-Proxy' # Updated model name
 CHAT_COMPLETION_ID_PREFIX = 'chatcmpl-'
 
 # --- Selectors (Mirrored from server.cjs, verify if still valid in Firefox/Camoufox) ---
@@ -226,7 +235,6 @@ def validate_chat_request(messages: List[Message], req_id: str) -> Dict[str, Opt
     }
 
 async def get_raw_text_content(response_element, previous_text: str, req_id: str) -> str:
-    # ... (code unchanged) ...
     """获取AI响应的原始文本内容，优先使用 <pre> 标签，并清理已知UI文本。"""
     raw_text = previous_text # 默认返回上一次的文本以防万一
     try:
@@ -247,17 +255,20 @@ async def get_raw_text_content(response_element, previous_text: str, req_id: str
                 # Reduce timeout for getting text
                 raw_text = await pre_element.inner_text(timeout=500)
             except PlaywrightAsyncError as pre_err:
-                print(f"[{req_id}] (Warn) Failed to get innerText from visible <pre>: {pre_err.message.split('\\n')[0]}", flush=True)
+                if DEBUG_LOGS_ENABLED:
+                    print(f"[{req_id}] (Warn) Failed to get innerText from visible <pre>: {pre_err.message.split('\\n')[0]}", flush=True)
                 try:
                      raw_text = await response_element.inner_text(timeout=1000) # Slightly longer fallback
                 except PlaywrightAsyncError as e_parent:
-                     print(f"[{req_id}] (Warn) getRawTextContent (inner_text) failed on parent after <pre> fail: {e_parent}. Returning previous.", flush=True)
+                     if DEBUG_LOGS_ENABLED:
+                         print(f"[{req_id}] (Warn) getRawTextContent (inner_text) failed on parent after <pre> fail: {e_parent}. Returning previous.", flush=True)
                      raw_text = previous_text
         else:
             try:
                  raw_text = await response_element.inner_text(timeout=1500) # Slightly longer if no pre
             except PlaywrightAsyncError as e_parent:
-                 print(f"[{req_id}] (Warn) getRawTextContent (inner_text) failed on parent (no pre): {e_parent}. Returning previous.", flush=True)
+                 if DEBUG_LOGS_ENABLED:
+                     print(f"[{req_id}] (Warn) getRawTextContent (inner_text) failed on parent (no pre): {e_parent}. Returning previous.", flush=True)
                  raw_text = previous_text
 
         # --- Text Cleaning Logic --- (Unchanged)
@@ -944,24 +955,71 @@ async def save_error_snapshot(error_name: str = 'error'):
         print(f"{log_prefix}   创建错误目录或保存快照时出错: {dir_err}") # 中文
 
 
-# --- 新增：队列 Worker 函数 ---
+# --- 对 queue_worker 函数进行增强，改进多并发流式请求的处理 ---
 async def queue_worker():
     """后台任务，持续处理请求队列中的项目"""
     print("--- 队列 Worker 已启动 ---") # 中文
+    was_last_request_streaming = False  # 新增：跟踪上一个请求是否为流式
+    last_request_completion_time = 0  # 新增：跟踪上一个请求的完成时间
+    
     while True:
         request_item = None
         result_future = None # Initialize future here
         req_id = "UNKNOWN" # Default req_id
-        completion_event = None # <<< 新增：用于接收完成事件
+        completion_event = None # 用于接收完成事件
+        is_streaming_request = False  # 新增：判断当前请求是否为流式
+        
         try:
+            # 检查队列中是否有已经断开连接的请求
+            queue_size = request_queue.qsize()
+            if queue_size > 0:
+                # 检查队列中的项目，标记已断开连接的请求为取消状态
+                checked_count = 0
+                for item in list(request_queue._queue):
+                    if checked_count >= 5:  # 限制每次检查的数量，避免阻塞太久
+                        break
+                    if not item.get("cancelled", False):
+                        item_req_id = item.get("req_id", "unknown")
+                        item_http_request = item.get("http_request")
+                        if item_http_request:
+                            try:
+                                is_disconnected = await item_http_request.is_disconnected()
+                                if is_disconnected:
+                                    print(f"[{item_req_id}] (Worker) 检测到队列中的请求客户端已断开连接，标记为已取消。", flush=True)
+                                    item["cancelled"] = True
+                                    item_future = item.get("result_future")
+                                    if item_future and not item_future.done():
+                                        item_future.set_exception(HTTPException(status_code=499, detail=f"[{item_req_id}] 客户端在排队期间断开连接"))
+                            except Exception as e:
+                                print(f"[{item_req_id}] (Worker) 检查队列项连接状态时出错: {e}", flush=True)
+                    checked_count += 1
+
             # 从队列中获取下一个请求项
             request_item = await request_queue.get()
             req_id = request_item["req_id"]
             request_data = request_item["request_data"]
             http_request = request_item["http_request"]
             result_future = request_item["result_future"] # Assign future
+            
+            # 新增：检查请求是否已取消
+            if request_item.get("cancelled", False):
+                print(f"[{req_id}] (Worker) 请求已被标记为取消，跳过处理。", flush=True)
+                if not result_future.done():
+                    result_future.set_exception(HTTPException(status_code=499, detail=f"[{req_id}] 请求已被用户取消"))
+                request_queue.task_done()
+                continue # 跳过处理，获取下一个请求
+            
+            # 新增：确定当前请求是否为流式
+            is_streaming_request = request_data.stream if hasattr(request_data, 'stream') else False
 
-            print(f"[{req_id}] (Worker) 从队列中取出请求。", flush=True) # 中文
+            print(f"[{req_id}] (Worker) 从队列中取出请求。模式: {'流式' if is_streaming_request else '非流式'}", flush=True) # 中文
+
+            # 新增：如果上一个请求是流式且当前也是流式，增加短暂延迟确保状态已完全重置
+            current_time = time.time()
+            if was_last_request_streaming and is_streaming_request and (current_time - last_request_completion_time < 1.0):
+                delay_time = max(0.5, 1.0 - (current_time - last_request_completion_time))
+                print(f"[{req_id}] (Worker) 检测到连续流式请求，添加 {delay_time:.2f}s 延迟以确保状态重置...", flush=True)
+                await asyncio.sleep(delay_time)
 
             # 检查客户端是否在进入处理锁之前断开连接
             if await http_request.is_disconnected():
@@ -975,6 +1033,32 @@ async def queue_worker():
             print(f"[{req_id}] (Worker) 等待获取处理锁...", flush=True) # 中文
             async with processing_lock:
                 print(f"[{req_id}] (Worker) 已获取处理锁。开始核心处理...", flush=True) # 中文
+                
+                # 新增：流式请求前的额外状态检查
+                if is_streaming_request and was_last_request_streaming:
+                    print(f"[{req_id}] (Worker) 连续流式请求前额外检查页面状态...", flush=True)
+                    try:
+                        # 确保页面已准备好接收新请求
+                        if page_instance and not page_instance.is_closed():
+                            # 检查页面当前是否处于稳定状态
+                            input_field = page_instance.locator(INPUT_SELECTOR)
+                            submit_button = page_instance.locator(SUBMIT_BUTTON_SELECTOR)
+                            
+                            # 简短超时检查输入框是否可用
+                            is_input_visible = await input_field.is_visible(timeout=1000)
+                            is_submit_enabled = False
+                            try:
+                                is_submit_enabled = await submit_button.is_enabled(timeout=1000)
+                            except:
+                                pass
+                                
+                            if not is_input_visible:
+                                print(f"[{req_id}] (Worker) 警告：输入框未处于可见状态，可能需要页面刷新。", flush=True)
+                                
+                            print(f"[{req_id}] (Worker) 页面状态检查: 输入框可见={is_input_visible}, 提交按钮可用={is_submit_enabled}", flush=True)
+                    except Exception as check_err:
+                        print(f"[{req_id}] (Worker) 页面状态检查时出错: {check_err}。继续处理...", flush=True)
+                
                 # 再次检查连接状态，以防在获取锁期间断开
                 if await http_request.is_disconnected():
                      print(f"[{req_id}] (Worker) 客户端在获取锁后、处理前断开连接。取消。", flush=True) # 中文
@@ -984,11 +1068,10 @@ async def queue_worker():
                      print(f"[{req_id}] (Worker) 请求 Future 在处理开始前已完成/取消。跳过。", flush=True) # 中文
                 elif result_future: # Ensure future exists
                     # 调用核心处理逻辑，并接收返回的事件
-                    # <<< 修改：接收 completion_event >>>
                     completion_event = await _process_request_from_queue(
                         req_id, request_data, http_request, result_future
                     )
-                    # <<< 新增：如果收到完成事件，等待它 >>>
+                    # 如果收到完成事件，等待它
                     if completion_event:
                          print(f"[{req_id}] (Worker) 等待流式生成器完成信号...", flush=True)
                          try:
@@ -1002,20 +1085,42 @@ async def queue_worker():
                               print(f"[{req_id}] (Worker) ❌ 错误：等待流式完成事件时出错: {wait_err}", flush=True)
                 else:
                     print(f"[{req_id}] (Worker) 错误：Future 对象丢失。无法处理请求。", flush=True)
-                    # Mark task as done even if future is lost (handled in finally)
+                
+                # 新增：请求处理后的清理操作，特别是对于流式请求
+                if is_streaming_request:
+                    try:
+                        # 尝试一些轻量级的页面状态重置操作
+                        print(f"[{req_id}] (Worker) 流式请求处理后进行页面状态重置...", flush=True)
+                        # 简单的滚动操作有助于重置部分UI状态
+                        if page_instance and not page_instance.is_closed():
+                            await page_instance.evaluate('window.scrollTo(0, 0)')
+                    except Exception as reset_err:
+                        print(f"[{req_id}] (Worker) 页面状态重置时出错: {reset_err}", flush=True)
 
+            # 更新请求跟踪状态
+            was_last_request_streaming = is_streaming_request
+            last_request_completion_time = time.time()
             print(f"[{req_id}] (Worker) 处理完成或等待结束，已释放锁。", flush=True) # 中文
 
-        # ... (现有异常处理：CancelledError, Exception)
         except asyncio.CancelledError:
-             # ...
+             print("--- 队列 Worker 收到取消信号，正在退出 ---", flush=True) # 中文
+             # 如果 worker 被取消，尝试取消当前正在处理的请求的 future
+             if result_future and not result_future.done():
+                  print(f"[{req_id}] (Worker) 取消当前处理请求的 Future...", flush=True)
+                  result_future.set_exception(HTTPException(status_code=503, detail=f"[{req_id}] 服务器关闭中，请求被取消"))
              break # 退出循环
         except Exception as e:
-             # ... (Worker 自身的未捕获错误)
-             # <<< 新增：在 Worker 错误时，如果事件存在且未设置，尝试设置它 >>>
+             # Worker 自身的未捕获错误
+             print(f"[Worker Error] Worker 循环中发生意外错误 (Req ID: {req_id}): {e}", flush=True) # 中文
+             traceback.print_exc()
+             # 尝试通知客户端（如果可能）
+             if result_future and not result_future.done():
+                  result_future.set_exception(HTTPException(status_code=500, detail=f"[{req_id}] Worker 内部错误: {e}")) # 中文
+             # 在 Worker 错误时，如果事件存在且未设置，尝试设置它
              if completion_event and not completion_event.is_set():
                   print(f"[{req_id}] (Worker) Setting completion event due to worker loop error.")
                   completion_event.set()
+             # 避免 worker 因单个请求处理错误而崩溃，继续处理下一个
         finally:
              # Ensure task_done is called even if future was missing or error occurred before processing
              if request_item:
@@ -1540,6 +1645,8 @@ async def _process_request_from_queue(
                     loop_counter = 0
                     last_scroll_time = 0
                     scroll_interval_ms = 3000
+                    debug_logs_enabled = DEBUG_LOGS_ENABLED  # 使用全局日志配置
+                    last_debug_log_time = 0  # 上次输出DEBUG日志的时间
 
                     # 新增: 发送初始流信息以符合OpenAI API格式
                     try:
@@ -1574,7 +1681,9 @@ async def _process_request_from_queue(
                                     await page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
                                     last_scroll_time = current_loop_time_ms
                                 except Exception as scroll_e:
-                                    print(f"[{req_id}] (Worker Stream Gen) 滚动失败: {scroll_e}", flush=True)
+                                    # 减少日志：滚动失败可能很常见，且通常不影响功能
+                                    if debug_logs_enabled:
+                                        print(f"[{req_id}] (Worker Stream Gen) 滚动失败: {scroll_e}", flush=True)
                             if client_disconnected_event.is_set(): break
 
                             # --- Periodic Error Check ---
@@ -1594,15 +1703,19 @@ async def _process_request_from_queue(
                                 # Make this faster, rely on loop for retries
                                 fetched_raw_text = await asyncio.wait_for(get_raw_text_content(response_element, last_raw_text, req_id), timeout=1.5)
                             except asyncio.TimeoutError:
-                                print(f"[{req_id}] (Worker Stream Gen) 获取文本超时，使用上次文本。", flush=True)
+                                # 减少日志：仅在开启详细日志时输出
+                                if debug_logs_enabled:
+                                    print(f"[{req_id}] (Worker Stream Gen) 获取文本超时，使用上次文本。", flush=True)
                                 fetched_raw_text = last_raw_text
                             except Exception as getTextErr:
                                 print(f"[{req_id}] (Worker Stream Gen) 获取文本失败: {getTextErr}", flush=True)
                                 fetched_raw_text = last_raw_text # Use previous on error
 
-                            # <<< ADDED DEBUG LOG >>>
-                            print(f"[{req_id}] (Worker Stream Gen DEBUG) Fetched Raw Text (len={len(fetched_raw_text)}): '{fetched_raw_text[:150].replace('\n', '\\n')}...'", flush=True)
-                            # <<< END DEBUG LOG >>>
+                            # 减少DEBUG日志输出频率：仅在特定条件下输出原始文本日志
+                            current_time = time.time()
+                            if debug_logs_enabled and (current_time - last_debug_log_time > LOG_TIME_INTERVAL or loop_counter % LOG_INTERVAL == 0):  # 使用全局配置的间隔
+                                last_debug_log_time = current_time
+                                print(f"[{req_id}] (Stream DEBUG) Raw Text (len={len(fetched_raw_text)}): '{fetched_raw_text[:100].replace('\n', '\\n')}...'", flush=True)
 
                             current_raw_text = fetched_raw_text # Use the fetched text for processing
                             if client_disconnected_event.is_set(): break
@@ -1627,7 +1740,8 @@ async def _process_request_from_queue(
                                     
                                     if potential_new_delta:
                                         try:
-                                            print(f"[{req_id}] (Worker Stream Gen DEBUG) Sending Delta (len={len(potential_new_delta)}): '{potential_new_delta[:100].replace('\n', '\\n')}...'", flush=True)
+                                            # 减少日志：当发送数据块时仅输出简化版本的日志
+                                            print(f"[{req_id}] (Stream) 发送数据 (长度={len(potential_new_delta)}字符)", flush=True)
                                             chunk_str = generate_sse_chunk(potential_new_delta, req_id, MODEL_NAME)
                                             yield chunk_str
                                             last_sent_response_content += potential_new_delta
@@ -1657,7 +1771,9 @@ async def _process_request_from_queue(
                                      print(f"[{req_id}] (Worker Stream Gen) Spinner 已隐藏。", flush=True) # 中文
                                  except (AssertionError, PlaywrightAsyncError): pass # Spinner still visible or locator error
                                  except Exception as spinner_check_err:
-                                     print(f"[{req_id}] (Worker Stream Gen) 检查 spinner 状态时出错: {spinner_check_err}", flush=True)
+                                     # 减少日志：spinner检查错误通常不重要
+                                     if debug_logs_enabled:
+                                         print(f"[{req_id}] (Worker Stream Gen) 检查 spinner 状态时出错: {spinner_check_err}", flush=True)
                             if client_disconnected_event.is_set(): break
 
                             # --- Silence Check ---
@@ -2085,7 +2201,9 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
          "req_id": req_id,
          "request_data": request,
          "http_request": http_request, # Pass the original request object
-         "result_future": result_future
+         "result_future": result_future,
+         "timestamp": time.time(),  # 添加时间戳，用于计算队列时间
+         "cancelled": False  # 新增：取消标记
     }
 
     await request_queue.put(queue_item)
@@ -2104,7 +2222,8 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
                 headers = {
                     'Cache-Control': 'no-cache',
                     'Connection': 'keep-alive',
-                    'Content-Type': 'text/event-stream'
+                    'Content-Type': 'text/event-stream',
+                    'X-Request-ID': req_id  # 添加请求ID到响应头
                 }
                 return StreamingResponse(result(), media_type="text/event-stream", headers=headers)
             else:
@@ -2113,8 +2232,13 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
                 raise HTTPException(status_code=500, detail=f"[{req_id}] 服务器内部错误：流式处理未能生成有效响应") # 中文
         else:
             if isinstance(result, dict):
+                # 为非流式响应添加请求ID
+                if isinstance(result, dict) and 'id' in result:
+                    # 确保id中包含req_id以便客户端追踪
+                    if req_id not in result['id']:
+                        result['id'] = f"{result['id']}_{req_id}"
                 print(f"[{req_id}] 返回 JSON 响应。", flush=True) # 中文
-                return JSONResponse(content=result)
+                return JSONResponse(content=result, headers={"X-Request-ID": req_id})
             else:
                 print(f"[{req_id}] 错误: 非流式请求 Worker 未返回字典。", flush=True) # 中文
                 # 如果 Worker 未返回字典，抛出 500
@@ -2137,19 +2261,100 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
         if not result_future.done():
              result_future.set_exception(e) # 如果 await 已完成，不应触发
         raise HTTPException(status_code=500, detail=f"[{req_id}] 处理请求时发生意外服务器错误: {e}") # 中文
-    # 不需要 finally 块，因为断开连接任务由 Worker 处理
+
+# --- 新增：辅助函数，搜索队列中的请求并标记为取消 ---
+async def cancel_queued_request(req_id: str) -> bool:
+    """在队列中查找指定req_id的请求并标记为取消。
+    
+    返回:
+        bool: 如果找到并标记了请求则返回True，否则返回False
+    """
+    cancelled = False
+    # 直接搜索队列中的项目
+    for item in list(request_queue._queue):
+        if item.get("req_id") == req_id and not item.get("cancelled", False):
+            print(f"[{req_id}] 在队列中找到请求，标记为已取消。", flush=True)
+            item["cancelled"] = True
+            cancelled = True
+            break
+    return cancelled
+
+# --- 新增：添加取消请求的API端点 ---
+@app.post("/v1/cancel/{req_id}")
+async def cancel_request(req_id: str):
+    """取消指定ID的请求，如果它还在队列中等待处理"""
+    print(f"[{req_id}] 收到取消请求。", flush=True)
+    cancelled = await cancel_queued_request(req_id)
+    if cancelled:
+        return JSONResponse(content={"success": True, "message": f"Request {req_id} marked as cancelled"})
+    else:
+        # 未找到请求或请求已经在处理中
+        return JSONResponse(
+            content={"success": False, "message": f"Request {req_id} not found in queue or already processing"},
+            status_code=404
+        )
+
+# --- 新增：添加队列状态查询的API端点 ---
+@app.get("/v1/queue")
+async def get_queue_status():
+    """返回当前队列状态的信息"""
+    queue_items = []
+    # 直接从队列中收集信息
+    for item in list(request_queue._queue):
+        req_id = item.get("req_id", "unknown")
+        timestamp = item.get("timestamp", 0)
+        is_streaming = item.get("request_data").stream if hasattr(item.get("request_data", {}), "stream") else False
+        cancelled = item.get("cancelled", False)
+        queue_items.append({
+            "req_id": req_id,
+            "timestamp": timestamp,
+            "wait_time": round(time.time() - timestamp, 2),
+            "is_streaming": is_streaming,
+            "cancelled": cancelled
+        })
+    
+    return JSONResponse(content={
+        "queue_length": request_queue.qsize(),
+        "is_processing": not processing_lock.locked(), # 修正，使用锁状态判断
+        "items": queue_items
+    })
 
 # --- __main__ block --- (Translate print statements)
 if __name__ == "__main__":
-    # ... (code unchanged) ...
+    import argparse
+    
+    # 解析命令行参数
+    parser = argparse.ArgumentParser(description='AI Studio Camoufox 代理服务器')
+    parser.add_argument('--port', type=int, default=2048, help='服务器监听端口')
+    parser.add_argument('--host', type=str, default='127.0.0.1', help='服务器监听地址')
+    parser.add_argument('--debug-logs', action='store_true', help='启用详细调试日志输出')
+    parser.add_argument('--trace-logs', action='store_true', help='启用更详细的跟踪日志输出')
+    parser.add_argument('--log-interval', type=int, default=20, help='日志输出间隔(计数)')
+    parser.add_argument('--log-time-interval', type=float, default=3.0, help='日志输出时间间隔(秒)')
+    
+    args = parser.parse_args()
+    
+    # 设置日志级别环境变量
+    if args.debug_logs:
+        os.environ['DEBUG_LOGS_ENABLED'] = 'true'
+        print("已启用详细调试日志")
+    
+    if args.trace_logs:
+        os.environ['TRACE_LOGS_ENABLED'] = 'true'
+        print("已启用更详细的跟踪日志")
+    
+    os.environ['LOG_INTERVAL'] = str(args.log_interval)
+    os.environ['LOG_TIME_INTERVAL'] = str(args.log_time_interval)
+    
+    # 执行依赖检查
     check_dependencies()
-    SERVER_PORT = 2048
+    SERVER_PORT = args.port
     print(f"--- 步骤 2: 准备启动 FastAPI/Uvicorn (端口: {SERVER_PORT}) ---") # 中文
     import uvicorn
     try:
         uvicorn.run(
             "server:app",
-            host="127.0.0.1",
+            host=args.host,
             port=SERVER_PORT,
             log_level="info",
             workers=1, # MUST be 1 due to shared Playwright state and queue
@@ -2167,4 +2372,4 @@ if __name__ == "__main__":
     except Exception as e:
          print(f"❌ 启动服务器时发生意外错误: {e}") # 中文
          traceback.print_exc()
-         sys.exit(1) 
+         sys.exit(1)
