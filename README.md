@@ -9,23 +9,24 @@
 ## 📝 目录
 
 *   [项目概述](#项目概述)
-*   [免责声明](#-免责声明)
-*   [核心特性](#-核心特性-python-版本)
-*   [重要提示](#️-重要提示-python-版本)
+*   [免责声明](#免责声明)
+*   [核心特性](#核心特性-python-版本)
+*   [重要提示](#️重要提示-python-版本)
 *   [开始使用](#-开始使用-python-版本)
     *   [1. 先决条件](#1-先决条件)
     *   [2. 安装](#2-安装)
-    *   [3. 认证设置 (关键!)](#3-认证设置-关键步骤)
+    *   [3. 认证设置 (关键步骤!)](#3-认证设置-关键步骤)
     *   [4. 运行代理](#4-运行代理)
     *   [5. API 使用](#5-api-使用)
-    *   [6. 配置客户端](#6-配置客户端-以-open-webui-为例)
-*   [多平台指南](#-多平台指南-python-版本)
-*   [故障排除](#-故障排除-python-版本)
-*   [关于 Camoufox](#-关于-camoufox)
-*   [关于 `fetch_camoufox_data.py`](#-关于-fetch_camoufox_datapy)
-*   [贡献](#-贡献)
-*   [License](#-license)
-*   [未来计划 / Roadmap](#-未来计划--roadmap)
+    *   [6. 配置客户端 (以 Open WebUI 为例)](#6-配置客户端-以-open-webui-为例)
+    *   [7. (可选) 局域网域名访问 (mDNS)](#7-可选-局域网域名访问-mdns)
+*   [多平台指南](#多平台指南-python-版本)
+*   [故障排除](#故障排除-python-版本)
+*   [关于 Camoufox](#关于-camoufox)
+*   [关于 `fetch_camoufox_data.py`](#关于-fetch_camoufox_datapy)
+*   [贡献](#贡献)
+*   [License](#license)
+*   [未来计划 / Roadmap](#未来计划--roadmap)
 *   [控制日志输出](#控制日志输出-python-版本)
 
 ---
@@ -305,6 +306,37 @@
 6.  **API 密钥**: 留空或输入任意字符 (服务器不验证)。
 7.  保存设置。
 8.  现在，你应该可以在 Open WebUI 中选择 `aistudio-gemini-py` 模型并开始聊天了。
+
+### 7. (可选) 局域网域名访问 (mDNS)
+
+项目包含一个辅助脚本 `mdns_publisher.py`，它使用 mDNS (Bonjour/ZeroConf) 在你的局域网内广播此代理服务。这允许你和其他局域网内的设备通过一个更友好的 `.local` 域名（例如 `http://chatui.local:2048`）来访问服务，而无需记住或查找服务器的 IP 地址。
+
+**用途:**
+
+*   当你希望在手机、平板或其他电脑上方便地访问运行在 Mac/PC 上的代理服务时。
+*   避免因 IP 地址变化而需要更新客户端配置。
+
+**如何使用:**
+
+1.  **安装依赖:** 此脚本需要额外的库。在你的虚拟环境中运行：
+    ```bash
+    pip install zeroconf netifaces
+    ```
+2.  **运行脚本:** 你需要**同时运行** `server.py` (监听在 `0.0.0.0` 和指定端口，如 2048) 和 `mdns_publisher.py`。
+    在**另一个终端**窗口，运行：
+    ```bash
+    python mdns_publisher.py
+    ```
+    *   默认广播的域名是 `chatui.local`，广播的端口是脚本内 `PORT` 变量定义的端口 (当前为 2048)。
+    *   你可以使用 `--name yourname` 参数来修改广播的域名前缀，例如 `python mdns_publisher.py --name mychat` 将广播 `mychat.local`。
+    *   此脚本**不需要** `sudo` 权限运行。
+3.  **访问服务:** 在局域网内的其他支持 mDNS 的设备上，通过浏览器访问 `http://<你设置的域名>.local:<端口>`，例如 `http://chatui.local:2048`。
+
+**注意:**
+
+*   确保你的防火墙允许 UDP 端口 5353 (mDNS) 的通信。
+*   客户端设备需要支持 mDNS 才能解析 `.local` 域名。
+*   此脚本广播的是 `server.py` 实际监听的端口 (由 `mdns_publisher.py` 中的 `PORT` 变量决定)。
 
 ## 💻 多平台指南 (Python 版本)
 

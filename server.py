@@ -859,6 +859,30 @@ async def read_index():
         raise HTTPException(status_code=404, detail="index.html not found")
     return FileResponse(index_html_path)
 
+# --- 新增：获取 API 配置信息的端点 ---
+@app.get("/api/info")
+async def get_api_info(request: Request):
+    """返回 API 配置信息，如基础 URL 和模型名称"""
+    print("[API] 收到 /api/info 请求。") # 中文
+    host = request.headers.get('host') or f"{args.host}:{args.port}" # 回退到启动参数 (需要确保args可访问)
+    # 简单的方案：假设是 http。如果部署在 https 后，需要调整。
+    # 或者从请求头 X-Forwarded-Proto 获取协议
+    scheme = request.headers.get('x-forwarded-proto', 'http')
+    base_url = f"{scheme}://{host}" # 基础 URL，不包含 /v1
+    api_base = f"{base_url}/v1"     # API 端点基础路径
+    
+    # 注意：直接访问 args 可能在 uvicorn 运行时有问题。
+    # 更健壮的方式是通过 request 或全局状态管理获取 host/port。
+    # 这里使用 request.headers.get('host') 作为主要方式。
+    
+    return JSONResponse(content={
+        "model_name": MODEL_NAME,
+        "api_base_url": api_base,      # e.g., http://127.0.0.1:2048/v1
+        "server_base_url": base_url, # e.g., http://127.0.0.1:2048
+        "api_key_required": False,    # 当前不需要 API 密钥
+        "message": "API Key is not required for this proxy."
+    })
+
 # --- API Endpoints --- (Translate print statements)
 @app.get("/health")
 async def health_check():

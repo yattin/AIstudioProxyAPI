@@ -287,6 +287,15 @@
 <body>
     <div class="container">
         <h1>AI Studio Proxy Chat</h1>
+        <div id="api-info-area" style="padding: 10px 20px; border-bottom: 1px solid var(--border-color); background-color: var(--bg-color); font-size: 0.9em; color: var(--text-color);">
+            <details>
+                <summary style="cursor: pointer; font-weight: 500; color: var(--primary-color);">查看 API 调用信息</summary>
+                <div id="api-info-content" style="margin-top: 8px;">
+                    <!-- API 信息将加载到这里 -->
+                    正在加载 API 信息...
+                </div>
+            </details>
+        </div>
         <div id="chatbox">
             <!-- Chat messages will be appended here -->
         </div>
@@ -328,10 +337,49 @@
             console.log("Chat initialized/cleared.");
         }
 
-        // --- Display Initial System Prompt --- 
-        initializeChat(); // Initialize on load
+        // --- Load API Info ---
+        async function loadApiInfo() {
+            const infoContent = document.getElementById('api-info-content');
+            try {
+                const response = await fetch('/api/info');
+                if (!response.ok) {
+                    throw new Error(`无法获取 API 信息: ${response.status} ${response.statusText}`);
+                }
+                const data = await response.json();
 
-        // --- Event Listeners --- 
+                // 更新内容区域，而不是整个 api-info-area
+                infoContent.innerHTML = `
+                    <style>
+                        #api-info-area pre {
+                            background-color: var(--input-bg);
+                            padding: 8px 12px;
+                            border-radius: var(--border-radius-sm);
+                            border: 1px solid var(--input-border);
+                            overflow-x: auto;
+                            white-space: pre-wrap; /* 允许换行 */
+                            word-wrap: break-word; /* 防止长 URL 溢出 */
+                            font-family: monospace;
+                            font-size: 0.95em;
+                            margin: 5px 0;
+                        }
+                        #api-info-area strong { color: var(--primary-color); }
+                    </style>
+                    <strong>API Base URL:</strong> <pre><code>${data.api_base_url || '未知'}</code></pre>
+                    <strong>Model Name:</strong> <pre><code>${data.model_name || '未知'}</code></pre>
+                    <strong>API Key:</strong> <pre><code>${data.api_key_required ? '是 (需要自行配置)' : '否 (Not Required)'}</code></pre>
+                `;
+
+            } catch (error) {
+                console.error("获取 API 信息失败:", error);
+                infoContent.innerHTML = `<span style="color: var(--error-msg-text);">加载 API 信息失败: ${error.message}</span>`;
+            }
+        }
+
+        // --- Display Initial System Prompt ---
+        initializeChat(); // Initialize on load
+        loadApiInfo(); // Load API info after chat initialization
+
+        // --- Event Listeners ---
         sendButton.addEventListener('click', sendMessage);
         clearButton.addEventListener('click', initializeChat); // Add listener for clear button
         userInput.addEventListener('keydown', (event) => {
