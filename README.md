@@ -131,7 +131,7 @@
     # 确保 Playwright 库能找到必要的系统依赖
     playwright install-deps firefox 
     # 或者 playwright install-deps # 安装所有浏览器的依赖
-    ```
+```
 
 ### 3. 认证设置 (关键步骤!)
 
