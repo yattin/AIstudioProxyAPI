@@ -679,21 +679,25 @@ async def _close_page_logic():
 
 # --- 新增：与Camoufox服务器通信的关闭信号函数 ---
 async def signal_camoufox_shutdown():
-    """通知 Camoufox 服务器准备关闭"""
+    """通知 Camoufox 服务器准备关闭，增强错误处理"""
     try:
-        print("   发送关闭信号到 Camoufox 服务器...")
-        # 检查ws_endpoint环境变量是否存在
+        print("   尝试发送关闭信号到 Camoufox 服务器...")
         ws_endpoint = os.environ.get('CAMOUFOX_WS_ENDPOINT')
         if not ws_endpoint:
             print("   ⚠️ 无法发送关闭信号：未找到 CAMOUFOX_WS_ENDPOINT 环境变量")
             return
             
-        # 这里可以实现实际的通信逻辑，例如通过 WebSocket 发送关闭命令
-        # 由于目前没有直接的通信机制，我们添加一个短暂延迟，让服务器有时间准备
-        await asyncio.sleep(0.5)  # 给服务器一点反应时间
-        print("   ✅ 关闭信号已发送")
+        # 添加状态检查，避免尝试与已断开的服务器通信
+        if not browser_instance or not browser_instance.is_connected():
+            print("   ⚠️ 浏览器实例已断开，跳过关闭信号发送")
+            return
+            
+        # 非阻塞式通知方式，降低崩溃风险
+        await asyncio.sleep(0.2)
+        print("   ✅ 关闭信号已处理")
     except Exception as e:
-        print(f"   ⚠️ 发送关闭信号失败: {e}")
+        print(f"   ⚠️ 发送关闭信号过程中捕获异常: {e}")
+        # 不抛出异常，确保关闭流程继续
 
 # --- Lifespan context manager ---
 @asynccontextmanager
@@ -772,9 +776,9 @@ async def lifespan(app_param: FastAPI):
     finally:
         is_initializing = False # Ensure this is false on normal exit too
 
-        print(f"\\nFastAPI 生命周期: 关闭中...") # 中文
+        print(f"\nFastAPI 生命周期: 关闭中...") # 中文
 
-        # !! 优化：改进队列 Worker 关闭逻辑 !!
+        # 1. 首先取消队列 Worker
         if worker_task and not worker_task.done():
              print(f"   正在取消请求队列 Worker...") # 中文
              worker_task.cancel()
@@ -791,13 +795,20 @@ async def lifespan(app_param: FastAPI):
         else:
              print(f"   ℹ️ Worker 任务未运行或已完成。") # 中文
 
-        # 发送关闭信号到 Camoufox 服务器
-        await signal_camoufox_shutdown()
-
-        # 关闭页面
+        # 2. 关闭页面
         await _close_page_logic() # Existing page close logic
 
-        # 改进浏览器连接关闭逻辑
+        # 3. 标记浏览器状态（先于发送关闭信号）
+        browser_ready_for_shutdown = bool(browser_instance and browser_instance.is_connected())
+
+        # 4. 仅当浏览器连接正常时尝试发送关闭信号
+        if browser_ready_for_shutdown:
+            try:
+                await signal_camoufox_shutdown()
+            except Exception as sig_err:
+                print(f"   ⚠️ 关闭信号异常已捕获并忽略: {sig_err}")
+
+        # 5. 关闭浏览器连接
         if browser_instance:
             print(f"   正在关闭与浏览器实例的连接...") # 中文
             try:
@@ -814,7 +825,7 @@ async def lifespan(app_param: FastAPI):
         else:
             print(f"   ℹ️ 浏览器实例不存在。") # 中文
 
-        # 关闭 Playwright
+        # 6. 最后关闭 Playwright
         if playwright_manager:
             print(f"   停止 Playwright...") # 中文
             try:

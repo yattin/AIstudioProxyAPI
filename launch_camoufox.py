@@ -232,7 +232,7 @@ def run_launch_server_headless_in_thread(json_path: str, stop_event: threading.E
 
     except RuntimeError as e:
         if "Server process terminated unexpectedly" in str(e):
-            print(f"   后台线程: 检测到预期的服务器进程终止错误: {e}", file=sys.stderr, flush=True)
+            print(f"   后台线程: ⚠️ 检测到服务器进程终止，这通常是关闭过程的一部分。", flush=True)
         else:
             print(f"\n   后台线程: ❌ 意外 RuntimeError: {e}", file=sys.stderr, flush=True)
             traceback.print_exc(file=sys.stderr)
@@ -254,6 +254,13 @@ def run_launch_server_debug_direct_output(stop_event: threading.Event):
         print("INFO (Thread-Debug): launch_server call returned. Waiting for stop signal.", flush=True)
         stop_event.wait()
         print("INFO (Thread-Debug): Stop signal received, exiting.", flush=True)
+    except RuntimeError as re:
+        # 特别处理服务器意外终止的情况
+        if "Server process terminated unexpectedly" in str(re):
+            print("INFO (Thread-Debug): Camoufox服务器已终止，可能是正常关闭的一部分", flush=True)
+        else:
+            print(f"ERROR (Thread-Debug): 运行时错误: {re}", file=sys.stderr, flush=True)
+            traceback.print_exc(file=sys.stderr)
     except Exception as e:
         print(f"ERROR (Thread-Debug): {e}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)

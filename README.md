@@ -95,7 +95,7 @@
 
 ### 2. 安装
 
-1.  **克隆仓库**:
+1.  **克隆仓库**: 
     ```bash
     git clone https://github.com/CJackHwang/AIstudioProxyAPI
     cd AIstudioProxyAPI
@@ -127,7 +127,7 @@
 
 5.  **安装 Playwright 浏览器依赖 (如果需要)**:
     虽然 Camoufox 使用自己的 Firefox，但首次运行 Playwright 相关命令（如此处的安装）可能仍需要安装一些基础依赖。
-    ```bash
+```bash
     # 确保 Playwright 库能找到必要的系统依赖
     playwright install-deps firefox 
     # 或者 playwright install-deps # 安装所有浏览器的依赖
@@ -309,7 +309,7 @@
 ## 💻 多平台指南 (Python 版本)
 
 *   **macOS / Linux**: 通常开箱即用。确保 Python, pip 已安装。按照安装步骤安装 Camoufox 和 Playwright 依赖。
-*   **Windows**: 
+*   **Windows**:
     *   WSL (Windows Subsystem for Linux) 是推荐环境，体验更接近 Linux。
     *   直接在 Windows 上运行也可以，确保 Python, pip 已添加到 PATH。
     *   防火墙可能需要允许 Python/Uvicorn 监听端口。
@@ -350,7 +350,7 @@
     *   **499 Client Closed Request**: 客户端提前断开连接。
 *   **AI 回复不完整/格式错误**: 
     *   AI Studio Web UI 输出不稳定。检查 `errors_py/` 快照。
-*   **自动清空上下文失败**: 
+*   **自动清空上下文失败**:
     *   检查 `server.py` 日志中的警告。
     *   很可能是 AI Studio 页面更新导致 `server.py` 中的 CSS 选择器失效。检查 `errors_py/` 快照，对比实际页面元素更新 `server.py` 中的选择器常量。
     *   也可能是网络慢导致验证超时，可尝试在 `server.py` 中增加 `CLEAR_CHAT_VERIFY_TIMEOUT_MS` 的值。

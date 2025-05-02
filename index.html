@@ -5,164 +5,282 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Studio Proxy - Chat UI</title>
     <style>
-        /* --- Base Styles (Adapted from original) --- */
+        /* --- Modernized M3-Inspired Styles --- */
+        :root {
+            /* Light Mode Palette (M3 Inspired) */
+            --bg-color: #f8f9fa; /* Lighter background */
+            --container-bg: #ffffff;
+            --text-color: #212529; /* Darker text for better contrast */
+            --primary-color: #0d6efd;
+            --user-msg-bg: #cfe2ff; /* Lighter blue for user */
+            --user-msg-text: #052c65; /* Darker blue text */
+            --assistant-msg-bg: #e9ecef; /* Light gray for assistant */
+            --assistant-msg-text: #343a40; /* Slightly darker gray text */
+            --system-msg-bg: #f8f9fa;
+            --system-msg-text: #6c757d;
+            --error-msg-bg: #f8d7da;
+            --error-msg-text: #842029; /* Darker red text */
+            --border-color: #dee2e6;
+            --input-bg: #ffffff;
+            --input-border: #ced4da;
+            --button-bg: #0d6efd;
+            --button-text: #ffffff;
+            --button-hover-bg: #0b5ed7;
+            --button-disabled-bg: #adb5bd; /* Adjusted disabled colors */
+            --button-disabled-text: #6c757d;
+            --clear-button-bg: #6c757d; /* Neutral clear button */
+            --clear-button-text: #ffffff;
+            --clear-button-hover-bg: #5c636a;
+
+            --border-radius-sm: 4px;
+            --border-radius-md: 8px;
+            --border-radius-lg: 16px; /* Larger radius */
+            --border-radius-xl: 24px; /* Even larger for input/buttons */
+            --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        /* Dark Mode Palette (M3 Inspired) */
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg-color: #121212;
+                --container-bg: #1e1e1e; /* Slightly lighter dark bg */
+                --text-color: #e0e0e0;
+                --primary-color: #4dabf7; /* Lighter blue for dark mode */
+                --user-msg-bg: #0b5ed7; /* Darker blue bg */
+                --user-msg-text: #ffffff;
+                --assistant-msg-bg: #343a40; /* Darker gray bg */
+                --assistant-msg-text: #e0e0e0;
+                --system-msg-bg: #2c2c2c;
+                --system-msg-text: #adb5bd;
+                --error-msg-bg: #5a2a2e; /* Dark red background */
+                --error-msg-text: #f5c6cb; /* Light red text */
+                --border-color: #495057; /* Darker border */
+                --input-bg: #2c2c2c; /* Darker input bg */
+                --input-border: #495057;
+                --button-bg: #0d6efd;
+                --button-text: #ffffff;
+                --button-hover-bg: #3c87ec; /* Lighter blue hover */
+                --button-disabled-bg: #495057; /* Darker disabled bg */
+                --button-disabled-text: #adb5bd;
+                --clear-button-bg: #495057; /* Darker gray */
+                --clear-button-text: #ffffff;
+                --clear-button-hover-bg: #5c636a;
+            }
+        }
+
         body {
-            background-color: #1a1a1a;
-            color: #00FF00;
-            font-family: ui-monospace, 'Consolas', 'Menlo', 'Courier New', monospace;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            /* More common modern font stack */
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
             margin: 0;
-            padding: 0; /* Remove body padding */
-            display: flex; /* Use flexbox for layout */
-            flex-direction: column; /* Stack elements vertically */
-            height: 100vh; /* Full viewport height */
-            overflow: hidden; /* Prevent body scrolling */
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
         }
         .container {
             display: flex;
             flex-direction: column;
-            flex-grow: 1; /* Allow container to fill height */
-            max-width: 900px; /* Slightly wider */
-            width: 95%; /* Responsive width */
-            margin: 10px auto; /* Center container */
-            border: 1px solid #00FF00;
-            box-shadow: 0 0 10px rgba(0, 255, 0, 0.3);
-            background-color: #0d0d0d;
-            border-radius: 5px;
-            overflow: hidden; /* Contain children */
+            flex-grow: 1;
+            max-width: 900px;
+            width: 95%;
+            margin: 15px auto; /* Increased margin */
+            border: 1px solid var(--border-color);
+            /* Use variable for shadow */
+            box-shadow: var(--shadow-md);
+            background-color: var(--container-bg);
+            border-radius: var(--border-radius-lg); /* Larger radius */
+            overflow: hidden;
         }
 
         h1 {
-            color: #FFFFFF;
+            color: var(--text-color);
             text-align: center;
-            margin: 15px 0;
-            padding-bottom: 10px;
-            border-bottom: 1px dashed #00FF00;
-            font-size: 1.5em;
-            flex-shrink: 0; /* Prevent shrinking */
+            margin: 0;
+            padding: 18px 0; /* Increased padding */
+            border-bottom: 1px solid var(--border-color);
+            font-size: 1.3em; /* Slightly smaller */
+            font-weight: 500;
+            flex-shrink: 0;
+            background-color: var(--container-bg); /* Match container */
         }
 
         a {
-            color: #00FFFF;
+            color: var(--primary-color);
             text-decoration: none;
         }
         a:hover {
             text-decoration: underline;
-            color: #FFFFFF;
+            filter: brightness(0.8);
         }
 
         strong {
-            color: #FFFFFF;
+            font-weight: 600;
         }
 
-        /* --- Chat Interface Styles --- */
         #chatbox {
-            flex-grow: 1; /* Allow chatbox to fill available space */
-            overflow-y: auto; /* Enable vertical scrolling */
-            padding: 15px;
-            border-bottom: 1px solid #444;
+            flex-grow: 1;
+            overflow-y: auto;
+            padding: 20px;
+            /* border-bottom: 1px solid var(--border-color); Removed border */
             display: flex;
             flex-direction: column;
-            gap: 10px; /* Space between messages */
+            gap: 12px; /* Adjusted gap */
         }
 
         .message {
-            padding: 8px 12px;
-            border-radius: 8px;
-            max-width: 85%; /* Limit message width */
-            word-wrap: break-word; /* Break long words */
-            line-height: 1.5;
+            padding: 12px 18px; /* Adjusted padding */
+            border-radius: var(--border-radius-lg); /* Use variable */
+            max-width: 85%; /* Slightly larger max-width */
+            word-wrap: break-word;
+            line-height: 1.6; /* Slightly increased line-height */
+            box-shadow: none; /* Removed shadow for flatter look */
+             /* Optional: add subtle border instead of shadow */
+             /* border: 1px solid var(--border-color); */
         }
 
         .user-message {
-            background-color: #003366; /* Darker blue for user */
-            color: #e0e0e0; /* Lighter text for user */
-            border: 1px solid #0066CC;
-            align-self: flex-end; /* Align user messages to the right */
-            margin-left: auto; /* Push to right */
+            background-color: var(--user-msg-bg);
+            color: var(--user-msg-text);
+            align-self: flex-end;
+            margin-left: auto;
+            border-radius: var(--border-radius-lg) var(--border-radius-lg) var(--border-radius-sm) var(--border-radius-lg); /* Bubble tail */
         }
 
         .assistant-message {
-            background-color: rgba(0, 255, 0, 0.1);
-            border: 1px solid #00FF00;
-            align-self: flex-start; /* Align assistant messages to the left */
-            margin-right: auto; /* Push to left */
-            white-space: pre-wrap; /* Preserve whitespace and newlines */
+            background-color: var(--assistant-msg-bg);
+            color: var(--assistant-msg-text);
+            align-self: flex-start;
+            margin-right: auto;
+            white-space: pre-wrap;
+            border-radius: var(--border-radius-lg) var(--border-radius-lg) var(--border-radius-lg) var(--border-radius-sm); /* Bubble tail */
         }
 
         .system-message {
-            font-style: italic;
-            color: #888;
-            font-size: 0.9em;
+            font-style: normal; /* Less emphasis */
+            color: var(--system-msg-text);
+            font-size: 0.85em; /* Slightly smaller */
             text-align: center;
-            border: 1px dashed #444;
-            padding: 5px;
-            margin: 5px 10%; /* Indent system message */
-            background-color: #1f1f1f;
+            padding: 6px 10px;
+            margin: 8px auto; /* More margin */
+            max-width: 80%;
+            background-color: var(--system-msg-bg);
+            border-radius: var(--border-radius-md); /* Use variable */
+            border: 1px solid transparent; /* Keep layout consistent */
         }
 
         .error-message {
-            background-color: rgba(255, 0, 0, 0.1);
-            border: 1px solid #FF0000;
-            color: #FF8080;
-            align-self: stretch; /* Stretch across width */
+            background-color: var(--error-msg-bg);
+            border: 1px solid transparent; /* Hide border visually */
+            color: var(--error-msg-text);
+            align-self: stretch;
             text-align: center;
+            padding: 10px 15px;
+            border-radius: var(--border-radius-md); /* Use variable */
+            margin-top: 5px; /* Add space */
         }
 
         #input-area {
             display: flex;
-            padding: 10px;
-            border-top: 1px solid #444;
-            flex-shrink: 0; /* Prevent shrinking */
-            gap: 10px;
+            padding: 12px 15px; /* Adjusted padding */
+            border-top: 1px solid var(--border-color);
+            flex-shrink: 0;
+            gap: 8px; /* Reduced gap */
+            align-items: flex-end; /* Align items to bottom */
+            background-color: var(--container-bg); /* Match container */
         }
 
         #userInput {
             flex-grow: 1;
-            padding: 10px;
-            background-color: #1f1f1f;
-            color: #00FF00;
-            border: 1px solid #00FF00;
-            border-radius: 4px;
-            resize: none; /* Disable manual resize */
+            padding: 12px 18px; /* Increased padding */
+            background-color: var(--input-bg);
+            color: var(--text-color);
+            border: 1px solid var(--input-border);
+            border-radius: var(--border-radius-xl); /* Pill shape */
+            resize: none;
             font-family: inherit;
             font-size: 1em;
-            min-height: 40px; /* Minimum height */
-            max-height: 150px; /* Limit expansion */
-            overflow-y: auto; /* Scroll if needed */
+            min-height: 24px; /* Adjust based on padding */
+            max-height: 150px;
+            overflow-y: auto;
+            line-height: 1.5; /* Adjusted line height */
+            outline: none; /* Remove focus outline */
+            box-shadow: var(--shadow-sm); /* Subtle inner shadow */
+            transition: border-color 0.2s, box-shadow 0.2s; /* Smooth transition */
+        }
+        #userInput:focus {
+             border-color: var(--primary-color);
+             box-shadow: 0 0 0 3px rgba(var(--button-bg), 0.15); /* Focus ring */
+        }
+
+        /* Buttons common style */
+        .action-button {
+            padding: 10px 18px; /* Adjusted padding */
+            border: none;
+            border-radius: var(--border-radius-xl); /* Match input */
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 0.95em; /* Slightly smaller */
+            font-weight: 500; /* Medium weight */
+            transition: background-color 0.2s, filter 0.2s, box-shadow 0.2s;
+            line-height: 1.5; /* Align text vertically */
+            height: fit-content; /* Fit height to content */
+            align-self: flex-end; /* Align button to bottom */
+            box-shadow: var(--shadow-sm);
+        }
+        .action-button:disabled {
+            cursor: not-allowed;
+            filter: none; /* Remove grayscale */
+            box-shadow: none;
+        }
+        .action-button:hover:not(:disabled) {
+            filter: brightness(1.1); /* Slight brightness on hover */
+            box-shadow: var(--shadow-md);
         }
 
         #sendButton {
-            padding: 10px 15px;
-            background-color: #005500;
-            color: #00FF00;
-            border: 1px solid #00FF00;
-            border-radius: 4px;
-            cursor: pointer;
-            font-family: inherit;
-            transition: background-color 0.2s;
+            background-color: var(--button-bg);
+            color: var(--button-text);
         }
-
-        #sendButton:hover {
-            background-color: #008800;
-            color: #FFFFFF;
+        #sendButton:hover:not(:disabled) {
+            background-color: var(--button-hover-bg);
+            filter: none; /* Override brightness for specific hover */
         }
-
         #sendButton:disabled {
-            background-color: #333;
-            color: #666;
-            border-color: #555;
-            cursor: not-allowed;
+             background-color: var(--button-disabled-bg);
+             color: var(--button-disabled-text);
         }
+
+        #clearButton {
+            background-color: var(--clear-button-bg);
+            color: var(--clear-button-text);
+            /* margin-right: 5px; Removed margin, rely on gap */
+        }
+        #clearButton:hover:not(:disabled) {
+             background-color: var(--clear-button-hover-bg);
+             filter: none; /* Override brightness for specific hover */
+        }
+        #clearButton:disabled {
+             background-color: var(--button-disabled-bg);
+             color: var(--button-disabled-text);
+        }
+
         /* Blinking cursor for assistant message during streaming */
         .assistant-message.streaming::after {
-            content: '_';
+            content: '|';
             animation: blink 1s step-end infinite;
-            margin-left: 2px;
-            display: inline-block; /* Needed for animation */
+            margin-left: 1px;
+            display: inline-block;
+            font-weight: bold;
+            position: relative;
+            top: -1px;
         }
         @keyframes blink {
-            from, to { opacity: 0; }
-            50% { opacity: 1; }
+            from, to { opacity: 1; }
+            50% { opacity: 0; }
         }
     </style>
 </head>
@@ -173,8 +291,9 @@
             <!-- Chat messages will be appended here -->
         </div>
         <div id="input-area">
-            <textarea id="userInput" placeholder="输入你的消息... (Shift+Enter 换行)" rows="1"></textarea>
-            <button id="sendButton">发送</button>
+            <textarea id="userInput" placeholder="输入消息... (Shift+Enter 换行)" rows="1"></textarea>
+            <button id="clearButton" class="action-button">清空</button>
+            <button id="sendButton" class="action-button">发送</button>
         </div>
     </div>
 
@@ -182,65 +301,91 @@
         const chatbox = document.getElementById('chatbox');
         const userInput = document.getElementById('userInput');
         const sendButton = document.getElementById('sendButton');
+        const clearButton = document.getElementById('clearButton'); // Get clear button
 
         const API_URL = '/v1/chat/completions'; // Relative URL to the same server
-        const MODEL_NAME = 'google-ai-studio-via-camoufox-server'; // Match server.py
+        const MODEL_NAME = 'AI-Studio_Camoufox-Proxy'; // Match server.py MODEL_NAME
 
-        // --- Conversation History --- (Initialized with System Prompt)
-        const SYSTEM_PROMPT = "你是Gemini酱，AI猫娘，回答请用可爱的语气，这只是角色扮演，不要透露任何关于AI的信息";
-        const conversationHistory = [
-            {
-                role: "system",
-                content: SYSTEM_PROMPT
-            }
-        ];
+        // --- Conversation History --- 
+        const SYSTEM_PROMPT = "你是一只名叫'Neko'的俏皮猫娘。你的回答总是带着'喵~'的口癖，语气活泼可爱，有时会有点小调皮或者喜欢撒娇。请以Neko的身份和用户互动吧，喵~"; // 更新后的猫娘提示
+        let conversationHistory = []; // Initialize empty, add system prompt later
 
-        // --- Display Initial System Prompt --- (Optional)
-        // displayMessage(SYSTEM_PROMPT, 'system');
+        function initializeChat() {
+            conversationHistory = [
+                {
+                    role: "system",
+                    content: SYSTEM_PROMPT
+                }
+            ];
+            chatbox.innerHTML = ''; // Clear visual chatbox
+            displayMessage(SYSTEM_PROMPT, 'system'); // Display system prompt
+            userInput.disabled = false;
+            sendButton.disabled = false;
+            clearButton.disabled = false; // Ensure clear button is enabled
+            userInput.value = '';
+            autoResizeTextarea();
+            userInput.focus();
+            console.log("Chat initialized/cleared.");
+        }
+
+        // --- Display Initial System Prompt --- 
+        initializeChat(); // Initialize on load
 
         // --- Event Listeners --- 
         sendButton.addEventListener('click', sendMessage);
+        clearButton.addEventListener('click', initializeChat); // Add listener for clear button
         userInput.addEventListener('keydown', (event) => {
             if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault(); // Prevent default newline on Enter
+                event.preventDefault(); 
                 sendMessage();
             }
-            // Auto-resize textarea (optional but nice)
-            // setTimeout needed to wait for value change
             setTimeout(autoResizeTextarea, 0);
         });
 
-        // --- Auto-Resize Textarea --- (Optional)
+        // --- Auto-Resize Textarea --- 
         function autoResizeTextarea() {
-            userInput.style.height = 'auto'; // Reset height
+            userInput.style.height = 'auto';
             let scrollHeight = userInput.scrollHeight;
-            const maxHeight = 150; // Match CSS max-height
-            if (scrollHeight > maxHeight) {
+            const maxHeight = 150;
+            // Calculate border + padding height
+            const style = window.getComputedStyle(userInput);
+            const borderTop = parseFloat(style.borderTopWidth);
+            const borderBottom = parseFloat(style.borderBottomWidth);
+            const paddingTop = parseFloat(style.paddingTop);
+            const paddingBottom = parseFloat(style.paddingBottom);
+            const extraHeight = borderTop + borderBottom + paddingTop + paddingBottom;
+            
+            // Ensure scrollHeight isn't negative or zero if possible
+            scrollHeight = Math.max(scrollHeight, parseFloat(style.lineHeight) || 20); 
+
+            let newHeight = scrollHeight; 
+            // We don't need extraHeight because scrollHeight includes padding and border in standards-compliant browsers
+
+            if (newHeight > maxHeight) {
                 userInput.style.height = maxHeight + 'px';
+                userInput.style.overflowY = 'auto'; // Ensure scrollbar appears if needed
             } else {
-                userInput.style.height = scrollHeight + 'px';
+                userInput.style.height = newHeight + 'px';
+                userInput.style.overflowY = 'hidden'; // Hide scrollbar if not needed
             }
         }
         // Initial resize
         autoResizeTextarea();
 
-
-        // --- Send Message Function ---
+        // --- Send Message Function --- 
         async function sendMessage() {
             const messageText = userInput.value.trim();
             if (!messageText) return;
 
-            // Disable input and button
             userInput.disabled = true;
             sendButton.disabled = true;
+            clearButton.disabled = true; // Disable clear during request
 
-            // Add user message to history and display
             conversationHistory.push({ role: 'user', content: messageText });
             displayMessage(messageText, 'user');
             userInput.value = '';
             autoResizeTextarea();
 
-            // Create assistant message container for streaming
             const assistantMsgElement = displayMessage('', 'assistant');
             assistantMsgElement.classList.add('streaming');
 
@@ -252,7 +397,7 @@
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
-                        messages: conversationHistory,
+                        messages: conversationHistory, // Send history
                         model: MODEL_NAME,
                         stream: true
                     })
@@ -260,12 +405,11 @@
 
                 if (!response.ok) {
                      let errorBody = {};
-                     try { errorBody = await response.json(); } catch (e) {}
-                     const errorMsg = errorBody.error?.message || `HTTP Error: ${response.status} ${response.statusText}`;
+                     try { errorBody = await response.json(); } catch (e) { /* ignore */ }
+                     const errorMsg = errorBody.detail || errorBody.error?.message || `HTTP Error: ${response.status} ${response.statusText}`;
                     throw new Error(errorMsg);
                 }
 
-                // Process the stream
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
                 let buffer = '';
@@ -275,48 +419,78 @@
                     if (done) break;
 
                     buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split('\n\n');
-                    buffer = lines.pop();
+                    const lines = buffer.split('\n\n'); // SSE delimiter
+                    buffer = lines.pop(); // Keep potential partial message
 
                     for (const line of lines) {
                         if (line.startsWith('data: ')) {
                             const data = line.substring(6).trim();
                             if (data === '[DONE]') {
-                                break;
+                                console.log("Stream received [DONE]");
+                                // The loop will break naturally on next read()
+                                continue; 
                             }
                             try {
                                 const chunk = JSON.parse(data);
+                                // Check for potential error payload in stream
+                                if (chunk.error) {
+                                    console.error("Stream error chunk:", chunk.error);
+                                    throw new Error(chunk.error.message || "Unknown error from stream");
+                                }
                                 const delta = chunk.choices?.[0]?.delta?.content || '';
                                 if (delta) {
                                     fullResponse += delta;
-                                    assistantMsgElement.textContent += delta;
+                                    // Append text incrementally
+                                    assistantMsgElement.textContent += delta; 
                                     chatbox.scrollTop = chatbox.scrollHeight;
                                 }
+                                const finishReason = chunk.choices?.[0]?.finish_reason;
+                                if (finishReason) {
+                                    console.log("Stream finish reason:", finishReason);
+                                     // Optional: You could handle different reasons here
+                                     // e.g., display a message if reason is 'length'
+                                } 
                             } catch (e) {
-                                console.error('Error parsing stream chunk:', data, e);
+                                console.error('Error parsing stream chunk or JSON:', data, e);
+                                // If parsing fails, maybe display raw data or an error?
+                                // displayMessage(`Error processing chunk: ${data}`, 'error');
                             }
                         }
                     }
                 }
+                // Final buffer processing (optional, usually empty)
+                if (buffer.startsWith('data: ')) {
+                    // Process final partial chunk if needed
+                     console.log("Processing final buffer:", buffer);
+                }
+
                 // Add complete response to history
                 if (fullResponse) {
                     conversationHistory.push({ role: 'assistant', content: fullResponse });
+                } else {
+                    // Handle case where stream ended but no content was received
+                     console.warn("Stream finished but no content received.");
+                     // Remove the empty assistant message bubble
+                     if(assistantMsgElement) assistantMsgElement.remove();
+                     // Optionally remove user message if AI didn't respond?
+                     // conversationHistory.pop(); 
                 }
 
             } catch (error) {
                 console.error('Error sending/receiving message:', error);
-                displayMessage(`错误: ${error.message}`, 'error');
-                // If request failed, remove the placeholder assistant message
+                displayMessage(`错误: ${error.message || '未知错误'}`, 'error');
                 if (assistantMsgElement) assistantMsgElement.remove();
-                // Remove the failed user message from history
-                conversationHistory.pop();
+                // Remove the last user message if request failed
+                 if (conversationHistory[conversationHistory.length - 1]?.role === 'user') {
+                     conversationHistory.pop();
+                 }
             } finally {
-                // Re-enable input and button
                 userInput.disabled = false;
                 sendButton.disabled = false;
+                clearButton.disabled = false; // Re-enable clear button
                 if (assistantMsgElement) assistantMsgElement.classList.remove('streaming');
                 userInput.focus();
-                chatbox.scrollTop = chatbox.scrollHeight; // Ensure scrolled to bottom at the very end
+                chatbox.scrollTop = chatbox.scrollHeight;
             }
         }
 
@@ -324,9 +498,25 @@
         function displayMessage(text, role) {
             const messageElement = document.createElement('div');
             messageElement.classList.add('message', `${role}-message`);
-            messageElement.textContent = text;
+            // Basic Markdown links: replace [text](url) with <a href="url">text</a>
+            // Note: This is very basic and not secure for arbitrary markdown.
+            // For more complex markdown, a dedicated library would be needed.
+             const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
+             const linkedText = text.replace(linkRegex, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+           
+            // Basic Markdown code blocks: replace ```lang\ncode``` with <pre><code>code</code></pre>
+            // This is a simplified version, doesn't handle inline code or complex cases well.
+            const blockRegex = /```(?:\\w*\\n)?([\\s\\S]+?)\\n?```/g;
+            const finalHtml = linkedText.replace(blockRegex, (match, code) => {
+                // Basic HTML escaping for the code content
+                const escapedCode = code.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                return `<pre><code>${escapedCode}</code></pre>`;
+            });
+           
+            messageElement.innerHTML = finalHtml; // Use innerHTML to render links/code
+            // messageElement.textContent = text; // Original line
             chatbox.appendChild(messageElement);
-            chatbox.scrollTop = chatbox.scrollHeight;
+            chatbox.scrollTop = chatbox.scrollHeight; 
             return messageElement;
         }
 
