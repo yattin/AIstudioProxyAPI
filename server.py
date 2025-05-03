@@ -2096,140 +2096,111 @@ async def _process_request_from_queue(
         # V4: Prepare combined prompt using the new function BEFORE navigation
         prepared_prompt = prepare_combined_prompt(request.messages, req_id)
 
-        # --- V4: Conditional Clear Chat Logic (Skip if on /new_chat) ---
-        print(f"[{req_id}] (Worker) 检查是否需要清空聊天...")
-        
-        try:
-            # --- URL Check using urlparse --- 
-            current_url = page.url
-            parsed_url = urlparse(current_url)
-            is_on_new_chat_page = parsed_url.path.endswith('/prompts/new_chat')
-            
-            print(f"[{req_id}] (Worker) Current URL: {current_url}")
-            print(f"[{req_id}] (Worker) Parsed Path: {parsed_url.path}")
-            print(f"[{req_id}] (Worker) Is on /prompts/new_chat page? {is_on_new_chat_page}")
+        # --- V4: Modified Clear Chat Logic (Always attempt, verify container disappearance) ---
+        print(f"[{req_id}] (Worker) 开始清空聊天记录...") # 中文
 
-            if is_on_new_chat_page:
-                print(f"[{req_id}] (Worker) ✅ 当前已在 /prompts/new_chat 页面，跳过清空聊天步骤。")
-            else:
-                print(f"[{req_id}] (Worker) 当前不在 /prompts/new_chat 页面，执行清空聊天...")
-                # --- Clear Chat Logic (only runs if not on /new_chat) ---
-                # 1. 找到并点击清空聊天按钮
-                clear_chat_button = page.locator(CLEAR_CHAT_BUTTON_SELECTOR)
-                
-                # 检查清空按钮是否可见并可点击
-                print(f"[{req_id}] (Worker) 检查清空聊天按钮状态...")
-                
-                # 首先检查按钮是否可见
-                is_clear_button_visible = False
+        try:
+            # --- Clear Chat Logic ---
+            clear_chat_button = page.locator(CLEAR_CHAT_BUTTON_SELECTOR)
+
+            print(f"[{req_id}] (Worker) 检查清空聊天按钮状态...")
+            is_clear_button_visible = False
+            is_clear_button_enabled = False
+            try:
+                await interruptible_wait_for(
+                    expect_async(clear_chat_button).to_be_visible(timeout=3000),
+                    timeout=3.5
+                )
+                is_clear_button_visible = True
+                print(f"[{req_id}] (Worker) 清空聊天按钮可见。")
+                # Check if enabled only if visible
+                await interruptible_wait_for(
+                    expect_async(clear_chat_button).to_be_enabled(timeout=2000),
+                    timeout=2.5
+                )
+                is_clear_button_enabled = True
+                print(f"[{req_id}] (Worker) 清空聊天按钮已启用。")
+            except Exception as e:
+                if is_clear_button_visible: # Visible but not enabled
+                    print(f"[{req_id}] (Worker) 警告: 清空聊天按钮可见但被禁用: {e}。跳过清空。")
+                else: # Not visible
+                    print(f"[{req_id}] (Worker) 警告: 清空聊天按钮不可见。可能页面结构已变化或处于初始状态。跳过清空。")
+                # Skip clearing if button is not visible or not enabled
+
+            if is_clear_button_visible and is_clear_button_enabled:
+                print(f"[{req_id}] (Worker) 尝试点击清空聊天按钮...")
+                start_clear_time = time.monotonic()
+                await interruptible_wait_for(
+                    clear_chat_button.click(timeout=5000),
+                    timeout=5.5
+                )
+                duration = time.monotonic() - start_clear_time
+                print(f"[{req_id}] (Worker) 清空聊天按钮点击完成，耗时: {duration:.2f}s")
+
+                print(f"[{req_id}] (Worker) 等待清空确认按钮出现...")
+                confirm_button = page.locator(CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR)
+                start_confirm_wait_time = time.monotonic()
+                await interruptible_wait_for(
+                    expect_async(confirm_button).to_be_visible(timeout=5000),
+                    timeout=5.5
+                )
+                duration = time.monotonic() - start_confirm_wait_time
+                print(f"[{req_id}] (Worker) 确认按钮已可见，耗时: {duration:.2f}s")
+
+                print(f"[{req_id}] (Worker) 点击确认按钮...")
+                start_confirm_click_time = time.monotonic()
+                await interruptible_wait_for(
+                    confirm_button.click(timeout=5000),
+                    timeout=5.5
+                )
+                duration = time.monotonic() - start_confirm_click_time
+                print(f"[{req_id}] (Worker) >>确认按钮点击操作完成<<，耗时: {duration:.2f}s")
+
+                # 3. 等待清空操作完成验证 (检查最后一个响应容器是否消失)
+                print(f"[{req_id}] (Worker) 等待清空操作完成验证 (检查响应容器消失)...")
+                last_response_container = page.locator(RESPONSE_CONTAINER_SELECTOR).last
+
+                # 增加一个短延时给DOM更新时间
+                await interruptible_sleep(0.5)
+
+                verification_start_time = time.monotonic()
                 try:
+                    # 等待最后一个响应容器变为隐藏或分离
                     await interruptible_wait_for(
-                        expect_async(clear_chat_button).to_be_visible(timeout=3000),
-                        timeout=3.5
+                        expect_async(last_response_container).to_be_hidden(timeout=CLEAR_CHAT_VERIFY_TIMEOUT_MS - 500), # 留一点buffer
+                        timeout=(CLEAR_CHAT_VERIFY_TIMEOUT_MS / 1000)
                     )
-                    is_clear_button_visible = True
-                    print(f"[{req_id}] (Worker) 清空聊天按钮可见。")
-                except Exception as e:
-                    print(f"[{req_id}] (Worker) 清空聊天按钮不可见: {e}")
-                
-                # 然后检查按钮是否启用
-                is_clear_button_enabled = False
-                if is_clear_button_visible:
-                    try:
-                        await interruptible_wait_for(
-                            expect_async(clear_chat_button).to_be_enabled(timeout=2000),
-                            timeout=2.5
-                        )
-                        is_clear_button_enabled = True
-                        print(f"[{req_id}] (Worker) 清空聊天按钮已启用。")
-                    except Exception as e:
-                        print(f"[{req_id}] (Worker) 清空聊天按钮虽可见但被禁用: {e}")
-                
-                # 如果按钮可见且已启用，尝试点击它
-                if is_clear_button_visible and is_clear_button_enabled:
-                    print(f"[{req_id}] (Worker) 尝试点击清空聊天按钮...")
-                    
-                    # 点击清空聊天按钮
-                    start_clear_time = time.monotonic()
-                    await interruptible_wait_for(
-                        clear_chat_button.click(timeout=5000),
-                        timeout=5.5
-                    )
-                    duration = time.monotonic() - start_clear_time
-                    print(f"[{req_id}] (Worker) 清空聊天按钮点击完成，耗时: {duration:.2f}s")
-                    
-                    # 2. 找到并点击确认按钮
-                    print(f"[{req_id}] (Worker) 等待清空确认按钮出现...")
-                    # !! 确保使用正确的全局变量名 !! 
-                    confirm_button = page.locator(CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR)
-                    
-                    start_confirm_wait_time = time.monotonic()
-                    await interruptible_wait_for(
-                        expect_async(confirm_button).to_be_visible(timeout=5000),
-                        timeout=5.5
-                    )
-                    duration = time.monotonic() - start_confirm_wait_time
-                    print(f"[{req_id}] (Worker) 确认按钮已可见，耗时: {duration:.2f}s")
-                    
-                    print(f"[{req_id}] (Worker) 点击确认按钮...")
-                    print(f"[{req_id}] (Worker) >>准备点击确认按钮<<")
-                    start_confirm_click_time = time.monotonic()
-                    await interruptible_wait_for(
-                        confirm_button.click(timeout=5000),
-                        timeout=5.5
-                    )
-                    duration = time.monotonic() - start_confirm_click_time
-                    print(f"[{req_id}] (Worker) >>确认按钮点击操作完成<<，耗时: {duration:.2f}s")
-                    
-                    # 3. 等待清空操作完成验证
-                    print(f"[{req_id}] (Worker) 等待清空操作完成验证...")
-                    input_field_clear = page.locator(INPUT_SELECTOR)
-                    
-                    print(f"[{req_id}] (Worker)   - 验证输入框可见...")
-                    start_verify_visible_time = time.monotonic()
-                    await interruptible_wait_for(
-                        expect_async(input_field_clear).to_be_visible(timeout=5000),
-                        timeout=5.5
-                    )
-                    duration = time.monotonic() - start_verify_visible_time
-                    print(f"[{req_id}] (Worker)   - 输入框可见验证完成，耗时: {duration:.2f}s")
-                    
-                    print(f"[{req_id}] (Worker)   - 验证输入框为空...")
-                    start_verify_empty_time = time.monotonic()
-                    await interruptible_wait_for(
-                        expect_async(input_field_clear).to_have_value("", timeout=3000),
-                        timeout=3.5
-                    )
-                    duration = time.monotonic() - start_verify_empty_time
-                    print(f"[{req_id}] (Worker)   - 输入框为空验证完成，耗时: {duration:.2f}s")
-                    
-                    print(f"[{req_id}] (Worker) ✅ 聊天已成功清空并通过验证，页面状态已重置")
-                else:
-                    # 如果按钮不可见或被禁用 (在非 /new_chat 页面)
-                    if not is_clear_button_visible:
-                        print(f"[{req_id}] (Worker) 警告: 不在/new_chat页面，但清空聊天按钮不可见。继续执行...")
-                    elif not is_clear_button_enabled:
-                        print(f"[{req_id}] (Worker) 警告: 不在/new_chat页面，但清空聊天按钮被禁用。继续执行...")
-        
+                    duration = time.monotonic() - verification_start_time
+                    print(f"[{req_id}] (Worker) ✅ 聊天已成功清空 (验证响应容器消失)，耗时: {duration:.2f}s")
+                except (PlaywrightAsyncError, asyncio.TimeoutError) as verify_err:
+                    duration = time.monotonic() - verification_start_time
+                    print(f"[{req_id}] (Worker) ⚠️ 警告: 清空聊天后验证响应容器消失失败或超时 (耗时: {duration:.2f}s)。错误: {type(verify_err).__name__}")
+                    # 即使验证失败也继续，因为清空可能部分成功或UI状态特殊
+                except Exception as verify_exc:
+                    duration = time.monotonic() - verification_start_time
+                    print(f"[{req_id}] (Worker) ⚠️ 警告: 验证响应容器消失时出现意外错误 (耗时: {duration:.2f}s): {verify_exc}")
+            # else: # Button was not clicked (already logged warning)
+            #     pass
+
         except PlaywrightAsyncError as clear_err:
             print(f"[{req_id}] (Worker) ❌ 错误: 清空聊天时出现Playwright错误: {clear_err}")
             await save_error_snapshot(f"clear_chat_pw_error_{req_id}")
             check_client_disconnected("清空聊天Playwright错误后: ")
-            raise HTTPException(status_code=500, detail=f"[{req_id}] 清空聊天时发生 Playwright 错误: {clear_err}")
-        
+            # Don't raise HTTPException here, try to continue submission
+            # raise HTTPException(status_code=500, detail=f"[{req_id}] 清空聊天时发生 Playwright 错误: {clear_err}")
         except asyncio.TimeoutError as clear_timeout_err:
             print(f"[{req_id}] (Worker) ❌ 错误: 清空聊天操作超时")
             await save_error_snapshot(f"clear_chat_timeout_{req_id}")
             check_client_disconnected("清空聊天超时后: ")
-            raise HTTPException(status_code=500, detail=f"[{req_id}] 清空聊天操作超时: {clear_timeout_err}")
-        
+            # Don't raise HTTPException here, try to continue submission
+            # raise HTTPException(status_code=500, detail=f"[{req_id}] 清空聊天操作超时: {clear_timeout_err}")
         except Exception as clear_exc:
             print(f"[{req_id}] (Worker) ❌ 错误: 清空聊天时出现意外错误: {clear_exc}")
-            # << 移除异常诊断日志 >>
             await save_error_snapshot(f"clear_chat_unexpected_{req_id}")
             check_client_disconnected("清空聊天意外错误后: ")
-            raise HTTPException(status_code=500, detail=f"[{req_id}] 清空聊天时发生意外错误: {clear_exc}")
-        # --- V4: END Conditional Clear Chat Logic ---
+            # Don't raise HTTPException here, try to continue submission
+            # raise HTTPException(status_code=500, detail=f"[{req_id}] 清空聊天时发生意外错误: {clear_exc}")
+        # --- V4: END Modified Clear Chat Logic ---
 
         check_client_disconnected("Before Submit: ")
 
@@ -2415,7 +2386,7 @@ async def _process_request_from_queue(
             print(f"[{req_id}] (Worker)   - 等待响应文本节点附加...")
             start_locate_text_time = time.monotonic()
             try:
-                await interruptible_wait_for(expect_async(response_element).to_be_attached(timeout=15000), timeout=15.5)
+                await interruptible_wait_for(expect_async(response_element).to_be_attached(timeout=90000), timeout=90.5) # Increased timeout to 90s
                 duration = time.monotonic() - start_locate_text_time
                 print(f"[{req_id}] (Worker)   - 响应文本节点已定位，耗时: {duration:.2f} 秒。") # 中文
             except Exception as e:
@@ -2678,7 +2649,7 @@ async def _process_request_from_queue(
             print(f"[{req_id}] (Worker) 处理非流式响应...", flush=True) # 中文
             start_time_ns = time.time()
             final_state_reached = False
-            final_state_check_initiated = False
+            # final_state_check_initiated = False # Removed
             spinner_locator = page.locator(LOADING_SPINNER_SELECTOR)
             input_field = page.locator(INPUT_SELECTOR)
             submit_button = page.locator(SUBMIT_BUTTON_SELECTOR)
@@ -2688,7 +2659,7 @@ async def _process_request_from_queue(
             while time.time() - start_time_ns < RESPONSE_COMPLETION_TIMEOUT / 1000:
                 check_client_disconnected("NonStream Loop Start: ")
 
-                # --- Periodic Scroll --- 
+                # --- Periodic Scroll ---
                 current_loop_time_ms_ns = time.time() * 1000
                 if current_loop_time_ms_ns - last_scroll_time_ns > scroll_interval_ms_ns:
                     try:
@@ -2698,11 +2669,13 @@ async def _process_request_from_queue(
                          print(f"[{req_id}] (Worker NonStream) 滚动失败: {scroll_e}", flush=True)
                 check_client_disconnected("NonStream After Scroll: ")
 
-                # --- Check Final State Conditions --- (Use faster checks)
+                # --- Check Base Final State Conditions --- (Use faster checks)
                 spinner_hidden = False
                 input_empty = False
                 button_disabled = False
                 try:
+                    # Ensure locator is valid before checking hidden state
+                    await expect_async(spinner_locator).to_be_attached(timeout=0.1) # Quick check if attached
                     await expect_async(spinner_locator).to_be_hidden(timeout=0.1)
                     spinner_hidden = True
                 except (AssertionError, PlaywrightAsyncError): pass
@@ -2716,67 +2689,64 @@ async def _process_request_from_queue(
                     check_client_disconnected("NonStream After Input Check: ")
                     if input_empty:
                         try:
+                            # Ensure button is attached before checking disabled state
+                            await expect_async(submit_button).to_be_attached(timeout=0.1)
                             await expect_async(submit_button).to_be_disabled(timeout=0.1)
                             button_disabled = True
                         except (AssertionError, PlaywrightAsyncError): pass
                 check_client_disconnected("NonStream After State Checks: ")
 
-                # --- Confirm Final State and Text Stability ---
+                # --- If base conditions met, immediately check for Edit Button ---
                 if spinner_hidden and input_empty and button_disabled:
-                    if not final_state_check_initiated:
-                        final_state_check_initiated = True
-                        print(f"[{req_id}] (Worker NonStream) 检测到潜在最终状态。等待 {POST_COMPLETION_BUFFER}ms...", flush=True) # 中文
-                        await interruptible_sleep(POST_COMPLETION_BUFFER / 1000)
+                    print(f"[{req_id}] (Worker NonStream) 检测到基础最终状态。开始等待编辑按钮 (最长 10 秒)...", flush=True) # 中文
+                    edit_button_visible = False
+                    edit_button_check_start_time = time.time()
+                    edit_button = page.locator(EDIT_MESSAGE_BUTTON_SELECTOR)
 
-                        print(f"[{req_id}] (Worker NonStream) 确认等待结束。严格重检...", flush=True) # 中文
-                        try:
-                            await interruptible_wait_for(expect_async(spinner_locator).to_be_hidden(timeout=0.5), timeout=0.6)
-                            await interruptible_wait_for(expect_async(input_field).to_have_value('', timeout=0.5), timeout=0.6)
-                            await interruptible_wait_for(expect_async(submit_button).to_be_disabled(timeout=0.5), timeout=0.6)
-                            print(f"[{req_id}] (Worker NonStream) 状态确认。检查编辑按钮可见性...", flush=True) # 中文
+                    # First, try to click the message text to ensure focus, which might reveal the button
+                    try:
+                        await interruptible_wait_for(
+                            response_element.click(timeout=1000, position={'x': 10, 'y': 10}, force=True),
+                            timeout=1.5 # Shorter timeout for focus attempt
+                        )
+                        print(f"[{req_id}] (Worker NonStream) 已尝试聚焦最后一条消息。", flush=True)
+                        await interruptible_sleep(0.3) # Wait briefly for UI update
+                    except Exception as focus_err:
+                        print(f"[{req_id}] (Worker NonStream) 聚焦消息文本时出错 (忽略): {focus_err}", flush=True)
+                        # Continue to check for edit button even if focus fails
 
-                            edit_button_visible = False
-                            edit_button_check_start_time = time.time()
-                            edit_button = page.locator(EDIT_MESSAGE_BUTTON_SELECTOR)
+                    check_client_disconnected("NonStream Before Edit Button Wait: ")
 
-                            # 先尝试点击消息文本以确保焦点
-                            try:
-                                await interruptible_wait_for(
-                                    response_element.click(timeout=1000, position={'x': 10, 'y': 10}, force=True), 
-                                    timeout=3.5
-                                )
-                                print(f"[{req_id}] (Worker NonStream) 已聚焦最后一条消息。", flush=True)
-                                
-                                # 等待短暂时间让UI响应
-                                await interruptible_sleep(0.3)
-                            except Exception as focus_err:
-                                print(f"[{req_id}] (Worker NonStream) 聚焦消息文本出错: {focus_err}", flush=True)
+                    try:
+                        # Wait up to 10 seconds for the edit button to appear
+                        await interruptible_wait_for(
+                            expect_async(edit_button).to_be_visible(timeout=10000), # 10 second Playwright timeout
+                            timeout=10.5 # Slightly longer wrapper timeout
+                        )
+                        duration = time.time() - edit_button_check_start_time
+                        print(f"[{req_id}] (Worker NonStream) ✅ 编辑按钮已出现，耗时: {duration:.2f} 秒。确认最终状态。", flush=True) # 中文
+                        edit_button_visible = True
+                        final_state_reached = True
+                        break # Exit the outer while loop
 
+                    except (PlaywrightAsyncError, asyncio.TimeoutError) as edit_timeout_err:
+                        duration = time.time() - edit_button_check_start_time
+                        print(f"[{req_id}] (Worker NonStream) ⚠️ 等待编辑按钮超时或失败 (耗时: {duration:.2f} 秒)。错误: {type(edit_timeout_err).__name__}。假设响应完成但编辑按钮未找到。", flush=True) # 中文
+                        # Still consider the state reached to proceed with content extraction, but log the warning
+                        final_state_reached = True # Assume complete despite missing button
+                        break # Exit the outer while loop
+                    except Exception as edit_err: # Catch other unexpected errors during wait
+                         duration = time.time() - edit_button_check_start_time
+                         print(f"[{req_id}] (Worker NonStream) ❌ 等待编辑按钮时出现意外错误 (耗时: {duration:.2f} 秒): {edit_err}。继续检查。", flush=True)
+                         # Do not break, let the outer loop continue or time out
 
+                # else: Base conditions not met, loop continues
 
+                check_client_disconnected("NonStream Loop End Check: ")
+                # If conditions not met, sleep before next iteration
+                if not (spinner_hidden and input_empty and button_disabled):
+                     await interruptible_sleep(POLLING_INTERVAL / 1000)
 
-                            check_client_disconnected("NonStream After Edit Button Check: ")
-                            if edit_button_visible:
-                                final_state_reached = True
-                                break # Exit outer loop
-                            else:
-                                print(f"[{req_id}] (Worker NonStream) ⚠️ 编辑按钮未出现。假设响应已完成。", flush=True) # 中文
-                                final_state_reached = True # Assume complete on timeout
-                                break # Exit outer loop
-
-                        except PlaywrightAsyncError as recheck_error:
-                            print(f"[{req_id}] (Worker NonStream) 状态确认期间变化 ({recheck_error})。", flush=True) # 中文
-                            final_state_check_initiated = False
-                        except asyncio.TimeoutError:
-                            print(f"[{req_id}] (Worker NonStream) 状态确认或文本稳定性检查超时。", flush=True)
-                            final_state_check_initiated = False
-                        # No need to catch general Exception here, let main handler do it
-                    # else: already initiated
-                else: # Conditions not met
-                    if final_state_check_initiated:
-                         print(f"[{req_id}] (Worker NonStream) 最终状态条件不再满足。", flush=True) # 中文
-                         final_state_check_initiated = False
-                check_client_disconnected("NonStream Loop End: ")
 
             # --- End of while loop ---
             check_client_disconnected("NonStream After Loop: ")
