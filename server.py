@@ -2099,35 +2099,45 @@ async def _process_request_from_queue(
         # --- V4: Modified Clear Chat Logic (Always attempt, verify container disappearance) ---
         print(f"[{req_id}] (Worker) 开始清空聊天记录...") # 中文
 
+        # <-- 保留 URL 检查以备后用 -->
+        is_new_chat_url = False
         try:
-            # --- Clear Chat Logic ---
-            clear_chat_button = page.locator(CLEAR_CHAT_BUTTON_SELECTOR)
+            current_url = page.url
+            parsed_url = urlparse(current_url)
+            is_new_chat_url = parsed_url.path.rstrip('/') == '/prompts/new_chat'
+            if is_new_chat_url:
+                print(f"[{req_id}] (Worker) Info: 当前为新聊天页面。")
+            else:
+                print(f"[{req_id}] (Worker) Info: 当前非新聊天页面，将尝试清空。")
+        except Exception as url_check_err:
+             print(f"[{req_id}] (Worker) ⚠️ 警告: 检查页面 URL 时出错: {url_check_err}。将继续尝试清空。")
 
-            print(f"[{req_id}] (Worker) 检查清空聊天按钮状态...")
-            is_clear_button_visible = False
-            is_clear_button_enabled = False
+        # <-- 移除外层 if not skip_clear_chat -->
+        try:
+            # --- Clear Chat Logic --- (Now always attempts) ---
+            clear_chat_button = page.locator(CLEAR_CHAT_BUTTON_SELECTOR)
+            print(f"[{req_id}] (Worker) 尝试检查并点击清空聊天按钮...")
+
+            proceed_with_clear_clicks = False # Flag to indicate if button check passed
             try:
+                # 尝试等待按钮可见且可用 (合并检查)
                 await interruptible_wait_for(
-                    expect_async(clear_chat_button).to_be_visible(timeout=3000),
+                    expect_async(clear_chat_button).to_be_enabled(timeout=3000), # to_be_enabled implies visible
                     timeout=3.5
                 )
-                is_clear_button_visible = True
-                print(f"[{req_id}] (Worker) 清空聊天按钮可见。")
-                # Check if enabled only if visible
-                await interruptible_wait_for(
-                    expect_async(clear_chat_button).to_be_enabled(timeout=2000),
-                    timeout=2.5
-                )
-                is_clear_button_enabled = True
-                print(f"[{req_id}] (Worker) 清空聊天按钮已启用。")
+                print(f"[{req_id}] (Worker) 清空聊天按钮可见并已启用。")
+                proceed_with_clear_clicks = True # Check passed, allow clicks
             except Exception as e:
-                if is_clear_button_visible: # Visible but not enabled
-                    print(f"[{req_id}] (Worker) 警告: 清空聊天按钮可见但被禁用: {e}。跳过清空。")
-                else: # Not visible
-                    print(f"[{req_id}] (Worker) 警告: 清空聊天按钮不可见。可能页面结构已变化或处于初始状态。跳过清空。")
-                # Skip clearing if button is not visible or not enabled
+                # 检查按钮状态失败
+                if is_new_chat_url:
+                    print(f"[{req_id}] (Worker) Info: 清空按钮在新聊天页面未就绪 (可见/启用检查失败，符合预期)。跳过点击。", flush=True)
+                else:
+                    # 对非新聊天页面，记录警告
+                    print(f"[{req_id}] (Worker) ⚠️ 警告: 等待清空聊天按钮可见并启用时失败: {e}。跳过点击。", flush=True)
+                # 不论原因，检查失败则不继续点击 (proceed_with_clear_clicks is False)
 
-            if is_clear_button_visible and is_clear_button_enabled:
+            # 只有在按钮检查成功时才执行点击、确认和验证
+            if proceed_with_clear_clicks:
                 print(f"[{req_id}] (Worker) 尝试点击清空聊天按钮...")
                 start_clear_time = time.monotonic()
                 await interruptible_wait_for(
@@ -2179,28 +2189,26 @@ async def _process_request_from_queue(
                 except Exception as verify_exc:
                     duration = time.monotonic() - verification_start_time
                     print(f"[{req_id}] (Worker) ⚠️ 警告: 验证响应容器消失时出现意外错误 (耗时: {duration:.2f}s): {verify_exc}")
-            # else: # Button was not clicked (already logged warning)
+            # else: # Button check failed, clicks skipped (logged above)
             #     pass
 
+        # --- Outer error handling for clicks/verification phase ---
         except PlaywrightAsyncError as clear_err:
-            print(f"[{req_id}] (Worker) ❌ 错误: 清空聊天时出现Playwright错误: {clear_err}")
+            print(f"[{req_id}] (Worker) ❌ 错误: 在清空聊天点击/验证阶段出现Playwright错误: {clear_err}")
             await save_error_snapshot(f"clear_chat_pw_error_{req_id}")
             check_client_disconnected("清空聊天Playwright错误后: ")
-            # Don't raise HTTPException here, try to continue submission
-            # raise HTTPException(status_code=500, detail=f"[{req_id}] 清空聊天时发生 Playwright 错误: {clear_err}")
+            # Don't raise, continue to submit prompt
         except asyncio.TimeoutError as clear_timeout_err:
-            print(f"[{req_id}] (Worker) ❌ 错误: 清空聊天操作超时")
+            print(f"[{req_id}] (Worker) ❌ 错误: 在清空聊天点击/验证阶段超时")
             await save_error_snapshot(f"clear_chat_timeout_{req_id}")
             check_client_disconnected("清空聊天超时后: ")
-            # Don't raise HTTPException here, try to continue submission
-            # raise HTTPException(status_code=500, detail=f"[{req_id}] 清空聊天操作超时: {clear_timeout_err}")
+            # Don't raise, continue to submit prompt
         except Exception as clear_exc:
-            print(f"[{req_id}] (Worker) ❌ 错误: 清空聊天时出现意外错误: {clear_exc}")
+            print(f"[{req_id}] (Worker) ❌ 错误: 在清空聊天点击/验证阶段出现意外错误: {clear_exc}")
             await save_error_snapshot(f"clear_chat_unexpected_{req_id}")
             check_client_disconnected("清空聊天意外错误后: ")
-            # Don't raise HTTPException here, try to continue submission
-            # raise HTTPException(status_code=500, detail=f"[{req_id}] 清空聊天时发生意外错误: {clear_exc}")
-        # --- V4: END Modified Clear Chat Logic ---
+            # Don't raise, continue to submit prompt
+        # --- End of Clear Chat Logic Block ---
 
         check_client_disconnected("Before Submit: ")
 
@@ -2649,7 +2657,6 @@ async def _process_request_from_queue(
             print(f"[{req_id}] (Worker) 处理非流式响应...", flush=True) # 中文
             start_time_ns = time.time()
             final_state_reached = False
-            # final_state_check_initiated = False # Removed
             spinner_locator = page.locator(LOADING_SPINNER_SELECTOR)
             input_field = page.locator(INPUT_SELECTOR)
             submit_button = page.locator(SUBMIT_BUTTON_SELECTOR)
@@ -2703,16 +2710,23 @@ async def _process_request_from_queue(
                     edit_button_check_start_time = time.time()
                     edit_button = page.locator(EDIT_MESSAGE_BUTTON_SELECTOR)
 
-                    # First, try to click the message text to ensure focus, which might reveal the button
+                    # First, try to focus the message text to ensure focus, which might reveal the button
                     try:
+                        check_client_disconnected("NonStream Before Focus Attempt: ")
+
+                        # << 新增：聚焦前短暂等待 >>
+                        await interruptible_sleep(0.05) # 50ms delay
+                        check_client_disconnected("NonStream After Sleep Before Focus: ")
+
+                        # << 修改：使用 focus() 代替 click() >>
                         await interruptible_wait_for(
-                            response_element.click(timeout=1000, position={'x': 10, 'y': 10}, force=True),
-                            timeout=1.5 # Shorter timeout for focus attempt
+                            response_element.focus(timeout=CLICK_TIMEOUT_MS), # Use focus
+                            timeout=CLICK_TIMEOUT_MS/1000 + 0.5 # Keep timeout consistent
                         )
-                        print(f"[{req_id}] (Worker NonStream) 已尝试聚焦最后一条消息。", flush=True)
+                        print(f"[{req_id}] (Worker NonStream) 已尝试聚焦最后一条消息。", flush=True) # Updated log
                         await interruptible_sleep(0.3) # Wait briefly for UI update
                     except Exception as focus_err:
-                        print(f"[{req_id}] (Worker NonStream) 聚焦消息文本时出错 (忽略): {focus_err}", flush=True)
+                        print(f"[{req_id}] (Worker NonStream) 聚焦消息文本时出错 (忽略): {focus_err}", flush=True) # Updated log
                         # Continue to check for edit button even if focus fails
 
                     check_client_disconnected("NonStream Before Edit Button Wait: ")
@@ -3128,19 +3142,25 @@ async def get_response_via_edit_button(page: AsyncPage, req_id: str, interruptib
                 timeout=CLICK_TIMEOUT_MS/1000 + 0.5
             )
             
-            # 点击文本区域以确保聚焦
+            check_client_disconnected("编辑响应 - 聚焦前: ") # Add check before sleep/focus
+
+            # << 新增：聚焦前短暂等待 >>
+            await interruptible_sleep(0.05) # 50ms delay
+            check_client_disconnected("编辑响应 - 聚焦后等待后: ") # Add check after sleep
+
+            # << 修改：使用 focus() 代替 click() >>
             await interruptible_wait_for(
-                response_text.click(timeout=CLICK_TIMEOUT_MS, position={'x': 10, 'y': 10}, force=True), 
-                timeout=CLICK_TIMEOUT_MS/1000 + 2.5
+                response_text.focus(timeout=CLICK_TIMEOUT_MS), # Use focus
+                timeout=CLICK_TIMEOUT_MS/1000 + 0.5 # Keep timeout consistent
             )
-            print(f"[{req_id}]   - 已点击消息文本内容，现在尝试获取编辑按钮", flush=True)
-            
+            print(f"[{req_id}]   - 已聚焦消息文本内容，现在尝试获取编辑按钮", flush=True) # Updated log
+
             # 短暂等待UI响应
             await interruptible_sleep(0.5)
             check_client_disconnected("编辑响应 - 聚焦后: ")
-            
+
         except Exception as e:
-            print(f"[{req_id}]   ⚠️ 点击/聚焦消息文本区域失败: {e}", flush=True)
+            print(f"[{req_id}]   ⚠️ 聚焦消息文本区域失败: {e}", flush=True) # Updated log
             await save_error_snapshot(f"focus_message_text_failed_{req_id}")
             # 即使聚焦失败也继续尝试，因为有些情况下编辑按钮可能已经可见
         
