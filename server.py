@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 # import camoufox.async_api
 from playwright.async_api import Page as AsyncPage, Browser as AsyncBrowser, Playwright as AsyncPlaywright, Error as PlaywrightAsyncError, expect as expect_async, BrowserContext as AsyncBrowserContext
 from playwright.async_api import async_playwright
+from urllib.parse import urljoin, urlparse # << Add urlparse
 
 # --- 全局日志控制配置 ---
 # 通过环境变量控制全局日志级别
@@ -49,7 +50,7 @@ CLEAR_CHAT_VERIFY_INTERVAL_MS = 400 # 检查清空状态的轮询间隔 (ms)
 # !! 新增: 复制响应相关常量 !!
 CLICK_TIMEOUT_MS = 5000 # 点击操作的超时时间 (ms)
 CLIPBOARD_READ_TIMEOUT_MS = 5000 # 读取剪贴板的超时时间 (ms)
-PSEUDO_STREAM_DELAY = 0.002 # 伪流式输出的字符间延迟 (秒)
+PSEUDO_STREAM_DELAY = 0.001 # 伪流式输出的字符间延迟 (秒)
 # !! 新增: 编辑式获取响应相关选择器 !!
 EDIT_MESSAGE_BUTTON_SELECTOR = 'ms-chat-turn:last-child .actions-container button.toggle-edit-button'
 MESSAGE_TEXTAREA_SELECTOR = 'ms-chat-turn:last-child ms-text-chunk ms-autosize-textarea'
@@ -1101,8 +1102,6 @@ async def _initialize_page_logic(browser: AsyncBrowser):
     global page_instance, is_page_ready
     print("--- 初始化页面逻辑 (连接到现有浏览器) ---") # 中文
     temp_context = None
-    # loaded_state = None # 将不再从此变量加载，但保留用于逻辑判断
-    storage_state_path_to_use = None # 用于决定使用哪个状态文件
     
     # 步骤 16: 读取环境变量
     launch_mode = os.environ.get('LAUNCH_MODE', 'debug') # 默认为 debug 以防万一
@@ -1422,28 +1421,6 @@ async def _close_page_logic():
     is_page_ready = False
     print("页面逻辑状态已重置。") # 中文
 
-# --- 新增：与Camoufox服务器通信的关闭信号函数 ---
-async def signal_camoufox_shutdown():
-    """通知 Camoufox 服务器准备关闭，增强错误处理"""
-    try:
-        print("   尝试发送关闭信号到 Camoufox 服务器...")
-        ws_endpoint = os.environ.get('CAMOUFOX_WS_ENDPOINT')
-        if not ws_endpoint:
-            print("   ⚠️ 无法发送关闭信号：未找到 CAMOUFOX_WS_ENDPOINT 环境变量")
-            return
-            
-        # 添加状态检查，避免尝试与已断开的服务器通信
-        if not browser_instance or not browser_instance.is_connected():
-            print("   ⚠️ 浏览器实例已断开，跳过关闭信号发送")
-            return
-            
-        # 非阻塞式通知方式，降低崩溃风险
-        await asyncio.sleep(0.2)
-        print("   ✅ 关闭信号已处理")
-    except Exception as e:
-        print(f"   ⚠️ 发送关闭信号过程中捕获异常: {e}")
-        # 不抛出异常，确保关闭流程继续
-
 # --- Lifespan context manager ---
 @asynccontextmanager
 async def lifespan(app_param: FastAPI):
@@ -1710,34 +1687,6 @@ async def detect_and_extract_page_error(page: AsyncPage, req_id: str):
         print(f"[{req_id}]    警告: 检查页面错误时出错: {e}") # 中文
         return None
 
-# --- Helper: Try Parse JSON ---
-def try_parse_json(text: str, req_id: str):
-    # ... (code unchanged) ...
-    """Attempts to find and parse the outermost JSON object/array in text.
-    NOTE V3: This function might become obsolete if the copy-paste method is used
-             and the response is directly treated as Markdown/text.
-    """
-    if not text or not isinstance(text, str):
-        return None
-    text = text.strip()
-    start_index = -1
-    end_index = -1
-    first_brace = text.find('{')
-    first_bracket = text.find('[')
-    if first_brace != -1 and (first_bracket == -1 or first_brace < first_bracket):
-        start_index = first_brace
-        end_index = text.rfind('}')
-    elif first_bracket != -1:
-        start_index = first_bracket
-        end_index = text.rfind(']')
-    if start_index == -1 or end_index == -1 or end_index < start_index:
-        return None
-    json_text = text[start_index : end_index + 1]
-    try:
-        return json.loads(json_text)
-    except json.JSONDecodeError as e:
-        return None
-
 # --- Snapshot Helper --- (Translate logs)
 async def save_error_snapshot(error_name: str = 'error'):
     # ... (code unchanged) ...
@@ -1961,7 +1910,9 @@ async def _process_request_from_queue(
     result_future: Future
 ):
     """处理单个请求的核心逻辑，由队列 Worker 调用"""
-    print(f"[{req_id}] (Worker) 开始处理来自队列的请求...", flush=True) # 中文
+    print(f"[{req_id}] (Worker) 开始处理来自队列的请求...") # 中文
+    # << 移除入口诊断日志 >>
+    
     is_streaming = request.stream
     page: Optional[AsyncPage] = None # Initialize page variable
     completion_event: Optional[asyncio.Event] = None # <<< 新增：完成事件
@@ -2136,141 +2087,181 @@ async def _process_request_from_queue(
             raise
 
     try:
-        # 1. Validation
+        # 1. Validation (Simplified in V4)
         try:
-            validation_result = validate_chat_request(request.messages, req_id)
-            user_prompt = validation_result["userPrompt"]
-            system_prompt = validation_result["systemPrompt"]
-            if user_prompt is None:
-                raise ValueError("处理后的用户提示意外为 None。") # 中文
+            validate_chat_request(request.messages, req_id) # Call simplified validation
         except ValueError as e:
             raise HTTPException(status_code=400, detail=f"[{req_id}] 无效请求: {e}")
 
-        print(f"[{req_id}] (Worker) 用户提示 (已验证, 长度={len(user_prompt)}): '{user_prompt[:80]}...'", flush=True) # 中文
-        if system_prompt:
-            print(f"[{req_id}] (Worker) 系统提示 (已验证, 长度={len(system_prompt)}): '{system_prompt[:80]}...'", flush=True) # 中文
+        # V4: Prepare combined prompt using the new function BEFORE navigation
+        prepared_prompt = prepare_combined_prompt(request.messages, req_id)
 
-        # 2. Prepare Prompt
-        if is_streaming:
-            prepared_prompt = prepare_ai_studio_prompt_stream(user_prompt, system_prompt)
-            print(f"[{req_id}] (Worker) 准备好的流式提示 (开始): '{prepared_prompt[:150]}...'", flush=True) # 中文
-        # 添加 else 分支来处理非流式情况
-        else:
-            prepared_prompt = prepare_ai_studio_prompt(user_prompt, system_prompt)
-            print(f"[{req_id}] (Worker) 准备好的非流式提示 (开始): '{prepared_prompt[:150]}...'", flush=True) # 中文
+        # --- V4: Conditional Clear Chat Logic (Skip if on /new_chat) ---
+        print(f"[{req_id}] (Worker) 检查是否需要清空聊天...")
+        
+        try:
+            # --- URL Check using urlparse --- 
+            current_url = page.url
+            parsed_url = urlparse(current_url)
+            is_on_new_chat_page = parsed_url.path.endswith('/prompts/new_chat')
+            
+            print(f"[{req_id}] (Worker) Current URL: {current_url}")
+            print(f"[{req_id}] (Worker) Parsed Path: {parsed_url.path}")
+            print(f"[{req_id}] (Worker) Is on /prompts/new_chat page? {is_on_new_chat_page}")
 
-        check_client_disconnected("Before Clear Chat: ")
-
-        # --- START: Clear Chat Logic --- (Use interruptible helpers)
-        current_url = page.url
-        is_new_chat_url = current_url.endswith("/new_chat")
-
-        if is_new_chat_url:
-            print(f"[{req_id}] (Worker) 当前在 /new_chat 页面，跳过清空聊天记录操作。", flush=True) # 中文
-        else:
-            # 只有在非 new_chat 页面才考虑清空
-            is_likely_new_conversation_turn = len(request.messages) == 1 or \
-                                            (len(request.messages) == 2 and any(m.role == 'system' for m in request.messages))
-
-            if is_likely_new_conversation_turn and CLEAR_CHAT_BUTTON_SELECTOR and CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR:
-                print(f"[{req_id}] (Worker) 尝试清空聊天记录... (新对话轮次)", flush=True) # 中文
-                try:
-                    clear_button = page.locator(CLEAR_CHAT_BUTTON_SELECTOR)
-                    confirm_button = page.locator(CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR)
-
-                    # --- 改进的检查逻辑 ---
-                    print(f"[{req_id}] (Worker)   - 检查'清除聊天'按钮状态...", flush=True) # 中文
-                    await interruptible_wait_for(expect_async(clear_button).to_be_visible(timeout=8000), timeout=8.5)
-                    
-                    is_disabled = await clear_button.is_disabled()
-                    
-                    if is_disabled:
-                        print(f"[{req_id}] (Worker)   - '清除聊天'按钮当前被禁用，可能无需清除。跳过清空操作。", flush=True) # 中文
-                    else:
-                        # 按钮可见且未被禁用，继续尝试点击
-                        print(f"[{req_id}] (Worker)   - '清除聊天'按钮可见且可用，尝试点击...", flush=True) # 中文
-                        # await interruptible_wait_for(expect_async(clear_button).to_be_enabled(timeout=5000), timeout=5.5) # 不再需要重复检查 enabled
-                        await interruptible_wait_for(clear_button.click(timeout=5000), timeout=5.5)
-                        print(f"[{req_id}] (Worker)   - '清除聊天'按钮已点击。", flush=True) # 中文
-
-                        print(f"[{req_id}] (Worker)   - 点击'继续'按钮...", flush=True) # 中文
-                        await interruptible_wait_for(expect_async(confirm_button).to_be_visible(timeout=5000), timeout=5.5)
-                        await interruptible_wait_for(confirm_button.click(timeout=5000), timeout=5.5)
-                        print(f"[{req_id}] (Worker)   - '继续'按钮已点击。验证清空效果...", flush=True) # 中文
-                        check_client_disconnected("After Clear Confirm Click: ")
-
-                        # --- Verify clear (保持不变) ---
-                        verify_start_time = time.time() * 1000
-                        cleared = False
-                        while time.time() * 1000 - verify_start_time < CLEAR_CHAT_VERIFY_TIMEOUT_MS:
-                            check_client_disconnected("Verify Clear Loop: ")
-                            model_turns = page.locator(RESPONSE_CONTAINER_SELECTOR)
-                            # Use interruptible_wait_for for count, shorter timeout
-                            count = await interruptible_wait_for(model_turns.count(), timeout=1.0)
-                            if count == 0:
-                                print(f"[{req_id}] (Worker)   ✅ 验证成功: 清空完成 (耗时 {int(time.time() * 1000 - verify_start_time)}ms)。", flush=True) # 中文
-                                cleared = True
-                                break
-                            await interruptible_sleep(CLEAR_CHAT_VERIFY_INTERVAL_MS / 1000)
-
-                        if not cleared and not client_disconnected_event.is_set():
-                            print(f"[{req_id}] (Worker)   ⚠️ 验证超时: 上下文可能未完全清空。", flush=True) # 中文
-                            await save_error_snapshot(f"clear_chat_verify_fail_{req_id}")
-                    # --- 结束改进的检查逻辑 ---
-
-                except PlaywrightAsyncError as clear_err:
-                    # 保持现有的 Playwright 错误处理（例如超时）
-                    if "timeout" in clear_err.message.lower():
-                        print(f"[{req_id}] (Worker) ⚠️ 清空聊天Playwright操作超时。继续执行。", flush=True)
-                        await save_error_snapshot(f"clear_chat_timeout_pw_{req_id}")
-                    else:
-                        print(f"[{req_id}] (Worker) ⚠️ 清空聊天Playwright错误: {clear_err.message.split('\n')[0]}. 继续执行。", flush=True) # 中文
-                        await save_error_snapshot(f"clear_chat_fail_or_verify_{req_id}")
-                except asyncio.TimeoutError:
-                    # 保持现有的 asyncio 超时处理
-                    print(f"[{req_id}] (Worker) ⚠️ 清空聊天asyncio操作超时。继续执行。", flush=True)
-                    await save_error_snapshot(f"clear_chat_timeout_asyncio_{req_id}")
-                except Exception as general_clear_err:
-                    # 捕获其他意外错误，但不再因为按钮禁用而进入这里
-                    if not isinstance(general_clear_err, HTTPException) and not isinstance(general_clear_err, ClientDisconnectedError):
-                        print(f"[{req_id}] (Worker) ⚠️ 清空聊天未知错误: {general_clear_err}. 继续执行。", flush=True) # 中文
-                        traceback.print_exc()
-                        await save_error_snapshot(f"clear_chat_unknown_err_{req_id}")
-
-            elif is_likely_new_conversation_turn:
-                print(f"[{req_id}] (Worker) 可能是新对话轮次，但未配置清空选择器，无法自动重置。", flush=True) # 中文
+            if is_on_new_chat_page:
+                print(f"[{req_id}] (Worker) ✅ 当前已在 /prompts/new_chat 页面，跳过清空聊天步骤。")
             else:
-                print(f"[{req_id}] (Worker) 不是新对话轮次，无需清空聊天记录。", flush=True) # 中文
-        # --- END: Clear Chat Logic ---
+                print(f"[{req_id}] (Worker) 当前不在 /prompts/new_chat 页面，执行清空聊天...")
+                # --- Clear Chat Logic (only runs if not on /new_chat) ---
+                # 1. 找到并点击清空聊天按钮
+                clear_chat_button = page.locator(CLEAR_CHAT_BUTTON_SELECTOR)
+                
+                # 检查清空按钮是否可见并可点击
+                print(f"[{req_id}] (Worker) 检查清空聊天按钮状态...")
+                
+                # 首先检查按钮是否可见
+                is_clear_button_visible = False
+                try:
+                    await interruptible_wait_for(
+                        expect_async(clear_chat_button).to_be_visible(timeout=3000),
+                        timeout=3.5
+                    )
+                    is_clear_button_visible = True
+                    print(f"[{req_id}] (Worker) 清空聊天按钮可见。")
+                except Exception as e:
+                    print(f"[{req_id}] (Worker) 清空聊天按钮不可见: {e}")
+                
+                # 然后检查按钮是否启用
+                is_clear_button_enabled = False
+                if is_clear_button_visible:
+                    try:
+                        await interruptible_wait_for(
+                            expect_async(clear_chat_button).to_be_enabled(timeout=2000),
+                            timeout=2.5
+                        )
+                        is_clear_button_enabled = True
+                        print(f"[{req_id}] (Worker) 清空聊天按钮已启用。")
+                    except Exception as e:
+                        print(f"[{req_id}] (Worker) 清空聊天按钮虽可见但被禁用: {e}")
+                
+                # 如果按钮可见且已启用，尝试点击它
+                if is_clear_button_visible and is_clear_button_enabled:
+                    print(f"[{req_id}] (Worker) 尝试点击清空聊天按钮...")
+                    
+                    # 点击清空聊天按钮
+                    start_clear_time = time.monotonic()
+                    await interruptible_wait_for(
+                        clear_chat_button.click(timeout=5000),
+                        timeout=5.5
+                    )
+                    duration = time.monotonic() - start_clear_time
+                    print(f"[{req_id}] (Worker) 清空聊天按钮点击完成，耗时: {duration:.2f}s")
+                    
+                    # 2. 找到并点击确认按钮
+                    print(f"[{req_id}] (Worker) 等待清空确认按钮出现...")
+                    # !! 确保使用正确的全局变量名 !! 
+                    confirm_button = page.locator(CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR)
+                    
+                    start_confirm_wait_time = time.monotonic()
+                    await interruptible_wait_for(
+                        expect_async(confirm_button).to_be_visible(timeout=5000),
+                        timeout=5.5
+                    )
+                    duration = time.monotonic() - start_confirm_wait_time
+                    print(f"[{req_id}] (Worker) 确认按钮已可见，耗时: {duration:.2f}s")
+                    
+                    print(f"[{req_id}] (Worker) 点击确认按钮...")
+                    print(f"[{req_id}] (Worker) >>准备点击确认按钮<<")
+                    start_confirm_click_time = time.monotonic()
+                    await interruptible_wait_for(
+                        confirm_button.click(timeout=5000),
+                        timeout=5.5
+                    )
+                    duration = time.monotonic() - start_confirm_click_time
+                    print(f"[{req_id}] (Worker) >>确认按钮点击操作完成<<，耗时: {duration:.2f}s")
+                    
+                    # 3. 等待清空操作完成验证
+                    print(f"[{req_id}] (Worker) 等待清空操作完成验证...")
+                    input_field_clear = page.locator(INPUT_SELECTOR)
+                    
+                    print(f"[{req_id}] (Worker)   - 验证输入框可见...")
+                    start_verify_visible_time = time.monotonic()
+                    await interruptible_wait_for(
+                        expect_async(input_field_clear).to_be_visible(timeout=5000),
+                        timeout=5.5
+                    )
+                    duration = time.monotonic() - start_verify_visible_time
+                    print(f"[{req_id}] (Worker)   - 输入框可见验证完成，耗时: {duration:.2f}s")
+                    
+                    print(f"[{req_id}] (Worker)   - 验证输入框为空...")
+                    start_verify_empty_time = time.monotonic()
+                    await interruptible_wait_for(
+                        expect_async(input_field_clear).to_have_value("", timeout=3000),
+                        timeout=3.5
+                    )
+                    duration = time.monotonic() - start_verify_empty_time
+                    print(f"[{req_id}] (Worker)   - 输入框为空验证完成，耗时: {duration:.2f}s")
+                    
+                    print(f"[{req_id}] (Worker) ✅ 聊天已成功清空并通过验证，页面状态已重置")
+                else:
+                    # 如果按钮不可见或被禁用 (在非 /new_chat 页面)
+                    if not is_clear_button_visible:
+                        print(f"[{req_id}] (Worker) 警告: 不在/new_chat页面，但清空聊天按钮不可见。继续执行...")
+                    elif not is_clear_button_enabled:
+                        print(f"[{req_id}] (Worker) 警告: 不在/new_chat页面，但清空聊天按钮被禁用。继续执行...")
+        
+        except PlaywrightAsyncError as clear_err:
+            print(f"[{req_id}] (Worker) ❌ 错误: 清空聊天时出现Playwright错误: {clear_err}")
+            await save_error_snapshot(f"clear_chat_pw_error_{req_id}")
+            check_client_disconnected("清空聊天Playwright错误后: ")
+            raise HTTPException(status_code=500, detail=f"[{req_id}] 清空聊天时发生 Playwright 错误: {clear_err}")
+        
+        except asyncio.TimeoutError as clear_timeout_err:
+            print(f"[{req_id}] (Worker) ❌ 错误: 清空聊天操作超时")
+            await save_error_snapshot(f"clear_chat_timeout_{req_id}")
+            check_client_disconnected("清空聊天超时后: ")
+            raise HTTPException(status_code=500, detail=f"[{req_id}] 清空聊天操作超时: {clear_timeout_err}")
+        
+        except Exception as clear_exc:
+            print(f"[{req_id}] (Worker) ❌ 错误: 清空聊天时出现意外错误: {clear_exc}")
+            # << 移除异常诊断日志 >>
+            await save_error_snapshot(f"clear_chat_unexpected_{req_id}")
+            check_client_disconnected("清空聊天意外错误后: ")
+            raise HTTPException(status_code=500, detail=f"[{req_id}] 清空聊天时发生意外错误: {clear_exc}")
+        # --- V4: END Conditional Clear Chat Logic ---
 
         check_client_disconnected("Before Submit: ")
 
         # 3. Interact and Submit (Use interruptible helpers)
-        print(f"[{req_id}] (Worker) 填充提示并提交...", flush=True) # 中文
+        print(f"[{req_id}] (Worker) Filling combined prompt ({len(prepared_prompt)} chars) and submitting...") # Updated log
         input_field = page.locator(INPUT_SELECTOR)
         submit_button = page.locator(SUBMIT_BUTTON_SELECTOR)
 
-        print(f"[{req_id}] (Worker) 等待输入框可见...")
-        start_wait_time = time.monotonic()
+        # Wait for input visible (should be fast now)
         try:
-            await interruptible_wait_for(expect_async(input_field).to_be_visible(timeout=10000), timeout=10.5)
-            duration = time.monotonic() - start_wait_time
-            print(f"[{req_id}] (Worker) 输入框可见，耗时: {duration:.2f} 秒。")
+             await interruptible_wait_for(expect_async(input_field).to_be_visible(timeout=5000), timeout=5.5)
         except Exception as e:
-            duration = time.monotonic() - start_wait_time
-            print(f"[{req_id}] (Worker) 等待输入框可见失败或超时，耗时: {duration:.2f} 秒。错误: {e}")
-            raise # Re-raise the exception
+             print(f"[{req_id}] (Worker) ❌ ERROR: Input field not visible even after navigation checks: {e}")
+             await save_error_snapshot(f"input_not_visible_final_{req_id}")
+             raise HTTPException(status_code=503, detail=f"[{req_id}] Input field failed to become visible.")
 
-        print(f"[{req_id}] (Worker) 填充提示...")
+
+        # Fill with the prepared combined prompt
+        print(f"[{req_id}] (Worker) Filling prompt...")
         start_fill_time = time.monotonic()
         try:
-            await interruptible_wait_for(input_field.fill(prepared_prompt, timeout=60000), timeout=60.5) # Reverted back to fill
+            # Using fill for simplicity first. If very long prompts cause issues,
+            # might need `input_field.press_sequentially(prepared_prompt, delay=5)` or clipboard paste.
+            await interruptible_wait_for(input_field.fill(prepared_prompt, timeout=90000), timeout=90.5) # Increased timeout for potentially long prompts
             duration = time.monotonic() - start_fill_time
-            print(f"[{req_id}] (Worker) 填充完成，耗时: {duration:.2f} 秒。")
+            print(f"[{req_id}] (Worker) Fill completed in {duration:.2f}s.")
         except Exception as e:
             duration = time.monotonic() - start_fill_time
-            print(f"[{req_id}] (Worker) 填充失败或超时，耗时: {duration:.2f} 秒。错误: {e}")
-            raise
+            print(f"[{req_id}] (Worker) ❌ Fill failed or timed out after {duration:.2f}s: {e}")
+            await save_error_snapshot(f"fill_combined_prompt_error_{req_id}")
+            check_client_disconnected("After Fill Error: ")
+            raise # Re-raise the exception
 
         print(f"[{req_id}] (Worker) 等待提交按钮可用...") # Added log before wait
         start_wait_enabled_time = time.monotonic()
@@ -2836,26 +2827,9 @@ async def _process_request_from_queue(
                             print(f"[{req_id}] (Worker NonStream) 警告: 原始文本为空。", flush=True) # 中文
                             final_content_for_user = ""
                         else:
-                            parsed_json = try_parse_json(final_raw_text, req_id)
-                            ai_response_text_from_json = None
-                            if parsed_json:
-                                if isinstance(parsed_json.get("response"), str):
-                                    ai_response_text_from_json = parsed_json["response"]
-                                else:
-                                    try: ai_response_text_from_json = json.dumps(parsed_json)
-                                    except: ai_response_text_from_json = final_raw_text
-                            else:
-                                print(f"[{req_id}] (Worker NonStream) 警告: 无法解析 JSON。", flush=True) # 中文
-                                ai_response_text_from_json = final_raw_text
-                            
-                            start_marker = '<<<START_RESPONSE>>>'
-                            if ai_response_text_from_json and ai_response_text_from_json.startswith(start_marker):
-                                final_content_for_user = ai_response_text_from_json[len(start_marker):]
-                            elif ai_response_text_from_json:
-                                final_content_for_user = ai_response_text_from_json
-                                print(f"[{req_id}] (Worker NonStream) 警告: 未找到起始标记。", flush=True) # 中文
-                            else:
-                                print(f"[{req_id}] (Worker NonStream) 警告: 无法解析 JSON。", flush=True) # 中文
+                            # 直接使用清理后的原始文本
+                            final_content_for_user = final_raw_text
+                            print(f"[{req_id}] (Worker NonStream) 使用原始获取的文本作为最终内容。", flush=True)
             except asyncio.TimeoutError:
                  print(f"[{req_id}] (Worker NonStream) ❌ 获取最终内容超时。", flush=True)
                  await save_error_snapshot(f"get_final_content_timeout_{req_id}")
@@ -2944,10 +2918,10 @@ async def _process_request_from_queue(
               except asyncio.CancelledError: pass
               # print(f"[{req_id}] (Worker) Disconnect check task cleanup attempted.") # Debug log
          print(f"[{req_id}] (Worker) --- 完成处理请求 (退出 _process_request_from_queue) --- ", flush=True) # 中文
-         # <<< 新增：在 finally 中最后检查并设置事件，以防万一 >>>
-         if is_streaming and completion_event and not completion_event.is_set():
-              print(f"[{req_id}] (Worker) Setting completion event in outer finally block as a safeguard.")
-              completion_event.set()
+         # <<< REMOVED: Premature event setting removed >>>
+         # if is_streaming and completion_event and not completion_event.is_set():
+         #      print(f"[{req_id}] (Worker) Setting completion event in outer finally block as a safeguard.")
+         #      completion_event.set()
 
     # <<< 新增：返回 completion_event (仅对流式请求) >>>
     return completion_event
@@ -3342,3 +3316,82 @@ async def get_response_via_edit_button(page: AsyncPage, req_id: str, interruptib
         traceback.print_exc()
         await save_error_snapshot(f"edit_button_unexpected_error_{req_id}")
         return None
+
+# V4: Combined prompt preparation logic
+def prepare_combined_prompt(messages: List[Message], req_id: str) -> str:
+    """
+    Takes the complete message list and formats it into a single string
+    suitable for pasting into AI Studio, including history.
+    Handles the first system message separately and formats user/assistant turns.
+    """
+    print(f"[{req_id}] (Prepare Prompt) Preparing combined prompt from {len(messages)} messages.")
+    combined_parts = []
+    system_prompt_content = None
+    processed_indices = set() # Keep track of processed messages
+
+    # 1. Extract the first system message if it exists
+    first_system_msg_index = -1
+    for i, msg in enumerate(messages):
+        if msg.role == 'system':
+            if isinstance(msg.content, str) and msg.content.strip():
+                system_prompt_content = msg.content.strip()
+                processed_indices.add(i)
+                first_system_msg_index = i
+                print(f"[{req_id}] (Prepare Prompt) Found system prompt at index {i}: '{system_prompt_content[:80]}...'")
+            else:
+                 print(f"[{req_id}] (Prepare Prompt) Ignoring non-string or empty system message at index {i}.")
+                 processed_indices.add(i) # Mark as processed even if ignored
+            break # Only process the first system message found
+
+    # 2. Add system prompt preamble if found
+    if system_prompt_content:
+        # Add a separator only if there will be other messages following
+        separator = "\n\n" if any(idx not in processed_indices for idx in range(len(messages))) else ""
+        combined_parts.append(f"System Instructions:\n{system_prompt_content}{separator}")
+
+
+    # 3. Iterate through remaining messages (user and assistant roles primarily)
+    turn_separator = "\n---\n" # Separator between turns
+    is_first_turn_after_system = True # Track if it's the first message after potential system prompt
+    for i, msg in enumerate(messages):
+        if i in processed_indices:
+            continue # Skip already processed (e.g., the system prompt)
+
+        role = msg.role.capitalize()
+        # Skip 'System' role here as we handled the first one already
+        if role == 'System':
+            print(f"[{req_id}] (Prepare Prompt) Skipping subsequent system message at index {i}.")
+            continue
+
+        content = ""
+
+        # Extract content, handling string or list[dict] format
+        if isinstance(msg.content, str):
+            content = msg.content
+        elif isinstance(msg.content, list):
+            text_parts = []
+            for item_model in msg.content:
+                 item = item_model.dict()
+                 if item.get('type') == 'text' and isinstance(item.get('text'), str):
+                      text_parts.append(item['text'])
+            content = "\\n".join(text_parts)
+        else:
+            print(f"[{req_id}] (Prepare Prompt) Warning: Unexpected content type ({type(msg.content)}) for role {role} at index {i}. Converting to string.")
+            content = str(msg.content)
+
+        content = content.strip() # Trim whitespace
+
+        if content: # Only add non-empty messages
+            # Add separator *before* the next role, unless it's the very first turn being added
+            if not is_first_turn_after_system:
+                 combined_parts.append(turn_separator)
+
+            combined_parts.append(f"{role}:\n{content}")
+            is_first_turn_after_system = False # No longer the first turn
+        else:
+            print(f"[{req_id}] (Prepare Prompt) Skipping empty message for role {role} at index {i}.")
+
+    final_prompt = "".join(combined_parts)
+    print(f"[{req_id}] (Prepare Prompt) Combined prompt length: {len(final_prompt)}. Preview: '{final_prompt[:200]}...'")
+    # Add a final newline if not empty, helps UI sometimes
+    return final_prompt + "\n" if final_prompt else ""
