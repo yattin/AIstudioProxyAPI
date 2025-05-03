@@ -3,7 +3,7 @@
 [![Stargazers over time](https://starchart.cc/CJackHwang/AIstudioProxyAPI.svg?variant=adaptive)](https://starchart.cc/CJackHwang/AIstudioProxyAPI)
 ### Stargazers over time
 
-**这是当前维护的 Python 版本。旧的、不再维护的 Javascript 版本请参见 [`deprecated_javascript_version/README.md`](deprecated_javascript_version/README.md)。**
+**这是当前维护的 Python 版本，CJS版本不再维护**
 
 ---
 
@@ -13,11 +13,12 @@
 *   [免责声明](#免责声明)
 *   [核心特性](#核心特性-python-版本)
 *   [重要提示](#️重要提示-python-版本)
-*   [开始使用](#-开始使用-python-版本)
+*   [快速开始 (推荐流程)](#-快速开始-推荐流程)
+*   [详细步骤](#-详细步骤)
     *   [1. 先决条件](#1-先决条件)
     *   [2. 安装](#2-安装)
-    *   [3. 认证设置 (关键步骤!)](#3-认证设置-关键步骤)
-    *   [4. 运行代理](#4-运行代理)
+    *   [3. 首次运行与认证 (关键!)](#3-首次运行与认证-关键)
+    *   [4. 日常运行](#4-日常运行)
     *   [5. API 使用](#5-api-使用)
     *   [6. 配置客户端 (以 Open WebUI 为例)](#6-配置客户端-以-open-webui-为例)
     *   [7. (可选) 局域网域名访问 (mDNS)](#7-可选-局域网域名访问-mdns)
@@ -57,36 +58,81 @@
 
 ## ✨ 核心特性 (Python 版本)
 
-*   **OpenAI API 兼容**: 提供 `/v1/chat/completions` 和 `/v1/models` 端点。
+*   **OpenAI API 兼容**: 提供 `/v1/chat/completions`, `/v1/models`, `/api/info` 端点。
 *   **流式/非流式响应**: 支持 `stream=true` 和 `stream=false`。
 *   **请求队列**: 使用 `asyncio.Queue` 顺序处理请求，提高稳定性。
 *   **Camoufox 集成**: 通过 `launch_camoufox.py` 调用 `camoufox` 库启动修改版的 Firefox 实例，利用其反指纹和反检测能力。
-*   **两种启动模式**: 
-    *   `debug` (有界面): 便于首次认证、调试和查看浏览器状态。
-    *   `headless` (无头，默认): 适合后台自动运行。
-*   **系统提示词**: 支持 `messages` 中的 `system` 角色。
-*   **内部 Prompt 优化**: 自动包装用户输入以引导 AI Studio 输出特定格式，便于解析。
+*   **两种启动模式**:
+    *   `--debug` (有界面): 便于首次认证、调试和查看浏览器状态。
+    *   默认交互式启动，可选无头模式 (适合后台运行) 或调试模式。
+*   **系统提示词与历史记录**: 支持 `messages` 中的 `system` 角色和多轮对话历史。
 *   **认证状态持久化**: 通过保存和加载浏览器认证状态 (`auth_profiles` 目录) 实现免登录。
-*   **自动清空上下文**: 尝试在新对话开始时自动清空 AI Studio 页面的聊天记录。
+*   **自动清空上下文 (条件性)**: 尝试在新对话开始时，如果当前不在 `/new_chat` 页面，则自动清空 AI Studio 页面的聊天记录。
+*   **智能响应获取**: 优先尝试通过模拟点击"编辑"或"复制"按钮获取原生响应，提高流式输出的准确性。
 *   **服务端 (`server.py`)**: FastAPI 应用，处理 API 请求，通过 Playwright 控制 Camoufox 浏览器与 AI Studio 交互。
-*   **启动器 (`launch_camoufox.py`)**: 负责启动 Camoufox 服务和 FastAPI 服务，并建立两者之间的连接。
+*   **启动器 (`launch_camoufox.py`)**: 负责启动 Camoufox 服务和 FastAPI 服务，并协调两者之间的连接。
 *   **错误快照**: 出错时自动在 `errors_py/` 目录保存截图和 HTML。
-*   **日志控制**: 可通过参数或环境变量调整日志级别和频率。
-*   **辅助端点**: 提供 `/health`, `/v1/queue`, `/v1/cancel/{req_id}` 等端点。
-*   **Web UI**: 提供 `/` 路径访问一个简单的 HTML 聊天界面 (`index.html`) 用于测试。
+*   **日志控制**: 可通过环境变量调整日志级别和频率。
+*   **辅助端点**: 提供 `/health`, `/v1/queue`, `/v1/cancel/{req_id}` 等端点用于监控和管理。
+*   **Web UI**: 提供 `/` 路径访问一个简单的 HTML 聊天界面 (`index.html`) 用于快速测试。
 
 ## ⚠️ 重要提示 (Python 版本)
 
 *   **非官方项目**: 依赖 AI Studio Web 界面，可能因页面更新失效。
-*   **认证文件是关键**: `headless` 模式**高度依赖**于 `auth_profiles/active/` 下有效的 `.json` 认证文件。**文件可能会过期**，需要定期通过 `debug` 模式手动保存文件替换更新。
-*   **CSS 选择器依赖**: 自动清空上下文、页面交互等功能依赖 `server.py` 中定义的 CSS 选择器。AI Studio 页面更新可能导致这些选择器失效，需要手动更新。
-*   **不支持历史编辑/分叉**: 代理无法支持客户端的历史编辑功能。
-*   **Camoufox 特性**: 本项目利用 Camoufox 提供的浏览器实例进行交互。Camoufox 通过修改底层实现来增强反指纹能力，旨在模拟真实用户。了解更多信息请参考 [Camoufox 官方文档](https://camoufox.com/)。
+*   **认证文件是关键**: 无头模式**高度依赖**于 `auth_profiles/active/` 下有效的 `.json` 认证文件。**文件可能会过期**，需要定期通过 `debug` 模式手动保存文件替换更新。
+*   **CSS 选择器依赖**: 页面交互（如获取响应、清空聊天等）依赖 `server.py` 中定义的 CSS 选择器。AI Studio 页面更新可能导致这些选择器失效，需要手动更新。
+*   **Camoufox 特性**: 利用 Camoufox 增强反指纹能力。了解更多信息请参考 [Camoufox 官方文档](https://camoufox.com/)。
 *   **稳定性**: 浏览器自动化本质上不如原生 API 稳定，长时间运行可能需要重启。
 *   **AI Studio 限制**: 无法绕过 AI Studio 本身的速率、内容等限制。
-*   **模型参数**: 温度、Top-K/P、最大输出长度等模型参数**需要在 AI Studio Web UI 中设置**，本代理未制作自动化设置故暂时不转发 API 请求中的这些参数。
+*   **模型参数**: 温度、Top-K/P 等模型参数**需要在 AI Studio Web UI 中设置**，本代理暂时不转发 API 请求中的这些参数。
+*   **需要粘贴端点**: 当前 `launch_camoufox.py` 启动后，**需要手动复制 Camoufox 输出的 `ws://...` 地址并粘贴回终端**，以便服务器连接浏览器。
+*   **客户端管理历史，代理不支持 UI 内编辑**: 客户端负责维护完整的聊天记录并将其发送给代理。代理服务器本身不支持在 AI Studio 界面中对历史消息进行编辑或分叉操作；它总是处理客户端发送的完整消息列表，然后将其发送到 AI Studio 页面。
 
-## 🚀 开始使用 (Python 版本)
+## 🚀 快速开始 (推荐流程)
+
+如果你是 macOS 或 Linux 用户，熟悉终端操作，可以尝试以下快速流程：
+
+1.  **安装依赖:**
+    ```bash
+    # 克隆仓库
+    git clone https://github.com/CJackHwang/AIstudioProxyAPI && cd AIstudioProxyAPI
+    # (推荐) 创建虚拟环境
+    python -m venv venv && source venv/bin/activate 
+    # 安装 Camoufox 和依赖
+    pip install -U camoufox[geoip] -r requirements.txt
+    # 下载 Camoufox 浏览器
+    camoufox fetch
+    # 安装 Playwright 依赖
+    playwright install-deps firefox
+    ```
+
+2.  **首次运行获取认证:**
+    ```bash
+    python launch_camoufox.py --debug
+    ```
+    *   会启动一个**带界面的浏览器**。
+    *   **复制**终端输出的 `Websocket endpoint: ws://...` 地址，**粘贴**回终端并回车。
+    *   **在弹出的浏览器窗口中完成 Google 登录**，直到看到 AI Studio 聊天界面。
+    *   回到终端，提示保存认证时输入 `y` 并回车 (文件名可默认)。文件会保存在 `auth_profiles/saved/`。
+    *   **将 `auth_profiles/saved/` 下的 `.json` 文件移动到 `auth_profiles/active/` 目录。** 确保 `active` 目录下只有一个 `.json` 文件。
+    *   可以按 `Ctrl+C` 停止 `--debug` 模式的运行。
+
+3.  **日常运行 (无头模式):**
+    ```bash
+    python launch_camoufox.py
+    ```
+    *   **前提:** 确保 `auth_profiles/active/` 下有有效的 `.json` 文件。
+    *   会提示选择模式，直接回车或输入 `1` 选择无头模式。
+    *   **复制**终端输出的 `Websocket endpoint: ws://...` 地址，**粘贴**回终端并回车。
+    *   服务将在后台运行。
+
+4.  **使用:**
+    *   API 地址: `http://127.0.0.1:2048/v1` (或其他你配置的地址和端口)。
+    *   将其配置到 Open WebUI 等客户端中即可使用。
+
+**认证过期后，重复步骤 2 和 3（删除旧的 active 文件，重新 debug 获取并移动新的）。**
+
+## 📖 详细步骤
 
 ### 1. 先决条件
 
@@ -97,7 +143,7 @@
 
 ### 2. 安装
 
-1.  **克隆仓库**: 
+1.  **克隆仓库**:
     ```bash
     git clone https://github.com/CJackHwang/AIstudioProxyAPI
     cd AIstudioProxyAPI
@@ -107,20 +153,22 @@
     ```bash
     python -m venv venv
     source venv/bin/activate  # Linux/macOS
-    # venv\Scripts\activate  # Windows
+    # venv\\Scripts\\activate  # Windows
     ```
 
-3.  **安装 Camoufox 和依赖**: 
+    *   说明: 第一行命令 `python -m venv venv` 会在当前目录下创建一个名为 `venv` 的子目录，里面包含了 Python 解释器和独立的包安装目录。第二行命令 `source venv/bin/activate` (macOS/Linux) 或 `venv\\Scripts\\activate` (Windows) 会激活这个环境，之后你的终端提示符可能会发生变化 (例如前面加上 `(venv)` )，表示你正处于虚拟环境中。后续的 `pip install` 命令会将库安装到这个 `venv` 目录内。
+
+3.  **安装 Camoufox 和依赖**:
     ```bash
     # 安装 Camoufox 库 (推荐包含 geoip 数据，特别是使用代理时)
     pip install -U camoufox[geoip]
-    
+
     # 安装项目所需的其他 Python 库
     pip install -r requirements.txt
     ```
     `requirements.txt` 主要包含 `fastapi`, `uvicorn[standard]`, `playwright`, `pydantic`。
 
-4.  **下载 Camoufox 浏览器**: 
+4.  **下载 Camoufox 浏览器**:
     ```bash
     # Camoufox 需要下载其修改版的 Firefox
     camoufox fetch
@@ -128,92 +176,82 @@
     如果此步骤因 SSL 证书等网络问题失败，可以尝试运行项目中的 `fetch_camoufox_data.py` 脚本 (详见[下方说明](#-关于-fetch_camoufox_datapy))。
 
 5.  **安装 Playwright 浏览器依赖 (如果需要)**:
-    虽然 Camoufox 使用自己的 Firefox，但首次运行 Playwright 相关命令（如此处的安装）可能仍需要安装一些基础依赖。
-```bash
+    虽然 Camoufox 使用自己的 Firefox，但首次运行 Playwright 相关命令可能仍需要安装一些基础依赖。
+    ```bash
     # 确保 Playwright 库能找到必要的系统依赖
-    playwright install-deps firefox 
+    playwright install-deps firefox
     # 或者 playwright install-deps # 安装所有浏览器的依赖
-```
+    ```
 
-### 3. 认证设置 (关键步骤!)
+### 3. 首次运行与认证 (关键!)
 
-为了避免每次启动都手动登录 AI Studio，本项目通过保存和加载浏览器的认证状态 (`.json` 文件) 来实现持久化登录。**你必须先通过 `debug` 模式运行一次来生成这个认证文件。**
+为了避免每次启动都手动登录 AI Studio，你需要先通过 `debug` 模式运行一次来生成认证文件。
 
-1.  **首次运行 (Debug 模式) - 生成认证文件**:
+1.  **运行 Debug 模式**:
     ```bash
     python launch_camoufox.py --debug
     ```
-    *   `launch_camoufox.py` 会调用 Camoufox 启动一个**有界面的**浏览器窗口。
-    *   终端会输出 Camoufox 服务器的 WebSocket 端点，格式类似 `ws://127.0.0.1:xxxxx/xxxxxxxx`。**复制这个完整的地址**。
-    *   将复制的地址粘贴回终端并按回车。
-    *   `server.py` (FastAPI 应用) 会尝试连接到这个 Camoufox 浏览器。
-    *   **关键交互:** 观察终端日志和弹出的浏览器窗口：
-        *   如果浏览器直接打开了 AI Studio 聊天界面，说明可能已有登录状态或无需登录。
-        *   如果浏览器打开了 Google 登录页面，**请在浏览器窗口中手动完成登录流程** (输入账号、密码、二次验证等)，直到成功进入 AI Studio (`.../prompts/new_chat`)。
-    *   当 `server.py` 确认页面加载完成且用户已登录后，它会在终端提示：**"是否要将当前的浏览器认证状态保存到文件？ (y/N):"**
-    *   输入 `y` 并回车。
-    *   可以选择输入一个文件名（如 `my_google_auth.json`），或直接回车使用默认名称 (`auth_state_时间戳.json`)。
-    *   认证文件将保存在项目目录下的 `auth_profiles/saved/` 文件夹中。
+    *   脚本会启动 Camoufox，并在终端输出启动信息。
+    *   你会看到一个 **带界面的 Firefox 浏览器窗口** 弹出。
+    *   **关键交互 1: 复制粘贴端点**
+        *   在**终端**中找到类似 `Websocket endpoint: ws://localhost:xxxxx/xxxxxxxx...` 的行。
+        *   **完整复制** 这个 `ws://...` 地址。
+        *   将复制的地址 **粘贴** 回到终端提示 `请粘贴 WebSocket 端点并按回车:` 之后，然后按回车。
+    *   **关键交互 2: 浏览器内登录**
+        *   如果浏览器自动打开了 AI Studio 聊天界面 (`.../prompts/new_chat`)，说明可能已有登录状态或无需登录。
+        *   如果浏览器打开了 Google 登录页面，**请在浏览器窗口中手动完成 Google 登录流程** (输入账号、密码、二次验证等)，直到你成功进入 AI Studio 的聊天界面。
+    *   **关键交互 3: 保存认证状态**
+        *   当 `server.py` 确认页面加载完成且用户已登录后，它会在**终端**提示：`是否要将当前的浏览器认证状态保存到文件？ (y/N):`
+        *   输入 `y` 并按回车。
+        *   会再次提示输入文件名，你可以直接回车使用默认名称（`auth_state_时间戳.json`）。
+        *   认证文件将保存在项目目录下的 `auth_profiles/saved/` 文件夹中。
     *   此时，代理服务已经可以使用了。你可以继续让它运行，或者按 `Ctrl+C` 停止它。
 
-2.  **配置 Headless 模式 - 激活认证文件**:
+2.  **激活认证文件**:
     *   进入 `auth_profiles/saved/` 目录，找到刚才保存的 `.json` 认证文件。
-    *   将这个 `.json` 文件**移动或复制**到 `auth_profiles/active/` 目录下。
-    *   **重要:** 确保 `auth_profiles/active/` 目录下**有且仅有一个 `.json` 文件**。`headless` 模式启动时会自动加载此目录下的第一个 `.json` 文件作为认证状态。
+    *   将这个 `.json` 文件 **移动或复制** 到 `auth_profiles/active/` 目录下。
+    *   **重要:** 确保 `auth_profiles/active/` 目录下 **有且仅有一个 `.json` 文件**。无头模式启动时会自动加载此目录下的第一个 `.json` 文件。
 
-**认证文件会过期!** Google 的登录状态不是永久有效的。当 `headless` 模式启动失败并报告认证错误或重定向到登录页时，意味着 `active` 目录下的认证文件已失效。你需要：
+**认证文件会过期!** Google 的登录状态不是永久有效的。当无头模式启动失败并报告认证错误或重定向到登录页时，意味着 `active` 目录下的认证文件已失效。你需要：
 
 1.  删除 `active` 目录下的旧文件。
-2.  重新执行【首次运行 (Debug 模式)】步骤，生成新的认证文件。
+2.  重新执行上面的 **【运行 Debug 模式】** 步骤，生成新的认证文件。
 3.  将新生成的 `.json` 文件再次移动到 `active` 目录下。
 
-### 4. 运行代理
+### 4. 日常运行
 
-完成认证设置后，可以根据需要选择模式运行：
+完成首次认证设置后，推荐使用无头模式运行：
 
-*   **无头模式 (Headless - 推荐用于后台运行)**:
-    *   **前提**: `auth_profiles/active/` 目录下**必须**存在一个有效的 `.json` 认证文件。
-    *   **启动命令**: 
-        ```bash
-        python launch_camoufox.py
-        ```
-    *   脚本会自动使用 `active` 目录下的认证文件启动 Camoufox (无界面)。
-    *   终端会输出 Camoufox 的 WebSocket 端点。**复制并粘贴回终端**。
-    *   `server.py` 连接成功后，服务将在后台运行，你可以关闭终端窗口（如果使用 `nohup` 或类似工具启动）。
+```bash
+python launch_camoufox.py
+```
 
-*   **调试模式 (Debug - 用于生成/更新认证文件或调试)**:
-    *   **启动命令**: 
-        ```bash
-        python launch_camoufox.py --debug
-        ```
-    *   会启动**有界面的** Camoufox 浏览器。
-    *   需要用户交互：
-        *   如果 `auth_profiles/active` 和 `auth_profiles/saved` 目录下有多个 `.json` 文件，会提示选择加载哪个或不加载。
-        *   需要复制粘贴 Camoufox 的 WebSocket 端点。
-        *   可能需要在浏览器窗口中手动登录 (如果选择不加载认证文件或文件无效)。
-        *   登录后会提示是否保存认证状态。
+*   **前提**: `auth_profiles/active/` 目录下**必须**存在一个有效的 `.json` 认证文件。
+*   **交互 1: 选择模式**
+    *   终端会提示选择启动模式: `[1] 无头模式 (实验性)` 或 `[2] 调试模式 (有界面)`。
+    *   直接按回车或输入 `1` 并回车，选择无头模式。
+*   **交互 2: 复制粘贴端点**
+    *   脚本会启动 Camoufox (无界面)，并在终端输出启动信息。
+    *   在**终端**中找到类似 `Websocket endpoint: ws://localhost:xxxxx/xxxxxxxx...` 的行。
+    *   **完整复制** 这个 `ws://...` 地址。
+    *   将复制的地址 **粘贴** 回到终端提示 `请粘贴 WebSocket 端点并按回车:` 之后，然后按回车。
+*   `server.py` 连接成功后，服务将在后台运行。你可以关闭终端窗口（如果使用 `nohup` 或类似工具启动）。
+
+如果你需要更新认证文件或进行调试，请使用 `--debug` 模式运行：
+```bash
+python launch_camoufox.py --debug
+```
+流程与首次认证类似，需要粘贴端点并在需要时登录和保存状态。
 
 **启动流程简述:**
 
-1.  运行 `python launch_camoufox.py` (带或不带 `--debug`)。
+1.  运行 `python launch_camoufox.py`。
 2.  `launch_camoufox.py` 调用 `camoufox.server.launch_server()` 启动 Camoufox 服务 (一个修改版的 Firefox 实例和一个 WebSocket 服务器)。
 3.  Camoufox 服务在终端输出其 WebSocket 地址 (`ws://...`)。
 4.  用户复制此地址并粘贴给 `launch_camoufox.py`。
 5.  `launch_camoufox.py` 将此地址作为环境变量 (`CAMOUFOX_WS_ENDPOINT`) 传递给子进程，并启动 `python server.py`。
 6.  `server.py` (FastAPI 应用) 启动，读取环境变量，使用 Playwright 通过 WebSocket 地址连接到正在运行的 Camoufox 浏览器实例。
-7.  连接成功后，`server.py` 初始化页面逻辑（包括加载认证状态或处理登录），然后开始监听 API 请求。
-
-**命令行参数:**
-
-*   **`launch_camoufox.py`**: 
-    *   `--debug`: 启用调试模式 (有界面)。
-*   **`server.py`** (通常由 `launch_camoufox.py` 启动并传递配置，但也可以独立运行):
-    *   `--port PORT`: FastAPI 监听端口 (默认 2048)。
-    *   `--host HOST`: FastAPI 监听地址 (默认 127.0.0.1)。
-    *   `--debug-logs`: 启用详细调试日志。
-    *   `--trace-logs`: 启用更详细的跟踪日志。
-    *   `--log-interval COUNT`: 流式日志按次数输出的间隔 (默认 20)。
-    *   `--log-time-interval SECONDS`: 流式日志按时间输出的间隔 (默认 3.0)。
+7.  连接成功后，`server.py` 初始化页面逻辑（包括加载认证状态），然后开始监听 API 请求。
 
 ### 5. API 使用
 
@@ -228,7 +266,7 @@
         curl -X POST http://127.0.0.1:2048/v1/chat/completions \
         -H "Content-Type: application/json" \
         -d '{
-          "model": "aistudio-proxy", 
+          "model": "aistudio-proxy",
           "messages": [
             {"role": "system", "content": "Be concise."},
             {"role": "user", "content": "What is the capital of France?"}
@@ -241,30 +279,30 @@
         curl -X POST http://127.0.0.1:2048/v1/chat/completions \
         -H "Content-Type: application/json" \
         -d '{
-          "model": "aistudio-proxy", 
+          "model": "aistudio-proxy",
           "messages": [
             {"role": "user", "content": "Write a short story about a cat."}
           ],
           "stream": true
         }' --no-buffer
         ```
-    *   **示例 (Python `requests`)**: 
+    *   **示例 (Python `requests`)**:
         ```python
         import requests
         import json
-        
+
         API_URL = "http://127.0.0.1:2048/v1/chat/completions"
         headers = {"Content-Type": "application/json"}
         data = {
-            "model": "aistudio-proxy", 
+            "model": "aistudio-proxy",
             "messages": [
-                {"role": "user", "content": "Translate \'hello\' to Spanish."}
+                {"role": "user", "content": "Translate 'hello' to Spanish."}
             ],
             "stream": False # or True for streaming
         }
-        
+
         response = requests.post(API_URL, headers=headers, json=data, stream=data["stream"])
-        
+
         if data["stream"]:
             for line in response.iter_lines():
                 if line:
@@ -280,6 +318,14 @@
                             print(delta.get('content', ''), end='', flush=True)
                         except json.JSONDecodeError:
                             print(f"\nError decoding JSON: {content}")
+                    elif decoded_line.startswith('data: {'): # Handle potential error JSON
+                        try:
+                            error_data = json.loads(decoded_line[len('data: '):])
+                            if 'error' in error_data:
+                                print(f"\nError from server: {error_data['error']}")
+                                break
+                        except json.JSONDecodeError:
+                             print(f"\nError decoding error JSON: {decoded_line}")
         else:
             if response.status_code == 200:
                 print(json.dumps(response.json(), indent=2))
@@ -288,6 +334,8 @@
         ```
 *   **模型列表**: `GET /v1/models`
     *   返回一个固定的模型信息，名称在 `server.py` 中定义 (`MODEL_NAME`)。
+*   **API 信息**: `GET /api/info`
+    *   返回 API 配置信息，如基础 URL 和模型名称。
 *   **健康检查**: `GET /health`
     *   返回服务器运行状态（Playwright, 浏览器连接, 页面状态, Worker 状态, 队列长度）。
 *   **队列状态**: `GET /v1/queue`
@@ -310,7 +358,7 @@
 
 ### 7. (可选) 局域网域名访问 (mDNS)
 
-项目包含一个辅助脚本 `mdns_publisher.py`，它使用 mDNS (Bonjour/ZeroConf) 在你的局域网内广播此代理服务。这允许你和其他局域网内的设备通过一个更友好的 `.local` 域名（例如 `http://chatui.local:2048`）来访问服务，而无需记住或查找服务器的 IP 地址。
+项目包含一个辅助脚本 `mdns_publisher.py`，它使用 mDNS (Bonjour/ZeroConf) 在你的局域网内广播此代理服务。这允许你和其他局域网内的设备通过一个更友好的 `.local` 域名（例如 `http://chatui.local:2048`）来访问服务，而无需记住或查找服务器的 IP 地址。但此脚本未经验证是否可以正常使用。
 
 **用途:**
 
@@ -323,70 +371,85 @@
     ```bash
     pip install zeroconf netifaces
     ```
-2.  **运行脚本:** 你需要**同时运行** `server.py` (监听在 `0.0.0.0` 和指定端口，如 2048) 和 `mdns_publisher.py`。
-    在**另一个终端**窗口，运行：
+2.  **运行脚本:** 你需要**同时运行** `launch_camoufox.py`(确保 `server.py` 监听在 `0.0.0.0` 和指定端口，如 2048) 和 `mdns_publisher.py`。
+    在**另一个终端**窗口，激活虚拟环境后，运行：
     ```bash
     python mdns_publisher.py
     ```
     *   默认广播的域名是 `chatui.local`，广播的端口是脚本内 `PORT` 变量定义的端口 (当前为 2048)。
     *   你可以使用 `--name yourname` 参数来修改广播的域名前缀，例如 `python mdns_publisher.py --name mychat` 将广播 `mychat.local`。
     *   此脚本**不需要** `sudo` 权限运行。
-3.  **访问服务:** 在局域网内的其他支持 mDNS 的设备上，通过浏览器访问 `http://<你设置的域名>.local:<端口>`，例如 `http://chatui.local:2048`。
+3.  **访问服务:** 在局域网内的其他支持 mDNS 的设备上，通过浏览器或客户端配置访问 `http://<你设置的域名>.local:<端口>`，例如 `http://chatui.local:2048` 或 API 地址 `http://chatui.local:2048/v1`。
 
 **注意:**
 
 *   确保你的防火墙允许 UDP 端口 5353 (mDNS) 的通信。
-*   客户端设备需要支持 mDNS 才能解析 `.local` 域名。
-*   此脚本广播的是 `server.py` 实际监听的端口 (由 `mdns_publisher.py` 中的 `PORT` 变量决定)。
+*   客户端设备需要支持 mDNS 才能解析 `.local` 域名 (大多数现代操作系统默认支持)。
+*   此脚本广播的是 `server.py` 实际监听的端口 (由 `mdns_publisher.py` 中的 `PORT` 变量决定)。确保这个端口与 `server.py` 实际使用的端口一致。
 
 ## 💻 多平台指南 (Python 版本)
 
-*   **macOS / Linux**: 通常开箱即用。确保 Python, pip 已安装。按照安装步骤安装 Camoufox 和 Playwright 依赖。
+*   **macOS / Linux**:
+    *   通常安装过程比较顺利。确保 Python 和 pip 已正确安装并配置在系统 PATH 中。
+    *   使用 `source venv/bin/activate` 激活虚拟环境。
+    *   `playwright install-deps firefox` 可能需要系统包管理器（如 `apt` for Debian/Ubuntu, `yum`/`dnf` for Fedora/CentOS, `brew` for macOS）安装一些依赖库。如果命令失败，请仔细阅读错误输出，根据提示安装缺失的系统包。有时可能需要 `sudo` 权限执行 `playwright install-deps`。
+    *   防火墙通常不会阻止本地访问，但如果从其他机器访问，需要确保端口（默认 2048）是开放的。
+
 *   **Windows**:
-    *   WSL (Windows Subsystem for Linux) 是推荐环境，体验更接近 Linux。
-    *   直接在 Windows 上运行也可以，确保 Python, pip 已添加到 PATH。
-    *   防火墙可能需要允许 Python/Uvicorn 监听端口。
+    *   **原生 Windows**:
+        *   确保在安装 Python 时勾选了 "Add Python to PATH" 选项。
+        *   使用 `venv\\Scripts\\activate` 激活虚拟环境。
+        *   Windows 防火墙可能会阻止 Uvicorn/FastAPI 监听端口。如果遇到连接问题（特别是从其他设备访问时），请检查 Windows 防火墙设置，允许 Python 或特定端口的入站连接。
+        *   `playwright install-deps` 命令在原生 Windows 上作用有限（主要用于 Linux），但运行 `camoufox fetch` (内部会调用 Playwright) 会确保下载正确的浏览器。
+    *   **WSL (Windows Subsystem for Linux)**:
+        *   **推荐**: 对于习惯 Linux 环境的用户，WSL (特别是 WSL2) 提供了更好的体验。
+        *   在 WSL 环境内，按照 **macOS / Linux** 的步骤进行安装和依赖处理 (通常使用 `apt` 命令)。
+        *   需要注意的是网络访问：
+            *   从 Windows 访问 WSL 中运行的服务：通常可以通过 `localhost` 或 WSL 分配的 IP 地址访问。
+            *   从局域网其他设备访问 WSL 中运行的服务：可能需要配置 Windows 防火墙以及 WSL 的网络设置（WSL2 的网络通常更容易从外部访问）。
+        *   所有命令（`git clone`, `pip install`, `camoufox fetch`, `python launch_camoufox.py` 等）都应在 WSL 终端内执行。
+        *   在 WSL 中运行 `--debug` 模式：`launch_camoufox.py` 会尝试启动 Camoufox。如果你的 WSL 配置了 GUI 应用支持（如 WSLg 或第三方 X Server），可以看到浏览器界面。否则，它可能无法显示界面，但服务本身仍会尝试启动。无头模式不受影响。
 
 ## 🔧 故障排除 (Python 版本)
 
-*   **`pip install camoufox[geoip]` 失败**: 
-    *   可能是网络问题或缺少编译环境 (如果需要编译某些依赖)。尝试不带 `[geoip]` 安装 (`pip install camoufox`)。
-*   **`camoufox fetch` 失败**: 
+*   **`pip install camoufox[geoip]` 失败**:
+    *   可能是网络问题或缺少编译环境。尝试不带 `[geoip]` 安装 (`pip install camoufox`)。
+*   **`camoufox fetch` 失败**:
     *   常见原因是网络问题或 SSL 证书验证失败。
     *   可以尝试运行 `python fetch_camoufox_data.py` 脚本，它会尝试禁用 SSL 验证来下载 (有安全风险，仅在确认网络环境可信时使用)。
-*   **`playwright install-deps` 失败**: 
+*   **`playwright install-deps` 失败**:
     *   通常是 Linux 系统缺少必要的库。仔细阅读错误信息，根据提示安装缺失的系统包 (如 `libgbm-dev`, `libnss3` 等)。
-*   **`launch_camoufox.py` 启动报错**: 
+*   **`launch_camoufox.py` 启动报错**:
     *   检查 Camoufox 是否已通过 `camoufox fetch` 正确下载。
-    *   查看终端输出，是否有来自 Camoufox 库 (`launch_server` 调用) 的具体错误信息，如 "Server process terminated unexpectedly"。
+    *   查看终端输出，是否有来自 Camoufox 库 (`launch_server` 调用) 的具体错误信息。
     *   确保没有其他 Camoufox 或 Playwright 进程冲突。
-*   **粘贴 WebSocket 端点后 `server.py` 连接失败**: 
+*   **粘贴 WebSocket 端点后 `server.py` 连接失败**:
     *   确认粘贴的 `ws://...` 地址完整且正确。
     *   确认 Camoufox 服务仍在运行 (检查 `launch_camoufox.py` 启动的终端)。
     *   检查防火墙是否阻止了本地 WebSocket 连接。
-*   **`server.py` 启动时提示端口 (`2048`) 被占用**: 
-    *   使用系统工具 (如 `netstat`, `lsof`) 查找并结束占用该端口的进程，或使用 `--port` 参数指定其他端口启动。
-*   **认证失败 (特别是 `headless` 模式)**:
+*   **`server.py` 启动时提示端口 (`2048`) 被占用**:
+    *   使用系统工具 (如 `netstat`, `lsof`) 查找并结束占用该端口的进程，或修改 `server.py` 启动参数/代码中的默认端口。
+*   **认证失败 (特别是无头模式)**:
     *   **最常见**: `auth_profiles/active/` 下的 `.json` 文件已过期或无效。
     *   **解决**: 删除 `active` 下的文件，重新运行 `python launch_camoufox.py --debug` 生成新的认证文件，并将其移动到 `active` 目录。
     *   确认 `active` 目录下只有一个 `.json` 文件。
     *   检查 `server.py` 日志，看是否明确提到登录重定向。
-*   **客户端 (如 Open WebUI) 无法连接**: 
+*   **客户端 (如 Open WebUI) 无法连接**:
     *   确认 API 基础 URL 配置正确 (`http://<服务器IP或localhost>:端口/v1`)。
     *   检查 `server.py` 日志是否有错误。
     *   确保防火墙允许从客户端访问服务器的端口。
-*   **API 请求返回 5xx / 499 错误**: 
-    *   **503 Service Unavailable**: `server.py` 未完全就绪。
+*   **API 请求返回 5xx / 499 错误**:
+    *   **503 Service Unavailable**: `server.py` 未完全就绪 (例如正在初始化，或 Worker 未运行)。
     *   **504 Gateway Timeout**: AI Studio 响应慢或处理超时。
     *   **502 Bad Gateway**: AI Studio 页面返回错误。检查 `errors_py/` 快照。
     *   **500 Internal Server Error**: `server.py` 内部错误。检查日志和 `errors_py/` 快照。
     *   **499 Client Closed Request**: 客户端提前断开连接。
-*   **AI 回复不完整/格式错误**: 
+*   **AI 回复不完整/格式错误**:
     *   AI Studio Web UI 输出不稳定。检查 `errors_py/` 快照。
 *   **自动清空上下文失败**:
     *   检查 `server.py` 日志中的警告。
     *   很可能是 AI Studio 页面更新导致 `server.py` 中的 CSS 选择器失效。检查 `errors_py/` 快照，对比实际页面元素更新 `server.py` 中的选择器常量。
-    *   也可能是网络慢导致验证超时，可尝试在 `server.py` 中增加 `CLEAR_CHAT_VERIFY_TIMEOUT_MS` 的值。
+    *   也可能是网络慢导致验证超时。
 
 ## 🦊 关于 Camoufox
 
@@ -394,9 +457,8 @@
 
 *   **核心目标**: 模拟真实用户流量，避免被网站识别为自动化脚本或机器人。
 *   **实现方式**: Camoufox 基于 Firefox，通过修改浏览器底层 C++ 实现来伪装设备指纹（如屏幕、操作系统、WebGL、字体等），而不是通过容易被检测到的 JavaScript 注入。
-*   **Playwright 兼容**: Camoufox 提供了与 Playwright 兼容的接口，使得现有的 Playwright 代码（如本项目）可以相对容易地迁移过来。
+*   **Playwright 兼容**: Camoufox 提供了与 Playwright 兼容的接口。
 *   **Python 接口**: Camoufox 提供了 Python 包，可以通过 `camoufox.server.launch_server()` (如 `launch_camoufox.py` 中所用) 启动其服务，并通过 WebSocket 连接进行控制。
-*   **指纹轮换**: Camoufox 利用 BrowserForge 等库来模拟真实世界的设备特征分布。
 
 使用 Camoufox 的主要目的是提高与 AI Studio 网页交互时的隐蔽性，减少被检测或限制的可能性。但请注意，没有任何反指纹技术是绝对完美的。
 
@@ -420,38 +482,25 @@
 
 以下是一些计划中的改进方向：
 
-*   **Docker 支持**: 提供官方的 `Dockerfile` 以及 Docker Compose 配置，简化容器化部署流程（一定会的）。
-*   **云服务器部署指南**: 提供更详细的在主流云平台（如 AWS, GCP, Azure）上部署和管理服务的指南，包括使用 `systemd` 或 `supervisor` 进行进程管理（实用性存疑，待考究）。
-*   **参数自动化 (探索性)**: 研究通过 Playwright 自动化操作 AI Studio 页面的参数设置区域（如模型选择、温度、Top-K/P 等）的可行性，尝试允许用户通过 API 请求来动态配置这些参数。这依赖于 AI Studio 页面的稳定性和可自动化程度。
-*   **认证更新流程优化**: 探索更便捷的认证文件更新机制，减少手动操作（一定会的）。
+*   **Docker 支持**: 提供官方的 `Dockerfile` 以及 Docker Compose 配置，简化容器化部署流程。
+*   **自动化 WebSocket 端点传递**: 研究是否能让 `launch_camoufox.py` 自动捕获并传递 WebSocket 端点给 `server.py`，减少手动复制粘贴步骤。
+*   **云服务器部署指南**: 提供更详细的在主流云平台（如 AWS, GCP, Azure）上部署和管理服务的指南。
+*   **参数自动化 (探索性)**: 研究通过 Playwright 自动化操作 AI Studio 页面的参数设置区域的可行性。
+*   **认证更新流程优化**: 探索更便捷的认证文件更新机制，减少手动操作。
 
 ## 控制日志输出 (Python 版本)
 
-服务器支持通过命令行参数或环境变量控制日志输出级别。这对于调试和减少日志噪音非常有用。
+服务器 (`server.py`) 支持通过环境变量控制日志输出级别。这对于调试和减少日志噪音非常有用。
 
-### 命令行参数 (传递给 `server.py`)
-
-```bash
-# 通过 launch_camoufox.py 传递给 server.py (注意 '--' 的使用可能需要，取决于参数解析库)
-# 示例：启动时设置端口和启用调试日志 (具体传递方式需查阅 launch_camoufox.py)
-# 或者直接运行 server.py 时使用：
-python server.py --port 3000 --debug-logs
-python server.py --trace-logs
-python server.py --log-interval 50 --log-time-interval 5.0
-python server.py --host 0.0.0.0
-```
-
-### 环境变量
-
-也可以通过环境变量控制日志：
+在启动 `launch_camoufox.py` **之前** 设置环境变量：
 
 ```bash
 # Linux/macOS
-export DEBUG_LOGS_ENABLED=true
-export TRACE_LOGS_ENABLED=true
-export LOG_INTERVAL=50
-export LOG_TIME_INTERVAL=5.0
-python launch_camoufox.py # server.py 会读取这些变量
+export DEBUG_LOGS_ENABLED=true    # 启用详细调试日志
+export TRACE_LOGS_ENABLED=true    # 启用更详细的跟踪日志
+export LOG_INTERVAL=50            # 流式日志按次数输出的间隔 (默认 20)
+export LOG_TIME_INTERVAL=5.0      # 流式日志按时间输出的间隔 (默认 3.0)
+python launch_camoufox.py
 
 # Windows (cmd)
 set DEBUG_LOGS_ENABLED=true
@@ -467,3 +516,5 @@ $env:LOG_INTERVAL="50"
 $env:LOG_TIME_INTERVAL="5.0"
 python launch_camoufox.py
 ```
+
+`server.py` 启动时会读取这些环境变量。
