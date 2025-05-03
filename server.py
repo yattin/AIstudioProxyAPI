@@ -220,7 +220,9 @@ async def get_raw_text_content(response_element, previous_text: str, req_id: str
                 raw_text = await pre_element.inner_text(timeout=500)
             except PlaywrightAsyncError as pre_err:
                 if DEBUG_LOGS_ENABLED:
-                    print(f"[{req_id}] (Warn) Failed to get innerText from visible <pre>: {pre_err.message.split('\\n')[0]}", flush=True)
+                    # 将 split 操作移到 f-string 外部
+                    error_message_first_line = pre_err.message.split('\\n')[0]
+                    print(f"[{req_id}] (Warn) Failed to get innerText from visible <pre>: {error_message_first_line}", flush=True)
                 try:
                      raw_text = await response_element.inner_text(timeout=1000) # Slightly longer fallback
                 except PlaywrightAsyncError as e_parent:
@@ -2314,7 +2316,9 @@ async def _process_request_from_queue(
                 # submitted_successfully 保持 False
 
         except PlaywrightAsyncError as key_press_error:
-            print(f"[{req_id}] (Worker) 警告: {shortcut_name}+Enter 提交(聚焦/按键)出错: {key_press_error.message.split('\\n')[0]}", flush=True) # 中文
+            # 将 split 操作移到 f-string 外部
+            error_message_first_line = key_press_error.message.split('\\n')[0]
+            print(f"[{req_id}] (Worker) 警告: {shortcut_name}+Enter 提交(聚焦/按键)出错: {error_message_first_line}", flush=True) # 中文
         except asyncio.TimeoutError:
             print(f"[{req_id}] (Worker) 警告: {shortcut_name}+Enter 提交(聚焦/按键)或检查清空超时。", flush=True)
         except Exception as eval_err:
