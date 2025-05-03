@@ -3,7 +3,7 @@
 [![Stargazers over time](https://starchart.cc/CJackHwang/AIstudioProxyAPI.svg?variant=adaptive)](https://starchart.cc/CJackHwang/AIstudioProxyAPI)
 ### Stargazers over time
 
-**这是当前维护的 Python 版本，CJS版本不再维护**
+**这是当前维护的 Python 版本。不再维护的 Javascript 版本请参见 [`deprecated_javascript_version/README.md`](deprecated_javascript_version/README.md)。**
 
 ---
 
