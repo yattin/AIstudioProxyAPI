@@ -128,7 +128,9 @@ def prepare_combined_prompt(messages: List[Message], req_id: str) -> str:
     if system_prompt_content:
         # Add a separator only if there will be other messages following
         separator = "\\n\\n" if any(idx not in processed_indices for idx in range(len(messages))) else ""
-        combined_parts.append(f"System Instructions:\\n{system_prompt_content}{separator}")
+        # 预构建带换行符的字符串，避免在f-string中使用反斜杠
+        system_instr_prefix = "System Instructions:\\n"
+        combined_parts.append(f"{system_instr_prefix}{system_prompt_content}{separator}")
     else:
         print(f"[{req_id}] (Prepare Prompt) 未找到有效的系统提示，继续处理其他消息。")
 
@@ -182,15 +184,20 @@ def prepare_combined_prompt(messages: List[Message], req_id: str) -> str:
             if not is_first_turn_after_system:
                  combined_parts.append(turn_separator)
 
-            combined_parts.append(f"{role}:\\n{content}")
+            # 预构建带换行符的字符串，避免在f-string中使用反斜杠
+            role_prefix = f"{role}:\\n"
+            combined_parts.append(f"{role_prefix}{content}")
             is_first_turn_after_system = False # No longer the first turn
         else:
             print(f"[{req_id}] (Prepare Prompt) Skipping empty message for role {role} at index {i}.")
 
     final_prompt = "".join(combined_parts)
-    print(f"[{req_id}] (Prepare Prompt) Combined prompt length: {len(final_prompt)}. Preview: '{final_prompt[:200].replace('\\n', '\\\\n')}...'") # Log preview with escaped newlines
+    # Pre-calculate the preview string with escaped newlines
+    preview_text = final_prompt[:200].replace('\\n', '\\\\n')
+    print(f"[{req_id}] (Prepare Prompt) Combined prompt length: {len(final_prompt)}. Preview: '{preview_text}...'") # Log preview with escaped newlines
     # Add a final newline if not empty, helps UI sometimes
-    return final_prompt + "\\n" if final_prompt else ""
+    final_newline = "\\n"
+    return final_prompt + final_newline if final_prompt else ""
 
 # --- END V4 Combined Prompt Logic ---
 

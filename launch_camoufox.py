@@ -23,8 +23,8 @@ except ImportError:
         print("❌ 错误：内部启动模式需要 'camoufox.server.launch_server' 但无法导入。", file=sys.stderr)
         sys.exit(1)
     else:
-    launch_server = None
-    print("⚠️ 警告: 无法导入 'camoufox.server.launch_server'。实验性虚拟显示功能将不可用。")
+        launch_server = None
+        print("⚠️ 警告: 无法导入 'camoufox.server.launch_server'。实验性虚拟显示功能将不可用。")
 
 # 尝试导入 Playwright (用于临时连接保存状态)
 try:
@@ -642,8 +642,8 @@ if __name__ == "__main__":
                 print(f"   [Camoufox output]: {line}", flush=True) # 打印所有行
                 output_lines.append(line)
                 match = ws_regex.search(line) # 在行内搜索
-                    if match:
-                        ws_endpoint = match.group(1)
+                if match:
+                    ws_endpoint = match.group(1)
                     print(f"\n   ✅ 自动捕获到 WebSocket 端点: {ws_endpoint[:40]}...", flush=True)
                     break # 成功获取，退出循环
 
@@ -772,11 +772,11 @@ if __name__ == "__main__":
                     line = line.strip()
                     print(f"   [Camoufox output]: {line}", flush=True)
                     output_lines.append(line)
-                    match = ws_regex.search(line)
+                    match = ws_regex.search(line) # 在行内搜索
                     if match:
                         ws_endpoint = match.group(1)
                         print(f"\n   ✅ 自动捕获到 WebSocket 端点: {ws_endpoint[:40]}...", flush=True)
-                        break
+                        break # 成功获取，退出循环
 
                 except queue.Empty:
                     if time.time() - start_time >= ENDPOINT_CAPTURE_TIMEOUT:
@@ -810,7 +810,7 @@ if __name__ == "__main__":
                 sys.exit(1)
             else:
                 # ... (调用 start_main_server 逻辑不变) ...
-            print(f"   调用 start_main_server 完成。脚本将等待其结束...", flush=True)
+                print(f"   调用 start_main_server 完成。脚本将等待其结束...", flush=True)
                 start_main_server(ws_endpoint, launch_mode, active_json_path) # 调用 server.py
 
         except Exception as e: # 添加通用异常处理
