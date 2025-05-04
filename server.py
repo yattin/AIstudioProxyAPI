@@ -29,7 +29,7 @@ AI_STUDIO_URL_PATTERN = 'aistudio.google.com/'
 RESPONSE_COMPLETION_TIMEOUT = 300000 # 5 minutes total timeout (in ms)
 POLLING_INTERVAL = 300 # ms
 POLLING_INTERVAL_STREAM = 180 # ms
-SILENCE_TIMEOUT_MS = 3000 # ms
+SILENCE_TIMEOUT_MS = 10000 # ms
 POST_SPINNER_CHECK_DELAY_MS = 500
 FINAL_STATE_CHECK_TIMEOUT_MS = 1500
 SPINNER_CHECK_TIMEOUT_MS = 1000
@@ -129,6 +129,8 @@ def prepare_combined_prompt(messages: List[Message], req_id: str) -> str:
         # Add a separator only if there will be other messages following
         separator = "\\n\\n" if any(idx not in processed_indices for idx in range(len(messages))) else ""
         combined_parts.append(f"System Instructions:\\n{system_prompt_content}{separator}")
+    else:
+        print(f"[{req_id}] (Prepare Prompt) 未找到有效的系统提示，继续处理其他消息。")
 
 
     # 3. Iterate through remaining messages (user and assistant roles primarily)
@@ -299,8 +301,14 @@ def check_dependencies():
 
 # --- Page Initialization --- (Simplified)
 async def _initialize_page_logic(browser: AsyncBrowser):
-    # ... (Existing implementation, ensure it sets page_instance correctly) ...
-    global page_instance, is_page_ready
+    """初始化页面逻辑，连接到已有浏览器
+    
+    Args:
+        browser: 已连接的浏览器实例
+        
+    Returns:
+        tuple: (page_instance, is_page_ready) - 页面实例和就绪状态
+    """
     print("--- 初始化页面逻辑 (连接到现有浏览器) ---")
     temp_context = None
     storage_state_path_to_use = None
@@ -308,7 +316,7 @@ async def _initialize_page_logic(browser: AsyncBrowser):
     active_auth_json_path = os.environ.get('ACTIVE_AUTH_JSON_PATH')
     print(f"   检测到启动模式: {launch_mode}")
     loop = asyncio.get_running_loop()
-
+    
     # Determine storage state path based on launch_mode (simplified logic shown)
     if launch_mode == 'headless':
         auth_filename = os.environ.get('ACTIVE_AUTH_JSON_PATH')
@@ -376,7 +384,13 @@ async def _initialize_page_logic(browser: AsyncBrowser):
                 if not p.is_closed() and target_url_base in page_url_check and "/prompts/" in page_url_check:
                     found_page = p; current_url = page_url_check; break
                 # Add logic to navigate existing non-chat pages if needed
-            except Exception as e: print(f"   警告: 检查页面 URL 时出错: {e}")
+            except PlaywrightAsyncError as pw_err:
+                print(f"   警告: 检查页面 URL 时出现Playwright错误: {pw_err}")
+            except AttributeError as attr_err:
+                print(f"   警告: 检查页面 URL 时出现属性错误: {attr_err}")
+            except Exception as e:
+                print(f"   警告: 检查页面 URL 时出现其他未预期错误: {e}")
+                print(f"   错误类型: {type(e).__name__}")
 
         if not found_page:
             print(f"-> 未找到合适的现有页面，正在打开新页面并导航到 {target_full_url}...")
@@ -450,9 +464,10 @@ async def _initialize_page_logic(browser: AsyncBrowser):
             await expect_async(input_wrapper_locator).to_be_visible(timeout=35000)
             await expect_async(found_page.locator(INPUT_SELECTOR)).to_be_visible(timeout=10000)
             print("-> ✅ 核心输入区域可见。")
-            page_instance = found_page # Assign to global variable
-            is_page_ready = True
+            result_page = found_page
+            result_ready = True
             print(f"✅ 页面逻辑初始化成功。")
+            return result_page, result_ready
         except Exception as input_visible_err:
              await save_error_snapshot(f"init_fail_input_timeout")
              raise RuntimeError(f"页面初始化失败：核心输入区域未在预期时间内变为可见。最后的 URL 是 {found_page.url}") from input_visible_err
@@ -464,20 +479,33 @@ async def _initialize_page_logic(browser: AsyncBrowser):
             except: pass
         await save_error_snapshot(f"init_unexpected_error")
         raise RuntimeError(f"页面初始化意外错误: {e}") from e
-    # Note: temp_context is intentionally not closed on success, page_instance belongs to it.
+    # Note: temp_context is intentionally not closed on success, result_page belongs to it.
     # The context will be closed when the browser connection closes during shutdown.
 
 # --- Page Shutdown --- (Simplified)
 async def _close_page_logic():
-    # ... (Existing implementation) ...
+    """关闭页面并重置状态
+    
+    Returns:
+        tuple: (page, is_ready) - 更新后的页面实例(None)和就绪状态(False)
+    """
     global page_instance, is_page_ready
     print("--- 运行页面逻辑关闭 --- ")
     if page_instance and not page_instance.is_closed():
-        try: await page_instance.close(); print("   ✅ 页面已关闭")
-        except Exception as e: print(f"   ⚠️ 关闭页面时出错: {e}")
+        try: 
+            await page_instance.close()
+            print("   ✅ 页面已关闭")
+        except PlaywrightAsyncError as pw_err: 
+            print(f"   ⚠️ 关闭页面时出现Playwright错误: {pw_err}")
+        except asyncio.TimeoutError as timeout_err:
+            print(f"   ⚠️ 关闭页面时超时: {timeout_err}")
+        except Exception as other_err:
+            print(f"   ⚠️ 关闭页面时出现意外错误: {other_err}")
+            print(f"   错误类型: {type(other_err).__name__}")
     page_instance = None
     is_page_ready = False
     print("页面逻辑状态已重置。")
+    return None, False
 
 # --- Camoufox Shutdown Signal --- (Simplified)
 async def signal_camoufox_shutdown():
@@ -522,7 +550,9 @@ async def lifespan(app_param: FastAPI):
         except Exception as connect_err:
             raise RuntimeError(f"未能连接到 Camoufox 服务器: {connect_err}") from connect_err
 
-        await _initialize_page_logic(browser_instance)
+        # 从初始化函数获取返回值，而不是依赖函数直接修改全局变量
+        global page_instance, is_page_ready
+        page_instance, is_page_ready = await _initialize_page_logic(browser_instance)
 
         if is_page_ready and is_browser_connected:
              print(f"   启动请求队列 Worker...")
@@ -559,7 +589,9 @@ async def lifespan(app_param: FastAPI):
              except asyncio.CancelledError: print(f"   ✅ 请求队列 Worker 已确认取消。")
              except Exception as wt_err: print(f"   ❌ 等待 Worker 停止时出错: {wt_err}")
 
-        await _close_page_logic()
+        # 获取_close_page_logic返回的更新状态并设置全局变量
+        page_instance, is_page_ready = await _close_page_logic()
+
         browser_ready_for_shutdown = bool(browser_instance and browser_instance.is_connected())
         if browser_ready_for_shutdown: await signal_camoufox_shutdown()
 
@@ -675,9 +707,22 @@ async def save_error_snapshot(error_name: str = 'error'):
         except Exception as ss_err: print(f"{log_prefix}   保存屏幕截图失败 ({base_error_name}): {ss_err}")
         try:
             content = await page_to_snapshot.content()
-            with open(html_path, 'w', encoding='utf-8') as f: f.write(content)
-            print(f"{log_prefix}   HTML 已保存到: {html_path}")
-        except Exception as html_err: print(f"{log_prefix}   保存 HTML 失败 ({base_error_name}): {html_err}")
+            f = None
+            try:
+                f = open(html_path, 'w', encoding='utf-8')
+                f.write(content)
+                print(f"{log_prefix}   HTML 已保存到: {html_path}")
+            except Exception as write_err:
+                print(f"{log_prefix}   保存 HTML 失败 ({base_error_name}): {write_err}")
+            finally:
+                if f:
+                    try:
+                        f.close()
+                        print(f"{log_prefix}   HTML 文件已正确关闭")
+                    except Exception as close_err:
+                        print(f"{log_prefix}   关闭 HTML 文件时出错: {close_err}")
+        except Exception as html_err: 
+            print(f"{log_prefix}   获取页面内容失败 ({base_error_name}): {html_err}")
     except Exception as dir_err: print(f"{log_prefix}   创建错误目录或保存快照时出错: {dir_err}")
 
 # --- V4: New Helper - Get response via Edit Button ---
@@ -1473,7 +1518,6 @@ async def _process_request_refactored(
                 print(f"[{req_id}] (Refactored Process) Future 已完成/取消，无法设置流式结果。")
                 if not completion_event.is_set(): completion_event.set()
             return completion_event
-
         else: # Non-streaming
             response_payload = {
                 "id": f"{CHAT_COMPLETION_ID_PREFIX}{req_id}-{int(time.time())}",

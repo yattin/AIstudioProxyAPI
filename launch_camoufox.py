@@ -43,6 +43,7 @@ camoufox_proc = None # subprocess 模式
 camoufox_server_thread = None # launch_server 模式
 camoufox_server_instance = None # launch_server 返回值
 stop_server_event = threading.Event() # launch_server 模式
+thread_start_lock = threading.Lock() # 新增: 用于线程同步
 server_py_proc = None
 
 # --- 新增：确保目录存在 ---
@@ -54,6 +55,12 @@ def ensure_auth_dirs_exist():
         print(f"   ✓ 激活认证目录: {ACTIVE_AUTH_DIR}")
         os.makedirs(SAVED_AUTH_DIR, exist_ok=True)
         print(f"   ✓ 保存认证目录: {SAVED_AUTH_DIR}")
+    except PermissionError as pe:
+        print(f"   ❌ 权限错误: {pe}")
+        sys.exit(1)
+    except FileExistsError as fee:
+        print(f"   ❌ 文件已存在错误: {fee}")
+        sys.exit(1)
     except OSError as e:
         print(f"   ❌ 创建认证目录时出错: {e}")
         sys.exit(1)
@@ -110,6 +117,8 @@ def cleanup():
     elif camoufox_proc: # Process exists but already terminated
          print(f"   Camoufox 服务器进程 (调试模式) 已自行结束 (代码: {camoufox_proc.poll()})。")
          camoufox_proc = None
+    else:
+         print(f"   Camoufox 服务器进程 (调试模式) 未启动或已清理。")
 
     # --- 清理后台线程和 launch_server 实例 (无头模式) --- 
     if camoufox_server_thread and camoufox_server_thread.is_alive():
@@ -126,6 +135,8 @@ def cleanup():
                 print("      实例 close() 调用完成。")
             except Exception as e:
                 print(f"      调用 close() 时出错: {e}")
+        else:
+            print("      实例不存在或无法调用 close() 方法，跳过关闭。")
                 
         camoufox_server_thread.join(timeout=10) # 等待线程结束
         if camoufox_server_thread.is_alive():
@@ -236,6 +247,9 @@ def run_launch_server_headless_in_thread(json_path: str, stop_event: threading.E
         else:
             print(f"\n   后台线程: ❌ 意外 RuntimeError: {e}", file=sys.stderr, flush=True)
             traceback.print_exc(file=sys.stderr)
+    except ConnectionError as ce:
+        print(f"\n   后台线程: ❌ 连接错误: {ce}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
     except Exception as e:
         print(f"\n   后台线程: ❌ 其他错误: {e}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
@@ -413,12 +427,13 @@ if __name__ == "__main__":
         # <<< 新逻辑：启动后台线程直接输出，主线程等待用户输入 >>>
         try:
             print(f"   正在后台启动 Camoufox 服务器 (有界面)...", flush=True)
-            camoufox_server_thread = threading.Thread(
-                target=run_launch_server_debug_direct_output, # 使用新的直接输出函数
-                args=(stop_server_event,),
-                daemon=True
-            )
-            camoufox_server_thread.start()
+            with thread_start_lock:
+                camoufox_server_thread = threading.Thread(
+                    target=run_launch_server_debug_direct_output, # 使用新的直接输出函数
+                    args=(stop_server_event,),
+                    daemon=True
+                )
+                camoufox_server_thread.start()
             print(f"   后台线程已启动。", flush=True)
 
             # 短暂等待，让后台线程有机会打印启动信息
@@ -449,6 +464,13 @@ if __name__ == "__main__":
                      print("\n   检测到中断信号，退出。")
                      sys.exit(1)
 
+        except KeyboardInterrupt:
+            print("\n   检测到用户中断，退出。")
+            sys.exit(1)
+        except ConnectionError as ce:
+            print(f"   ❌ 连接错误: {ce}")
+            traceback.print_exc()
+            sys.exit(1)
         except Exception as e:
             print(f"   ❌ 启动 Camoufox 调试线程或获取用户输入时出错: {e}")
             traceback.print_exc()
@@ -501,12 +523,13 @@ if __name__ == "__main__":
         ws_endpoint = None
 
         print("   启动后台线程运行 launch_server...")
-        camoufox_server_thread = threading.Thread(
-            target=run_launch_server_headless_in_thread,
-            args=(active_json_path, stop_server_event),
-            daemon=True
-        )
-        camoufox_server_thread.start()
+        with thread_start_lock:
+            camoufox_server_thread = threading.Thread(
+                target=run_launch_server_headless_in_thread,
+                args=(active_json_path, stop_server_event),
+                daemon=True
+            )
+            camoufox_server_thread.start()
 
         # 等待几秒让服务器启动并输出信息
         time.sleep(2)
