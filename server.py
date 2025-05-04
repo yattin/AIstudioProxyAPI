@@ -387,6 +387,21 @@ async def _initialize_page_logic(browser: AsyncBrowser):
                 print(f"-> 新页面导航尝试完成。当前 URL: {current_url}")
             except Exception as new_page_nav_err:
                 await save_error_snapshot(f"init_new_page_nav_fail")
+                # --- 新增: 检查特定网络错误并提供用户提示 ---
+                error_str = str(new_page_nav_err)
+                if "NS_ERROR_NET_INTERRUPT" in error_str:
+                    print("\n" + "="*30 + " 网络导航错误提示 " + "="*30)
+                    print(f"❌ 导航到 '{target_full_url}' 失败，出现网络中断错误 (NS_ERROR_NET_INTERRUPT)。")
+                    print("   这通常表示浏览器在尝试加载页面时连接被意外断开。")
+                    print("   可能的原因及排查建议:")
+                    print("     1. 网络连接: 请检查你的本地网络连接是否稳定，并尝试在普通浏览器中访问目标网址。")
+                    print("     2. AI Studio 服务: 确认 aistudio.google.com 服务本身是否可用。")
+                    print("     3. 防火墙/代理/VPN: 检查本地防火墙、杀毒软件、代理或 VPN 设置，确保它们没有阻止 Python 或浏览器的网络访问。")
+                    print("     4. Camoufox 服务: 确认 launch_camoufox.py 脚本是否正常运行，并且没有相关错误。")
+                    print("     5. 资源问题: 确保系统有足够的内存和 CPU 资源。")
+                    print("   请根据上述建议排查后重试。")
+                    print("="*74 + "\n")
+                # --- 结束新增部分 ---
                 raise RuntimeError(f"导航新页面失败: {new_page_nav_err}") from new_page_nav_err
 
         # Handle login redirect (simplified logic shown)
