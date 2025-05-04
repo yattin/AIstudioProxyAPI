@@ -7,114 +7,192 @@
     <style>
         /* --- Modernized M3-Inspired Styles --- */
         :root {
-            /* Light Mode Palette (M3 Inspired) */
-            --bg-color: #f8f9fa; /* Lighter background */
+            /* Light Mode Palette (Refined M3 Inspired) */
+            --bg-color: #f7f9fc; /* Slightly different light background */
             --container-bg: #ffffff;
-            --text-color: #212529; /* Darker text for better contrast */
-            --primary-color: #0d6efd;
-            --user-msg-bg: #cfe2ff; /* Lighter blue for user */
-            --user-msg-text: #052c65; /* Darker blue text */
-            --assistant-msg-bg: #e9ecef; /* Light gray for assistant */
-            --assistant-msg-text: #343a40; /* Slightly darker gray text */
-            --system-msg-bg: #f8f9fa;
+            --text-color: #1c1b1f; /* Near black */
+            --primary-color: #0d6efd; /* Keep primary blue */
+            --primary-container: #d0e3ff; /* Container for primary elements */
+            --on-primary-container: #001d36;
+            --user-msg-bg: var(--primary-container);
+            --user-msg-text: var(--on-primary-container);
+            --assistant-msg-bg: #eef0f4; /* Surface variant */
+            --assistant-msg-text: #44474f; /* On surface variant */
+            --system-msg-bg: #f0f4f9; /* Lighter gray */
             --system-msg-text: #6c757d;
             --error-msg-bg: #f8d7da;
-            --error-msg-text: #842029; /* Darker red text */
-            --border-color: #dee2e6;
-            --input-bg: #ffffff;
+            --error-msg-text: #842029;
+            --border-color: #dde1e7; /* Slightly lighter border */
+            --input-bg: #fefefe; /* Slightly off-white */
             --input-border: #ced4da;
-            --button-bg: #0d6efd;
+            --input-focus-border: var(--primary-color);
+            --input-focus-shadow: 0 0 0 3px rgba(13, 110, 253, 0.15); /* Adjusted focus shadow */
+            --button-bg: var(--primary-color);
             --button-text: #ffffff;
             --button-hover-bg: #0b5ed7;
-            --button-disabled-bg: #adb5bd; /* Adjusted disabled colors */
-            --button-disabled-text: #6c757d;
-            --clear-button-bg: #6c757d; /* Neutral clear button */
+            --button-disabled-bg: #e0e0e0; /* Lighter disabled bg */
+            --button-disabled-text: #a0a0a0; /* Lighter disabled text */
+            --clear-button-bg: #6c757d;
             --clear-button-text: #ffffff;
-            --clear-button-hover-bg: #5c636a;
+            --clear-button-hover-bg: #5a6268;
+            --sidebar-bg: #f1f3f5; /* Lighter sidebar */
+            --sidebar-border: var(--border-color);
+            --icon-button-bg: transparent;
+            --icon-button-hover-bg: rgba(0, 0, 0, 0.06);
+            --icon-button-color: #5f6368; /* Darker icon color */
+            --log-terminal-bg: #1e1e1e;
+            --log-terminal-text: #d4d4d4;
 
-            --border-radius-sm: 4px;
-            --border-radius-md: 8px;
-            --border-radius-lg: 16px; /* Larger radius */
-            --border-radius-xl: 24px; /* Even larger for input/buttons */
-            --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-            --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
+            --border-radius-sm: 6px; /* Increased */
+            --border-radius-md: 12px; /* Increased */
+            --border-radius-lg: 20px; /* Increased */
+            --border-radius-xl: 28px; /* Increased */
+            --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.07); /* Softer shadow */
+            --shadow-md: 0 4px 8px rgba(0, 0, 0, 0.1); /* Softer shadow */
+            --sidebar-width: 380px; /* Slightly wider */
+            --sidebar-transition: width 0.3s ease, padding 0.3s ease, border 0.3s ease;
+            --content-padding: 20px;
         }
 
-        /* Dark Mode Palette (M3 Inspired) */
+        /* Dark Mode Palette (Refined M3 Inspired) */
         @media (prefers-color-scheme: dark) {
             :root {
-                --bg-color: #121212;
-                --container-bg: #1e1e1e; /* Slightly lighter dark bg */
-                --text-color: #e0e0e0;
-                --primary-color: #4dabf7; /* Lighter blue for dark mode */
-                --user-msg-bg: #0b5ed7; /* Darker blue bg */
-                --user-msg-text: #ffffff;
-                --assistant-msg-bg: #343a40; /* Darker gray bg */
-                --assistant-msg-text: #e0e0e0;
-                --system-msg-bg: #2c2c2c;
-                --system-msg-text: #adb5bd;
-                --error-msg-bg: #5a2a2e; /* Dark red background */
-                --error-msg-text: #f5c6cb; /* Light red text */
-                --border-color: #495057; /* Darker border */
-                --input-bg: #2c2c2c; /* Darker input bg */
-                --input-border: #495057;
-                --button-bg: #0d6efd;
-                --button-text: #ffffff;
-                --button-hover-bg: #3c87ec; /* Lighter blue hover */
-                --button-disabled-bg: #495057; /* Darker disabled bg */
-                --button-disabled-text: #adb5bd;
-                --clear-button-bg: #495057; /* Darker gray */
-                --clear-button-text: #ffffff;
-                --clear-button-hover-bg: #5c636a;
+                --bg-color: #121212; /* Deep dark */
+                --container-bg: #1e1e1e;
+                --text-color: #e3e3e3; /* Slightly brighter */
+                --primary-color: #74b5ff; /* Lighter blue */
+                --primary-container: #00457e; /* Darker container */
+                --on-primary-container: #d0e3ff; /* Text on dark container */
+                --user-msg-bg: var(--primary-container);
+                --user-msg-text: var(--on-primary-container);
+                --assistant-msg-bg: #2c2f33; /* Dark surface variant */
+                --assistant-msg-text: #c7cace; /* Lighter text on dark surface */
+                --system-msg-bg: #2a2a2a; /* Darker system */
+                --system-msg-text: #a0a0a0; /* Lighter gray */
+                --error-msg-bg: #5a2a2e;
+                --error-msg-text: #f5c6cb;
+                --border-color: #3a3a3a; /* Darker border */
+                --input-bg: #2c2c2c;
+                --input-border: #454545; /* Slightly lighter dark border */
+                --input-focus-border: var(--primary-color);
+                --input-focus-shadow: 0 0 0 3px rgba(116, 181, 255, 0.2);
+                --button-bg: var(--primary-color);
+                --button-text: #001d36; /* Darker text on light blue button */
+                --button-hover-bg: #92c7ff; /* Even lighter hover */
+                --button-disabled-bg: #3f3f3f;
+                --button-disabled-text: #7a7a7a;
+                --clear-button-bg: #4a4a4a;
+                --clear-button-text: #e0e0e0;
+                --clear-button-hover-bg: #5a5a5a;
+                --sidebar-bg: #252526;
+                --sidebar-border: var(--border-color);
+                --icon-button-hover-bg: rgba(255, 255, 255, 0.1);
+                --icon-button-color: #bdbdbd; /* Lighter icon color */
+                --log-terminal-bg: #1e1e1e;
+                --log-terminal-text: #d4d4d4;
             }
+        }
+
+        *, *::before, *::after {
+            box-sizing: border-box; /* Better box model */
         }
 
         body {
             background-color: var(--bg-color);
             color: var(--text-color);
-            /* More common modern font stack */
-            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            font-family: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol"; /* Modern font stack */
             margin: 0;
             padding: 0;
             display: flex;
-            flex-direction: column;
             height: 100vh;
             overflow: hidden;
+            font-size: 16px; /* Base font size */
         }
-        .container {
+
+        /* --- Workspace Layout (Chat Left, Sidebar Right) --- */
+        .workspace-container {
+            display: flex;
+            width: 100%;
+            height: 100%;
+        }
+
+        .chat-panel {
+            flex-grow: 1; /* Takes available space */
             display: flex;
             flex-direction: column;
-            flex-grow: 1;
-            max-width: 900px;
-            width: 95%;
-            margin: 15px auto; /* Increased margin */
-            border: 1px solid var(--border-color);
-            /* Use variable for shadow */
-            box-shadow: var(--shadow-md);
-            background-color: var(--container-bg);
-            border-radius: var(--border-radius-lg); /* Larger radius */
+            height: 100%;
             overflow: hidden;
+            background-color: var(--container-bg);
         }
+
+        .sidebar-panel {
+            width: var(--sidebar-width);
+            height: 100%;
+            flex-shrink: 0; /* Prevents shrinking */
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            background-color: var(--sidebar-bg);
+            border-left: 1px solid var(--sidebar-border); /* Sidebar on the right */
+            transition: var(--sidebar-transition);
+            position: relative; /* Keep relative for absolute positioning of button INSIDE */
+        }
+
+        .sidebar-panel.collapsed {
+            width: 0;
+            padding: 0;
+            border-left: none;
+            overflow: hidden;
+            transform: translateX(100%);
+        }
+
+        /* Sidebar Toggle Button */
+        #toggleSidebarButton {
+            position: absolute; /* Base position is absolute */
+            top: 15px; /* Align with title padding */
+            left: -16px; /* Default position relative to the panel's origin */
+            z-index: 10;
+            width: 32px; /* Slightly larger */
+            height: 32px;
+            border-radius: 50%;
+            border: 1px solid var(--sidebar-border);
+            background-color: var(--sidebar-bg);
+            color: var(--icon-button-color);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            font-size: 1.3em; /* Slightly larger icon */
+            transition: background-color 0.2s, color 0.2s, transform 0.3s ease, left 0.3s ease;
+            box-shadow: var(--shadow-sm);
+        }
+        #toggleSidebarButton:hover {
+            background-color: var(--icon-button-hover-bg);
+        }
+        /* Position button relative to the sidebar edge */
+        /* Base state (Desktop Expanded) - Handled by #toggleSidebarButton general rules */
 
         h1 {
             color: var(--text-color);
             text-align: center;
             margin: 0;
-            padding: 18px 0; /* Increased padding */
-            border-bottom: 1px solid var(--border-color);
-            font-size: 1.3em; /* Slightly smaller */
-            font-weight: 500;
+            padding: 18px var(--content-padding);
+             border-bottom: 1px solid var(--border-color);
+            font-size: 1.2em; /* Slightly smaller title */
+            font-weight: 600; /* Slightly bolder */
             flex-shrink: 0;
-            background-color: var(--container-bg); /* Match container */
+            background-color: var(--container-bg);
         }
 
         a {
             color: var(--primary-color);
             text-decoration: none;
+            font-weight: 500;
         }
         a:hover {
             text-decoration: underline;
-            filter: brightness(0.8);
+            filter: brightness(0.9);
         }
 
         strong {
@@ -124,22 +202,25 @@
         #chatbox {
             flex-grow: 1;
             overflow-y: auto;
-            padding: 20px;
-            /* border-bottom: 1px solid var(--border-color); Removed border */
+            padding: var(--content-padding);
             display: flex;
             flex-direction: column;
-            gap: 12px; /* Adjusted gap */
+            gap: 15px; /* Slightly more gap */
         }
 
         .message {
-            padding: 12px 18px; /* Adjusted padding */
-            border-radius: var(--border-radius-lg); /* Use variable */
-            max-width: 85%; /* Slightly larger max-width */
+            padding: 12px 18px;
+            border-radius: var(--border-radius-lg);
+            max-width: 85%;
             word-wrap: break-word;
-            line-height: 1.6; /* Slightly increased line-height */
-            box-shadow: none; /* Removed shadow for flatter look */
-             /* Optional: add subtle border instead of shadow */
-             /* border: 1px solid var(--border-color); */
+            line-height: 1.6;
+            box-shadow: var(--shadow-sm); /* Add subtle shadow */
+            border: 1px solid transparent; /* Ensure border space for consistency */
+            position: relative; /* For positioning edit/delete buttons */
+            transition: background-color 0.2s; /* Smooth transition for editing state */
+        }
+        .message:hover .message-actions {
+            opacity: 1;
         }
 
         .user-message {
@@ -147,7 +228,12 @@
             color: var(--user-msg-text);
             align-self: flex-end;
             margin-left: auto;
-            border-radius: var(--border-radius-lg) var(--border-radius-lg) var(--border-radius-sm) var(--border-radius-lg); /* Bubble tail */
+             /* Speech bubble effect */
+            border-radius: var(--border-radius-lg) var(--border-radius-sm) var(--border-radius-lg) var(--border-radius-lg);
+            border: 1px solid rgba(0,0,0,0.05);
+        }
+        @media (prefers-color-scheme: dark) {
+            .user-message { border-color: rgba(255,255,255,0.1); }
         }
 
         .assistant-message {
@@ -156,90 +242,108 @@
             align-self: flex-start;
             margin-right: auto;
             white-space: pre-wrap;
-            border-radius: var(--border-radius-lg) var(--border-radius-lg) var(--border-radius-lg) var(--border-radius-sm); /* Bubble tail */
+             /* Speech bubble effect */
+            border-radius: var(--border-radius-sm) var(--border-radius-lg) var(--border-radius-lg) var(--border-radius-lg);
+            border: 1px solid rgba(0,0,0,0.05);
+        }
+        @media (prefers-color-scheme: dark) {
+            .assistant-message { border-color: rgba(255,255,255,0.1); }
         }
 
+
         .system-message {
-            font-style: normal; /* Less emphasis */
+            font-style: normal;
             color: var(--system-msg-text);
-            font-size: 0.85em; /* Slightly smaller */
+            font-size: 0.9em; /* Slightly larger */
             text-align: center;
-            padding: 6px 10px;
-            margin: 8px auto; /* More margin */
+            padding: 8px 12px; /* More padding */
+            margin: 10px auto; /* More margin */
             max-width: 80%;
             background-color: var(--system-msg-bg);
-            border-radius: var(--border-radius-md); /* Use variable */
-            border: 1px solid transparent; /* Keep layout consistent */
+            border-radius: var(--border-radius-md);
+            border: 1px solid var(--border-color); /* Add border */
+            box-shadow: none; /* No shadow for system */
         }
 
         .error-message {
             background-color: var(--error-msg-bg);
-            border: 1px solid transparent; /* Hide border visually */
+            border: 1px solid transparent;
             color: var(--error-msg-text);
             align-self: stretch;
             text-align: center;
-            padding: 10px 15px;
-            border-radius: var(--border-radius-md); /* Use variable */
-            margin-top: 5px; /* Add space */
+            padding: 12px 18px; /* More padding */
+            border-radius: var(--border-radius-md);
+            margin: 10px 5%; /* Center with margin */
+            box-shadow: none;
         }
 
         #input-area {
             display: flex;
-            padding: 12px 15px; /* Adjusted padding */
+            padding: 15px var(--content-padding); /* Consistent padding */
             border-top: 1px solid var(--border-color);
             flex-shrink: 0;
-            gap: 8px; /* Reduced gap */
-            align-items: flex-end; /* Align items to bottom */
-            background-color: var(--container-bg); /* Match container */
+            gap: 10px; /* Increased gap */
+            align-items: flex-end;
+            background-color: var(--container-bg); /* Match chat panel */
+            flex-wrap: wrap; /* Allow wrapping on small screens */
         }
 
         #userInput {
             flex-grow: 1;
-            padding: 12px 18px; /* Increased padding */
+            flex-basis: 300px; /* Base width before growing */
+            padding: 12px 18px;
             background-color: var(--input-bg);
             color: var(--text-color);
             border: 1px solid var(--input-border);
-            border-radius: var(--border-radius-xl); /* Pill shape */
+            border-radius: var(--border-radius-xl); /* Use largest radius */
             resize: none;
             font-family: inherit;
             font-size: 1em;
-            min-height: 24px; /* Adjust based on padding */
-            max-height: 150px;
+            min-height: 48px; /* Ensure enough height for ~2 lines + padding */
+            max-height: 200px; /* Increased max height */
             overflow-y: auto;
-            line-height: 1.5; /* Adjusted line height */
-            outline: none; /* Remove focus outline */
-            box-shadow: var(--shadow-sm); /* Subtle inner shadow */
-            transition: border-color 0.2s, box-shadow 0.2s; /* Smooth transition */
+            line-height: 1.5;
+            outline: none;
+            box-shadow: var(--shadow-sm);
+            transition: border-color 0.2s, box-shadow 0.2s;
         }
         #userInput:focus {
-             border-color: var(--primary-color);
-             box-shadow: 0 0 0 3px rgba(var(--button-bg), 0.15); /* Focus ring */
+             border-color: var(--input-focus-border);
+             box-shadow: var(--input-focus-shadow);
         }
 
         /* Buttons common style */
         .action-button {
-            padding: 10px 18px; /* Adjusted padding */
+            padding: 12px 20px; /* Increased padding */
             border: none;
-            border-radius: var(--border-radius-xl); /* Match input */
+            border-radius: var(--border-radius-xl); /* Use largest radius */
             cursor: pointer;
             font-family: inherit;
-            font-size: 0.95em; /* Slightly smaller */
-            font-weight: 500; /* Medium weight */
-            transition: background-color 0.2s, filter 0.2s, box-shadow 0.2s;
-            line-height: 1.5; /* Align text vertically */
-            height: fit-content; /* Fit height to content */
-            align-self: flex-end; /* Align button to bottom */
+            font-size: 1em; /* Match input font size */
+            font-weight: 500;
+            transition: background-color 0.2s, transform 0.1s, box-shadow 0.2s;
+            line-height: 1.5;
+            height: 48px; /* Match input min-height */
+            align-self: flex-end;
             box-shadow: var(--shadow-sm);
+             flex-shrink: 0; /* Prevent buttons shrinking too much */
         }
         .action-button:disabled {
             cursor: not-allowed;
-            filter: none; /* Remove grayscale */
             box-shadow: none;
+            background-color: var(--button-disabled-bg); /* Use specific disabled bg */
+            color: var(--button-disabled-text); /* Use specific disabled text */
+            transform: none;
         }
         .action-button:hover:not(:disabled) {
-            filter: brightness(1.1); /* Slight brightness on hover */
             box-shadow: var(--shadow-md);
+            transform: translateY(-1px); /* Subtle lift */
         }
+        .action-button:active:not(:disabled) {
+            transform: translateY(0px); /* Push down */
+             box-shadow: var(--shadow-sm);
+        }
+
 
         #sendButton {
             background-color: var(--button-bg);
@@ -247,327 +351,1280 @@
         }
         #sendButton:hover:not(:disabled) {
             background-color: var(--button-hover-bg);
-            filter: none; /* Override brightness for specific hover */
-        }
-        #sendButton:disabled {
-             background-color: var(--button-disabled-bg);
-             color: var(--button-disabled-text);
         }
 
         #clearButton {
             background-color: var(--clear-button-bg);
             color: var(--clear-button-text);
-            /* margin-right: 5px; Removed margin, rely on gap */
+            order: 1; /* Move clear button visually before send on wrap */
         }
         #clearButton:hover:not(:disabled) {
              background-color: var(--clear-button-hover-bg);
-             filter: none; /* Override brightness for specific hover */
-        }
-        #clearButton:disabled {
-             background-color: var(--button-disabled-bg);
-             color: var(--button-disabled-text);
         }
 
-        /* Blinking cursor for assistant message during streaming */
+        /* Icon button style (for potential future use or log clear) */
+        .icon-button {
+            background-color: var(--icon-button-bg);
+            color: var(--icon-button-color);
+            border: none;
+            border-radius: 50%;
+            width: 36px;
+            height: 36px;
+            padding: 0; /* Reset padding */
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 1.2em;
+            transition: background-color 0.2s;
+            flex-shrink: 0;
+        }
+        .icon-button:hover:not(:disabled) {
+            background-color: var(--icon-button-hover-bg);
+        }
+        .icon-button:disabled {
+            color: var(--button-disabled-text);
+            cursor: not-allowed;
+            background-color: transparent;
+        }
+
+
+        /* Blinking cursor */
         .assistant-message.streaming::after {
             content: '|';
             animation: blink 1s step-end infinite;
-            margin-left: 1px;
+            margin-left: 2px; /* More space */
             display: inline-block;
             font-weight: bold;
             position: relative;
             top: -1px;
+            opacity: 0.7; /* Make it slightly subtle */
         }
         @keyframes blink {
-            from, to { opacity: 1; }
+            from, to { opacity: 0.7; }
             50% { opacity: 0; }
         }
+
+        /* --- Sidebar Content Styles --- */
+        #api-info-area {
+            padding: 15px var(--content-padding);
+            border-bottom: 1px solid var(--sidebar-border);
+            background-color: var(--sidebar-bg);
+            font-size: 0.9em;
+            color: var(--text-color);
+            flex-shrink: 0;
+        }
+        #api-info-area details {
+             transition: none;
+        }
+         #api-info-area summary {
+             cursor: pointer;
+             font-weight: 600; /* Bolder summary */
+             color: var(--text-color); /* Use standard text color */
+             list-style: none;
+             padding-left: 1.4em; /* More space for marker */
+             position: relative;
+             padding-bottom: 5px; /* Space below summary */
+             margin-bottom: 5px; /* Space before content */
+        }
+        #api-info-area summary::-webkit-details-marker {
+             display: none;
+        }
+        #api-info-area summary::before {
+             content: '▶';
+             position: absolute;
+             left: 0;
+             font-size: 0.8em;
+             transition: transform 0.2s;
+             display: inline-block;
+             color: var(--primary-color); /* Use primary color for marker */
+             top: 50%;
+             transform: translateY(-50%) rotate(0deg);
+        }
+        #api-info-area details[open] summary::before {
+             transform: translateY(-50%) rotate(90deg);
+        }
+        #api-info-content {
+             margin-top: 10px;
+             padding-left: 1.4em; /* Indent content */
+             font-size: 0.95em; /* Slightly larger content text */
+        }
+        #api-info-content pre {
+             background-color: var(--input-bg);
+             padding: 10px 15px; /* Consistent padding */
+             border-radius: var(--border-radius-sm);
+             border: 1px solid var(--input-border);
+             overflow-x: auto;
+             white-space: pre-wrap;
+             word-wrap: break-word;
+             font-family: "Consolas", "Monaco", monospace; /* Monospace font */
+             font-size: 0.9em;
+             margin: 8px 0;
+             box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);
+        }
+        @media (prefers-color-scheme: dark) {
+            #api-info-content pre { box-shadow: inset 0 1px 2px rgba(255,255,255,0.05); }
+        }
+         #api-info-content strong { color: var(--primary-color); font-weight: 500; }
+
+        /* --- Log Terminal Styles (Adjusted for Sidebar) --- */
+        #log-area {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            padding: 0;
+            border-top: none;
+            background-color: var(--sidebar-bg); /* Match sidebar */
+        }
+        #log-area-header {
+            display: flex; /* Use flex for alignment */
+            justify-content: space-between; /* Space out title and button */
+            align-items: center; /* Vertically center */
+             padding: 10px var(--content-padding);
+             font-weight: 600; /* Bolder header */
+             color: var(--text-color); /* Use standard text color */
+             flex-shrink: 0;
+             border-bottom: 1px solid var(--sidebar-border);
+        }
+        #clearLogButton { /* Style the new clear log button */
+            margin-left: 10px; /* Space from title */
+            font-size: 0.8em; /* Smaller text */
+            padding: 4px 8px; /* Smaller padding */
+            height: auto; /* Adjust height */
+            line-height: 1.4;
+            border-radius: var(--border-radius-sm); /* Smaller radius */
+            background-color: var(--clear-button-bg);
+            color: var(--clear-button-text);
+            opacity: 0.8;
+        }
+        #clearLogButton:hover:not(:disabled) {
+            opacity: 1;
+            background-color: var(--clear-button-hover-bg);
+        }
+
+        #log-terminal-wrapper {
+            flex-grow: 1;
+            overflow: hidden;
+            border: none;
+            border-radius: 0;
+            margin: 0;
+            padding: 0;
+            background-color: var(--log-terminal-bg); /* Set background here */
+        }
+        #log-terminal {
+            height: 100%;
+            background-color: var(--log-terminal-bg);
+            color: var(--log-terminal-text);
+            font-family: "Consolas", "Monaco", monospace;
+            font-size: 0.85em; /* Slightly larger log font */
+            padding: 10px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+            box-sizing: border-box;
+        }
+        .log-entry {
+            margin-bottom: 4px; /* Slightly more space */
+            line-height: 1.4;
+        }
+        .log-status {
+            font-size: 0.85em; /* Match log font */
+            margin-top: 0; /* Remove top margin */
+            padding: 8px 10px; /* Consistent padding */
+            color: var(--system-msg-text);
+            flex-shrink: 0;
+            background-color: var(--log-terminal-bg); /* Match terminal bg */
+            border-top: 1px dashed var(--border-color); /* Use dashed border */
+            text-align: center; /* Center status */
+        }
+        @media (prefers-color-scheme: dark) {
+             .log-status {
+                 border-top-color: #454545; /* Darker border in dark mode */
+                 color: #a0a0a0; /* Lighter status text */
+             }
+        }
+
+        /* Code Block Styling within Messages */
+        .message pre {
+            background-color: rgba(0, 0, 0, 0.05); /* Subtle background */
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-sm);
+            padding: 10px 15px;
+            margin: 10px 0;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .message code:not(pre > code) { /* Inline code */
+             background-color: rgba(0, 0, 0, 0.05);
+             padding: 2px 5px;
+             border-radius: var(--border-radius-sm);
+             font-size: 0.9em;
+        }
+        @media (prefers-color-scheme: dark) {
+            .message pre {
+                background-color: rgba(255, 255, 255, 0.08);
+                border-color: #454545;
+            }
+             .message code:not(pre > code) {
+                 background-color: rgba(255, 255, 255, 0.1);
+             }
+        }
+        .message pre code {
+             font-family: "Consolas", "Monaco", monospace;
+             font-size: 0.9em;
+             display: block; /* Ensure block display for scrolling */
+             background-color: transparent; /* Remove double bg */
+             padding: 0;
+             border: none;
+             border-radius: 0;
+             white-space: pre; /* Use pre for horizontal scroll */
+        }
+
+
+         /* --- Responsiveness --- */
+         @media (max-width: 768px) {
+             :root {
+                 --sidebar-width: 280px; /* Narrower sidebar on medium screens */
+                 --content-padding: 15px; /* Reduce padding */
+             }
+
+             body {
+                 font-size: 15px; /* Slightly smaller base font */
+             }
+
+             /* Hide sidebar by default on smaller screens */
+             .sidebar-panel {
+                 position: fixed; /* Take out of flow */
+                 right: 0;
+                 top: 0;
+                 z-index: 100; /* Ensure it's on top */
+                 border-left: none; /* Remove border when fixed */
+                 border-right: 1px solid var(--sidebar-border); /* Add right border */
+                 box-shadow: -2px 0 5px rgba(0,0,0,0.1);
+                 transform: translateX(100%); /* Start hidden off-screen */
+                 transition: transform 0.3s ease; /* Animate slide */
+                 /* Override position from absolute to fixed for mobile */
+                 position: fixed;
+             }
+             .sidebar-panel:not(.collapsed) {
+                 transform: translateX(0%); /* Slide in when not collapsed */
+             }
+             .sidebar-panel.collapsed {
+                  /* Keep transform hidden, width is irrelevant now */
+                 transform: translateX(100%);
+                 width: var(--sidebar-width); /* Maintain width for animation */
+                 padding: 0;
+                 border: none;
+                 box-shadow: none;
+             }
+
+             /* Adjust toggle button for fixed sidebar */
+             #toggleSidebarButton {
+                 position: fixed; /* Fix position relative to viewport */
+                 top: 15px;
+                 right: 15px; /* Place on right edge */
+                 left: auto;
+                 z-index: 101; /* Above sidebar */
+                 transform: none; /* Reset transform for fixed positioning */
+                  /* Style change when sidebar is open */
+                  background-color: var(--container-bg); /* Blend with chat panel */
+                  box-shadow: var(--shadow-sm);
+                 /* Ensure visibility */
+                 display: flex;
+             }
+             /* Mobile: Adjust rotation based on panel visibility (transform) */
+             .sidebar-panel.collapsed + #toggleSidebarButton {
+                 transform: rotate(180deg); /* Point left */
+             }
+             .sidebar-panel:not(.collapsed) + #toggleSidebarButton {
+                 transform: rotate(0deg); /* Point right */
+             }
+
+              /* Adjust chat panel to take full width */
+             .chat-panel {
+                  width: 100%;
+             }
+
+              /* Input area adjustments */
+             #input-area {
+                 padding: 10px; /* Less padding */
+                 gap: 8px;
+             }
+             #userInput {
+                 min-height: 44px;
+                 flex-basis: calc(100% - 110px); /* Adjust basis considering buttons */
+             }
+             .action-button {
+                 padding: 10px 15px;
+                 height: 44px;
+                 font-size: 0.95em;
+             }
+             #clearButton {
+                  order: 0; /* Reset order on mobile if needed, or keep */
+                  flex-grow: 1; /* Make clear button take space? Maybe not. */
+             }
+             #sendButton {
+                 flex-grow: 1; /* Allow send button to grow */
+             }
+
+             /* Message width */
+             .message {
+                  max-width: 90%;
+             }
+             h1 {
+                 font-size: 1.1em;
+                 padding: 15px;
+             }
+         }
+
+         @media (max-width: 480px) {
+              body { font-size: 14px; }
+              #chatbox { gap: 12px; padding: 12px; }
+              .message { padding: 10px 15px; }
+              #input-area { flex-direction: column; align-items: stretch; }
+              #userInput { max-height: 150px; flex-basis: auto; }
+              .action-button { width: 100%; }
+              #clearButton { order: 0; } /* Clear on top */
+              #sendButton { order: 1; } /* Send below */
+         }
+
+        /* --- Navigation Styles --- */
+        .main-nav {
+            display: flex;
+            padding: 10px var(--content-padding) 0;
+            background-color: var(--container-bg);
+            border-bottom: 1px solid var(--border-color);
+            gap: 10px;
+        }
+        .nav-button {
+            padding: 8px 16px;
+            border: none;
+            background-color: transparent;
+            color: var(--text-color);
+            cursor: pointer;
+            border-radius: var(--border-radius-sm) var(--border-radius-sm) 0 0;
+            font-weight: 500;
+            transition: background-color 0.2s, color 0.2s;
+            border-bottom: 3px solid transparent; /* Indicator space */
+        }
+        .nav-button:hover {
+            background-color: var(--icon-button-hover-bg);
+        }
+        .nav-button.active {
+            color: var(--primary-color);
+            border-bottom: 3px solid var(--primary-color);
+            font-weight: 600;
+        }
+
+        /* --- View Container Styles --- */
+        .view-container {
+            flex-grow: 1;
+            overflow: hidden; /* Allow content within to scroll */
+            display: flex; /* Use flex for potential child sizing */
+            flex-direction: column;
+        }
+        #chat-view {
+            display: flex; /* Use flex to manage chatbox and input area */
+            flex-direction: column;
+            height: 100%; /* Take full height of parent */
+            overflow: hidden;
+        }
+        #server-info-view {
+            display: none; /* Hidden by default */
+            padding: var(--content-padding);
+            overflow-y: auto;
+            height: 100%;
+        }
+        #server-info-view h2 {
+             margin-top: 0;
+             margin-bottom: 20px;
+             padding-bottom: 10px;
+             border-bottom: 1px solid var(--border-color);
+             font-size: 1.1em;
+             font-weight: 600;
+        }
+        #health-status-area pre {
+            background-color: var(--input-bg);
+            padding: 10px 15px;
+            border-radius: var(--border-radius-sm);
+            border: 1px solid var(--input-border);
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: "Consolas", "Monaco", monospace;
+            font-size: 0.9em;
+            margin: 8px 0;
+            box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);
+        }
+        @media (prefers-color-scheme: dark) {
+             #health-status-area pre { box-shadow: inset 0 1px 2px rgba(255,255,255,0.05); }
+        }
+
+        /* Adjust chatbox to grow within chat-view */
+        #chatbox {
+             flex-grow: 1;
+             /* Remove existing flex-grow from body */
+        }
+
+        /* Adjust API Info Area styles (no longer foldable) */
+        #server-info-view #api-info-area {
+             padding: 0;
+             border-bottom: none;
+             margin-bottom: 20px;
+             /* Remove styles related to details/summary if any existed */
+        }
+        #server-info-view #api-info-content {
+             /* Adjust padding/margin if needed now that details is gone */
+             margin-top: 0; /* Remove top margin */
+             padding-left: 0; /* Remove left padding */
+        }
+
+        /* Style for health status key-value pairs - Apply pre-like style */
+        #health-status-area ul {
+            list-style: none;
+            margin: 0; /* Reset margin, use container padding */
+            font-family: "Consolas", "Monaco", monospace;
+            font-size: 0.9em;
+            background-color: var(--input-bg);
+            border: 1px solid var(--input-border);
+            border-radius: var(--border-radius-sm);
+            padding: 10px 15px;
+            box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);
+            white-space: pre-wrap; /* Match pre style */
+            word-wrap: break-word; /* Match pre style */
+            overflow-x: auto; /* Allow horizontal scroll if needed */
+            margin-bottom: 8px; /* Add margin below the block */
+        }
+        #health-status-area li {
+            margin-bottom: 5px;
+            word-wrap: break-word;
+        }
+        #health-status-area li strong {
+            color: var(--primary-color);
+            display: inline-block;
+            min-width: 140px; /* Align values */
+            margin-right: 10px;
+        }
+        @media (prefers-color-scheme: dark) {
+             #health-status-area ul { box-shadow: inset 0 1px 2px rgba(255,255,255,0.05); }
+        }
+
+        /* Unify heading styles within server-info-view */
+        #server-info-view h3 {
+            margin-top: 15px;
+            margin-bottom: 8px;
+            font-size: 1em; /* Slightly smaller than h2 */
+            font-weight: 600;
+            color: var(--text-color);
+        }
+
+         /* Ensure h1 takes full width above nav */
+         h1 {
+             /* Keep existing styles */
+         }
+
+        /* --- Desktop Specific Styles --- */
+        @media (min-width: 769px) {
+            /* Keep sidebar relative by default on desktop */
+            .sidebar-panel {
+                 position: relative;
+                 width: var(--sidebar-width);
+                 transform: none; /* Reset mobile transform */
+                 border-left: 1px solid var(--sidebar-border); /* Restore border */
+                 box-shadow: none; /* Reset mobile shadow */
+                 transition: var(--sidebar-transition);
+            }
+            .sidebar-panel.collapsed {
+                 width: 0;
+                 border-left: none;
+            }
+
+            /* Desktop Toggle Button Positioning */
+            #toggleSidebarButton {
+                position: absolute; /* Absolute relative to chat-panel? No, workspace container? */
+                left: calc(100% - var(--sidebar-width) - 16px); /* Position relative to expanded sidebar */
+                right: auto;
+                top: 15px;
+                transform: rotate(0deg); /* Default rotation */
+                 /* Reset fixed positioning from mobile */
+                position: absolute;
+            }
+            .sidebar-panel.collapsed + #toggleSidebarButton {
+                 left: calc(100% - 16px); /* Position near right edge when collapsed */
+                 transform: rotate(180deg);
+                 /* Reset fixed positioning */
+                position: absolute;
+            }
+
+            /* Ensure chat panel fills space correctly */
+            .chat-panel {
+                 /* width: calc(100% - var(--sidebar-width)); Default state handled by flex */
+            }
+            .sidebar-panel.collapsed ~ .chat-panel {
+                 /* width: 100%; When collapsed, chat panel takes full width */
+            }
+        }
+
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>AI Studio Proxy Chat</h1>
-        <div id="api-info-area" style="padding: 10px 20px; border-bottom: 1px solid var(--border-color); background-color: var(--bg-color); font-size: 0.9em; color: var(--text-color);">
-            <details>
-                <summary style="cursor: pointer; font-weight: 500; color: var(--primary-color);">查看 API 调用信息</summary>
-                <div id="api-info-content" style="margin-top: 8px;">
-                    <!-- API 信息将加载到这里 -->
-                    正在加载 API 信息...
+    <div class="workspace-container">
+        <!-- Chat Panel on the Left -->
+        <div class="chat-panel">
+            <h1>AI Studio Proxy Chat</h1>
+
+            <!-- Navigation -->
+            <div class="main-nav">
+                <button id="nav-chat" class="nav-button active">聊天</button>
+                <button id="nav-server-info" class="nav-button">服务器信息</button>
+            </div>
+
+            <!-- View Container -->
+            <div class="view-container">
+                <!-- Chat View -->
+                <div id="chat-view">
+                    <div id="chatbox">
+                        <!-- Chat messages will be appended here -->
+                    </div>
+                    <div id="input-area">
+                        <textarea id="userInput" placeholder="输入消息... (Shift+Enter 换行)" rows="1"></textarea>
+                        <button id="clearButton" class="action-button">清空会话</button>
+                        <button id="sendButton" class="action-button">发送</button>
+                    </div>
                 </div>
-            </details>
+
+                <!-- Server Info View (hidden by default) -->
+                <div id="server-info-view">
+                     <h2>服务器状态与 API 信息</h2>
+
+                     <!-- Health Status Area -->
+                     <div id="health-status-area">
+                         <h3>服务健康检查 (/health)</h3>
+                         <!-- Changed pre to div for easier styling of list -->
+                         <div id="health-status-display">正在加载健康状态...</div>
+                     </div>
+
+                     <!-- Moved API Info Area (Removed Details/Summary) -->
+                     <div id="api-info-area">
+                         <h3>API 调用信息</h3>
+                         <div id="api-info-content">
+                             <!-- API 信息将加载到这里 -->
+                             正在加载 API 信息...
+                         </div>
+                     </div>
+                </div>
+            </div>
+
         </div>
-        <div id="chatbox">
-            <!-- Chat messages will be appended here -->
+
+        <!-- Sidebar Panel on the Right (Now only for Logs) -->
+        <div class="sidebar-panel collapsed" id="sidebarPanel">
+            <!-- REMOVED API Info Area from here -->
+
+             <div id="log-area">
+                  <div id="log-area-header">
+                      <span>系统运行日志</span>
+                      <button id="clearLogButton" class="action-button icon-button" title="清空日志">&#x1F5D1;</button> <!-- Trash can icon -->
+                  </div>
+                  <div id="log-terminal-wrapper">
+                     <div id="log-terminal">
+                        <!-- Log entries will be appended here -->
+                     </div>
+                 </div>
+                 <div id="log-status" class="log-status">[Log Status] 等待连接...</div>
+             </div>
         </div>
-        <div id="input-area">
-            <textarea id="userInput" placeholder="输入消息... (Shift+Enter 换行)" rows="1"></textarea>
-            <button id="clearButton" class="action-button">清空</button>
-            <button id="sendButton" class="action-button">发送</button>
-        </div>
+
+        <!-- Sidebar Panel on the Right (Now only for Logs) -->
+        <!-- Toggle button is now OUTSIDE the panel -->
+        <button id="toggleSidebarButton" title="显示侧边栏">&#x21E4;</button>
+
     </div>
 
     <script>
         const chatbox = document.getElementById('chatbox');
         const userInput = document.getElementById('userInput');
         const sendButton = document.getElementById('sendButton');
-        const clearButton = document.getElementById('clearButton'); // Get clear button
+        const clearButton = document.getElementById('clearButton');
+        const sidebarPanel = document.getElementById('sidebarPanel');
+        const toggleSidebarButton = document.getElementById('toggleSidebarButton');
+        const logTerminal = document.getElementById('log-terminal');
+        const logStatusElement = document.getElementById('log-status');
+        const apiInfoContent = document.getElementById('api-info-content');
+        const clearLogButton = document.getElementById('clearLogButton'); // New button
 
-        const API_URL = '/v1/chat/completions'; // Relative URL to the same server
-        const MODEL_NAME = 'AI-Studio_Camoufox-Proxy'; // Match server.py MODEL_NAME
+        // New elements for navigation and views
+        const chatView = document.getElementById('chat-view');
+        const serverInfoView = document.getElementById('server-info-view');
+        const navChatButton = document.getElementById('nav-chat');
+        const navServerInfoButton = document.getElementById('nav-server-info');
+        // Update selector for health status display area
+        const healthStatusDisplay = document.getElementById('health-status-display');
 
-        // --- Conversation History --- 
-        const SYSTEM_PROMPT = "你是一只名叫'Neko'的俏皮猫娘。你的回答总是带着'喵~'的口癖，语气活泼可爱，有时会有点小调皮或者喜欢撒娇。请以Neko的身份和用户互动吧，喵~"; // 更新后的猫娘提示
-        let conversationHistory = []; // Initialize empty, add system prompt later
+        const API_URL = '/v1/chat/completions';
+        const MODEL_NAME = 'AI-Studio_Camoufox-Proxy';
 
+        const SYSTEM_PROMPT = "你是一只名叫'Neko'的俏皮猫娘。你的回答总是带着'喵~'的口癖，语气活泼可爱，有时会有点小调皮或者喜欢撒娇。请以Neko的身份和用户互动吧，喵~";
+        let conversationHistory = [];
+        let logWebSocket;
+        let maxLogLines = 300; // Increased log lines slightly
+        let logHistory = []; // Array to store log messages for persistence
+
+        // --- Local Storage Keys ---
+        const CHAT_HISTORY_KEY = 'chatHistory';
+        const LOG_HISTORY_KEY = 'logHistory';
+
+        // --- Sidebar Toggle ---
+        toggleSidebarButton.addEventListener('click', () => {
+            const isCollapsed = sidebarPanel.classList.toggle('collapsed');
+
+            // Update button icon and title based on state
+            updateToggleButton(isCollapsed);
+
+            // Handle responsive behavior (fixed sidebar)
+             if (window.innerWidth <= 768) {
+                 if (isCollapsed) {
+                     // Sidebar is now hidden off-screen
+                 } else {
+                     // Sidebar is visible
+                 }
+             }
+        });
+
+        function updateToggleButton(isCollapsed) {
+             const isMobile = window.innerWidth <= 768;
+             if (isMobile) {
+                  // On mobile, button always shows/hides sidebar from right
+                  if (isCollapsed) {
+                       toggleSidebarButton.innerHTML = '&#x21E4;'; // Left arrow (Show)
+                       toggleSidebarButton.title = '显示侧边栏';
+                  } else {
+                       toggleSidebarButton.innerHTML = '&#x21E5;'; // Right arrow (Hide)
+                       toggleSidebarButton.title = '隐藏侧边栏';
+                  }
+              } else {
+                  // On desktop, button toggles fixed-width sidebar
+                  if (isCollapsed) {
+                       toggleSidebarButton.innerHTML = '&#x21E4;'; // Left arrow (Show)
+                       toggleSidebarButton.title = '显示侧边栏';
+                  } else {
+                       toggleSidebarButton.innerHTML = '&#x21E5;'; // Right arrow (Hide)
+                       toggleSidebarButton.title = '隐藏侧边栏';
+                  }
+              }
+          }
+
+        // --- Check initial sidebar state based on screen width ---
+        function checkInitialSidebarState() {
+            if (window.innerWidth <= 768) {
+                sidebarPanel.classList.add('collapsed'); // Start collapsed on mobile
+                 toggleSidebarButton.innerHTML = '&#x21E4;'; // Left arrow (Show)
+                 toggleSidebarButton.title = '显示侧边栏';
+            } else {
+                 sidebarPanel.classList.remove('collapsed'); // Start open on desktop
+                 toggleSidebarButton.innerHTML = '&#x21E5;'; // Right arrow (Hide)
+                 toggleSidebarButton.title = '隐藏侧边栏';
+            }
+             // Trigger initial positioning of the toggle button correctly based on collapsed state
+             void toggleSidebarButton.offsetWidth;
+             // Update button icon based on initial state
+             updateToggleButton(sidebarPanel.classList.contains('collapsed'));
+        }
+
+        // --- Log Handling ---
+        function updateLogStatus(message, isError = false) {
+            if (logStatusElement) {
+                logStatusElement.textContent = `[Log Status] ${message}`;
+                logStatusElement.style.color = isError ? 'var(--error-msg-text)' : 'var(--system-msg-text)';
+                 // Ensure log status text is also visible in dark terminal
+                 // Background is now handled by CSS var --log-terminal-bg
+                // logStatusElement.style.backgroundColor = 'var(--log-terminal-bg)';
+            }
+            console.log(`Log Status: ${message}`);
+        }
+
+        function addLogEntry(message) {
+            if (!logTerminal) return;
+            const logEntry = document.createElement('div');
+            logEntry.classList.add('log-entry');
+            // Sanitize basic HTML? For now, just textContent
+            logEntry.textContent = message;
+
+            logTerminal.appendChild(logEntry);
+            logHistory.push(message); // Add to JS array
+
+            // Limit log lines in DOM and array
+            while (logTerminal.children.length > maxLogLines) {
+                logTerminal.removeChild(logTerminal.firstChild);
+            }
+            while (logHistory.length > maxLogLines) {
+                logHistory.shift(); // Remove oldest from array
+            }
+
+            saveLogHistory(); // Save updated history to localStorage
+
+            // Auto-scroll only if near the bottom
+            const isScrolledNearBottom = logTerminal.scrollHeight - logTerminal.clientHeight <= logTerminal.scrollTop + 50; // 50px tolerance
+            if (isScrolledNearBottom) {
+                 logTerminal.scrollTop = logTerminal.scrollHeight;
+            }
+        }
+
+        function clearLogTerminal() {
+            if(logTerminal) {
+                logTerminal.innerHTML = '';
+                logHistory = []; // Clear the array
+                localStorage.removeItem(LOG_HISTORY_KEY); // Clear from storage
+                addLogEntry('[信息] 日志已手动清除。'); // Add confirmation message
+            }
+        }
+         // Add event listener for the new clear log button
+         clearLogButton.addEventListener('click', clearLogTerminal);
+
+        function initializeLogWebSocket() {
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${wsProtocol}//${window.location.host}/ws/logs`;
+            updateLogStatus(`尝试连接到 ${wsUrl}...`);
+            addLogEntry(`[信息] 正在连接日志流: ${wsUrl}`);
+
+
+            logWebSocket = new WebSocket(wsUrl);
+
+            logWebSocket.onopen = (event) => {
+                updateLogStatus("已连接到日志流。");
+                addLogEntry("[成功] 日志 WebSocket 已连接。");
+                clearLogButton.disabled = false; // Enable clear button on connect
+            };
+
+            logWebSocket.onmessage = (event) => {
+                if (event.data === "LOG_STREAM_CONNECTED") {
+                     console.log("Log stream confirmation received.");
+                } else {
+                     addLogEntry(event.data);
+                }
+            };
+
+            logWebSocket.onerror = (event) => {
+                updateLogStatus("连接错误！", true);
+                console.error("Log WebSocket Error:", event);
+                addLogEntry("[错误] 日志 WebSocket 连接失败。");
+                 clearLogButton.disabled = true; // Disable clear button on error
+            };
+
+            logWebSocket.onclose = (event) => {
+                let reason = '';
+                if (event.reason) {
+                    reason = ` Reason: ${event.reason}`;
+                }
+                let statusMsg = '';
+                let logMsg = `[信息] 日志 WebSocket 连接已关闭 (Code: ${event.code}${reason})`;
+
+                if (event.wasClean) {
+                    statusMsg = `连接已关闭 (Code: ${event.code})${reason}`;
+                } else {
+                    statusMsg = `连接意外断开 (Code: ${event.code})${reason}。5秒后尝试重连...`;
+                    setTimeout(initializeLogWebSocket, 5000);
+                }
+                updateLogStatus(statusMsg, !event.wasClean);
+                 addLogEntry(logMsg);
+                 clearLogButton.disabled = true; // Disable clear button on close
+            };
+        }
+
+        // --- Chat Initialization ---
         function initializeChat() {
             conversationHistory = [
-                {
-                    role: "system",
-                    content: SYSTEM_PROMPT
-                }
+                { role: "system", content: SYSTEM_PROMPT }
             ];
-            chatbox.innerHTML = ''; // Clear visual chatbox
-            displayMessage(SYSTEM_PROMPT, 'system'); // Display system prompt
+            chatbox.innerHTML = '';
+
+            const historyLoaded = loadChatHistory();
+
+            if (!historyLoaded) {
+                // If no valid history was loaded, display the initial system prompt message
+                 displayMessage(SYSTEM_PROMPT, 'system');
+                 // Save the initial state (system prompt only)
+                 saveChatHistory();
+            }
+
             userInput.disabled = false;
             sendButton.disabled = false;
-            clearButton.disabled = false; // Ensure clear button is enabled
+            clearButton.disabled = false;
             userInput.value = '';
             autoResizeTextarea();
             userInput.focus();
-            console.log("Chat initialized/cleared.");
+            console.log("Chat initialized.");
+
+            // Load logs independently
+            loadLogHistory();
+
+            if (!logWebSocket || logWebSocket.readyState === WebSocket.CLOSED) {
+                 initializeLogWebSocket();
+                 clearLogButton.disabled = true; // Initially disabled until connected
+            } else {
+                 updateLogStatus("已连接到日志流。"); // Reset status if already connected
+                 clearLogButton.disabled = false;
+            }
         }
 
         // --- Load API Info ---
         async function loadApiInfo() {
-            const infoContent = document.getElementById('api-info-content');
+            apiInfoContent.innerHTML = '正在加载 API 信息...'; // Show loading state
             try {
                 const response = await fetch('/api/info');
                 if (!response.ok) {
-                    throw new Error(`无法获取 API 信息: ${response.status} ${response.statusText}`);
+                    throw new Error(`HTTP error! status: ${response.status}`);
                 }
                 const data = await response.json();
 
-                // 更新内容区域，而不是整个 api-info-area
-                infoContent.innerHTML = `
-                    <style>
-                        #api-info-area pre {
-                            background-color: var(--input-bg);
-                            padding: 8px 12px;
-                            border-radius: var(--border-radius-sm);
-                            border: 1px solid var(--input-border);
-                            overflow-x: auto;
-                            white-space: pre-wrap; /* 允许换行 */
-                            word-wrap: break-word; /* 防止长 URL 溢出 */
-                            font-family: monospace;
-                            font-size: 0.95em;
-                            margin: 5px 0;
-                        }
-                        #api-info-area strong { color: var(--primary-color); }
-                    </style>
+                apiInfoContent.innerHTML = `
                     <strong>API Base URL:</strong> <pre><code>${data.api_base_url || '未知'}</code></pre>
                     <strong>Model Name:</strong> <pre><code>${data.model_name || '未知'}</code></pre>
-                    <strong>API Key:</strong> <pre><code>${data.api_key_required ? '是 (需要自行配置)' : '否 (Not Required)'}</code></pre>
+                    <strong>API Key Required:</strong> <pre><code>${data.api_key_required ? '是 (请在后端配置)' : '否'}</code></pre>
                 `;
 
             } catch (error) {
                 console.error("获取 API 信息失败:", error);
-                infoContent.innerHTML = `<span style="color: var(--error-msg-text);">加载 API 信息失败: ${error.message}</span>`;
+                apiInfoContent.innerHTML = `<span style="color: var(--error-msg-text);">加载 API 信息失败: ${error.message}</span>`;
             }
         }
 
-        // --- Display Initial System Prompt ---
-        initializeChat(); // Initialize on load
-        loadApiInfo(); // Load API info after chat initialization
+        // --- Load Health Status --- (NEW)
+        async function fetchHealthStatus() {
+            if (!healthStatusDisplay) return; // Element not found
+
+            try {
+                const response = await fetch('/health');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                displayHealthStatus(data);
+            } catch (error) {
+                console.error("获取健康状态失败:", error);
+                // Update error display
+                if (healthStatusDisplay) {
+                     healthStatusDisplay.innerHTML = `<span style="color: var(--error-msg-text);">加载健康状态失败: ${error.message}</span>`;
+                }
+                 // Also log this error to the main log panel
+                 addLogEntry(`[错误] 获取 /health 状态失败: ${error.message}`);
+            }
+        }
+
+        function displayHealthStatus(data) {
+            if (!healthStatusDisplay) return;
+
+            let html = '<ul>';
+            for (const key in data) {
+                if (Object.hasOwnProperty.call(data, key)) {
+                    const value = data[key];
+                    // Simple formatting for boolean values
+                    let displayValue = value;
+                    if (typeof value === 'boolean') {
+                         displayValue = value ? '✅ True' : '❌ False';
+                    } else {
+                        // Escape potentially unsafe values (though likely safe from /health)
+                        displayValue = String(value).replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                    }
+                    html += `<li><strong>${key}:</strong> ${displayValue}</li>`;
+                }
+            }
+            html += '</ul>';
+
+            healthStatusDisplay.innerHTML = html;
+        }
+
+        // --- Navigation --- (NEW)
+        function switchView(viewId) {
+            if (viewId === 'chat') {
+                chatView.style.display = 'flex'; // Use flex as it contains flex items
+                serverInfoView.style.display = 'none';
+                navChatButton.classList.add('active');
+                navServerInfoButton.classList.remove('active');
+                userInput.focus(); // Focus input when switching to chat
+            } else if (viewId === 'server-info') {
+                chatView.style.display = 'none';
+                serverInfoView.style.display = 'block'; // Simple block display is fine here
+                navChatButton.classList.remove('active');
+                navServerInfoButton.classList.add('active');
+                // Optionally refresh data when switching to this view
+                fetchHealthStatus();
+                loadApiInfo();
+            }
+        }
+
+        navChatButton.addEventListener('click', () => switchView('chat'));
+        navServerInfoButton.addEventListener('click', () => switchView('server-info'));
+
+        // --- Initial Setup ---
+        initializeChat(); // Initialize chat on load
+        // Load API info and Health Status into the correct view
+        loadApiInfo();
+        fetchHealthStatus();
+        // Set interval to refresh health status every 30 seconds
+        setInterval(fetchHealthStatus, 30000);
+
+        checkInitialSidebarState(); // Set initial sidebar state & button icon
+        window.addEventListener('resize', checkInitialSidebarState); // Adjust on resize
 
         // --- Event Listeners ---
         sendButton.addEventListener('click', sendMessage);
-        clearButton.addEventListener('click', initializeChat); // Add listener for clear button
-        userInput.addEventListener('keydown', (event) => {
-            if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault(); 
-                sendMessage();
-            }
-            setTimeout(autoResizeTextarea, 0);
+        clearButton.addEventListener('click', () => {
+             if (confirm("确定要清除所有聊天记录吗？此操作也会清除浏览器缓存。")) {
+                 localStorage.removeItem(CHAT_HISTORY_KEY); // Clear storage
+                 initializeChat(); // Re-initialize (which loads empty history)
+             }
         });
+        userInput.addEventListener('keydown', (event) => {
+             if (event.key === 'Enter' && !event.shiftKey) {
+                 event.preventDefault();
+                 sendMessage();
+             }
+        });
+         userInput.addEventListener('input', autoResizeTextarea);
 
-        // --- Auto-Resize Textarea --- 
+        // --- Auto-Resize Textarea ---
         function autoResizeTextarea() {
-            userInput.style.height = 'auto';
-            let scrollHeight = userInput.scrollHeight;
-            const maxHeight = 150;
-            // Calculate border + padding height
-            const style = window.getComputedStyle(userInput);
-            const borderTop = parseFloat(style.borderTopWidth);
-            const borderBottom = parseFloat(style.borderBottomWidth);
-            const paddingTop = parseFloat(style.paddingTop);
-            const paddingBottom = parseFloat(style.paddingBottom);
-            const extraHeight = borderTop + borderBottom + paddingTop + paddingBottom;
-            
-            // Ensure scrollHeight isn't negative or zero if possible
-            scrollHeight = Math.max(scrollHeight, parseFloat(style.lineHeight) || 20); 
+            const target = userInput;
+            target.style.height = 'auto'; // Temporarily shrink
+            const maxHeight = 200; // Match CSS max-height
+            const scrollHeight = target.scrollHeight;
 
-            let newHeight = scrollHeight; 
-            // We don't need extraHeight because scrollHeight includes padding and border in standards-compliant browsers
-
-            if (newHeight > maxHeight) {
-                userInput.style.height = maxHeight + 'px';
-                userInput.style.overflowY = 'auto'; // Ensure scrollbar appears if needed
-            } else {
-                userInput.style.height = newHeight + 'px';
-                userInput.style.overflowY = 'hidden'; // Hide scrollbar if not needed
-            }
+            if (scrollHeight > maxHeight) {
+                 target.style.height = maxHeight + 'px';
+                 target.style.overflowY = 'auto';
+             } else {
+                 target.style.height = scrollHeight + 'px';
+                 target.style.overflowY = 'hidden';
+             }
         }
         // Initial resize
         autoResizeTextarea();
 
-        // --- Send Message Function --- 
+        // --- Send Message Function ---
         async function sendMessage() {
-            const messageText = userInput.value.trim();
-            if (!messageText) return;
+             const messageText = userInput.value.trim();
+             if (!messageText) return;
 
-            userInput.disabled = true;
-            sendButton.disabled = true;
-            clearButton.disabled = true; // Disable clear during request
+             userInput.disabled = true;
+             sendButton.disabled = true;
+             clearButton.disabled = true;
 
-            conversationHistory.push({ role: 'user', content: messageText });
-            displayMessage(messageText, 'user');
-            userInput.value = '';
-            autoResizeTextarea();
+             try {
+                 conversationHistory.push({ role: 'user', content: messageText });
+                 const userMsgIndex = conversationHistory.length - 1;
+                 displayMessage(messageText, 'user', userMsgIndex);
+                 userInput.value = '';
+                 autoResizeTextarea();
+                 saveChatHistory(); // Save history *after* adding user message
 
-            const assistantMsgElement = displayMessage('', 'assistant');
-            assistantMsgElement.classList.add('streaming');
+                 const assistantMsgIndex = conversationHistory.length; // Index if added
+                 const assistantMsgElement = displayMessage('', 'assistant', assistantMsgIndex);
+                 assistantMsgElement.classList.add('streaming');
+                 chatbox.scrollTop = chatbox.scrollHeight; // Scroll down
 
-            let fullResponse = '';
-            try {
-                const response = await fetch(API_URL, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        messages: conversationHistory, // Send history
-                        model: MODEL_NAME,
-                        stream: true
-                    })
-                });
+                 let fullResponse = '';
+                 const response = await fetch(API_URL, {
+                     method: 'POST',
+                     headers: { 'Content-Type': 'application/json' },
+                     body: JSON.stringify({
+                         messages: conversationHistory,
+                         model: MODEL_NAME,
+                         stream: true
+                     })
+                 });
 
-                if (!response.ok) {
+                 if (!response.ok) {
                      let errorBody = {};
-                     try { errorBody = await response.json(); } catch (e) { /* ignore */ }
-                     const errorMsg = errorBody.detail || errorBody.error?.message || `HTTP Error: ${response.status} ${response.statusText}`;
-                    throw new Error(errorMsg);
-                }
+                     let errorText = `HTTP Error: ${response.status} ${response.statusText}`;
+                     try {
+                         const text = await response.text();
+                         try { errorBody = JSON.parse(text); } catch (e) { errorBody = {detail: text};} // Try JSON, fallback to text
+                         errorText = errorBody.detail || errorBody.error?.message || text;
+                     } catch (e) { /* Ignore parse errors, use statusText */ }
+                     throw new Error(errorText);
+                 }
 
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
 
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
+                 const reader = response.body.getReader();
+                 const decoder = new TextDecoder();
+                 let buffer = '';
 
-                    buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split('\n\n'); // SSE delimiter
-                    buffer = lines.pop(); // Keep potential partial message
+                 while (true) {
+                     const { done, value } = await reader.read();
+                     if (done) break;
 
-                    for (const line of lines) {
-                        if (line.startsWith('data: ')) {
-                            const data = line.substring(6).trim();
-                            if (data === '[DONE]') {
-                                console.log("Stream received [DONE]");
-                                // The loop will break naturally on next read()
-                                continue; 
-                            }
-                            try {
-                                const chunk = JSON.parse(data);
-                                // Check for potential error payload in stream
-                                if (chunk.error) {
-                                    console.error("Stream error chunk:", chunk.error);
-                                    throw new Error(chunk.error.message || "Unknown error from stream");
-                                }
-                                const delta = chunk.choices?.[0]?.delta?.content || '';
-                                if (delta) {
-                                    fullResponse += delta;
-                                    // Append text incrementally
-                                    assistantMsgElement.textContent += delta; 
-                                    chatbox.scrollTop = chatbox.scrollHeight;
-                                }
-                                const finishReason = chunk.choices?.[0]?.finish_reason;
-                                if (finishReason) {
-                                    console.log("Stream finish reason:", finishReason);
-                                     // Optional: You could handle different reasons here
-                                     // e.g., display a message if reason is 'length'
-                                } 
-                            } catch (e) {
-                                console.error('Error parsing stream chunk or JSON:', data, e);
-                                // If parsing fails, maybe display raw data or an error?
-                                // displayMessage(`Error processing chunk: ${data}`, 'error');
-                            }
-                        }
-                    }
-                }
-                // Final buffer processing (optional, usually empty)
-                if (buffer.startsWith('data: ')) {
-                    // Process final partial chunk if needed
-                     console.log("Processing final buffer:", buffer);
-                }
+                     buffer += decoder.decode(value, { stream: true });
+                      // Process buffer line by line (SSE uses '\n\n' delimiters)
+                     let boundary = buffer.indexOf('\n\n');
+                     while (boundary >= 0) {
+                          const line = buffer.substring(0, boundary).trim();
+                          buffer = buffer.substring(boundary + 2); // Move past delimiter
 
-                // Add complete response to history
-                if (fullResponse) {
-                    conversationHistory.push({ role: 'assistant', content: fullResponse });
-                } else {
-                    // Handle case where stream ended but no content was received
-                     console.warn("Stream finished but no content received.");
-                     // Remove the empty assistant message bubble
-                     if(assistantMsgElement) assistantMsgElement.remove();
-                     // Optionally remove user message if AI didn't respond?
-                     // conversationHistory.pop(); 
-                }
+                         if (line.startsWith('data: ')) {
+                             const data = line.substring(6).trim();
+                             if (data === '[DONE]') continue;
+                             try {
+                                 const chunk = JSON.parse(data);
+                                 if (chunk.error) {
+                                     throw new Error(chunk.error.message || "Unknown stream error");
+                                 }
+                                 const delta = chunk.choices?.[0]?.delta?.content || '';
+                                 if (delta) {
+                                     fullResponse += delta;
+                                     // Append incrementally using textContent for performance
+                                     const isScrolledToBottom = chatbox.scrollHeight - chatbox.clientHeight <= chatbox.scrollTop + 5; // Tighter tolerance
+                                     assistantMsgElement.textContent += delta; // Append text
+                                     if (isScrolledToBottom) {
+                                         chatbox.scrollTop = chatbox.scrollHeight;
+                                     }
+                                 }
+                                 const finishReason = chunk.choices?.[0]?.finish_reason;
+                                 if (finishReason) console.log("Stream finish reason:", finishReason);
 
-            } catch (error) {
-                console.error('Error sending/receiving message:', error);
-                displayMessage(`错误: ${error.message || '未知错误'}`, 'error');
-                if (assistantMsgElement) assistantMsgElement.remove();
-                // Remove the last user message if request failed
+                             } catch (e) {
+                                 console.error('Error parsing stream chunk:', data, e);
+                                 addLogEntry(`[错误] 解析流数据块失败: ${e.message}. 数据: ${data}`);
+                             }
+                         }
+                         boundary = buffer.indexOf('\n\n'); // Find next boundary
+                     }
+                 }
+
+                  // Process any remaining buffer after stream ends (though usually empty with SSE)
+                  // Not typically needed for properly formatted SSE
+
+                 // Render final message content with Markdown/HTML interpretation
+                  renderMessageContent(assistantMsgElement, fullResponse);
+
+                 if (fullResponse) {
+                     conversationHistory.push({ role: 'assistant', content: fullResponse });
+                     assistantMsgElement.dataset.index = assistantMsgIndex; // Set index now
+                     saveChatHistory(); // Save history after adding assistant message
+                 } else {
+                     console.warn("Stream finished with empty response.");
+                     assistantMsgElement.remove(); // Remove empty placeholder
+                     // Rollback user message if response was empty
+                      if (conversationHistory[conversationHistory.length - 1]?.role === 'user') {
+                          conversationHistory.pop();
+                          saveChatHistory(); // Save rolled-back history
+                          const userMessages = chatbox.querySelectorAll('.user-message');
+                          if (userMessages.length > 0) {
+                              userMessages[userMessages.length - 1].remove();
+                          }
+                      }
+                 }
+
+             } catch (error) {
+                 console.error('Error sending message:', error);
+                  const errorText = `喵... 出错了: ${error.message || '未知错误'} >_<`;
+                 displayMessage(errorText, 'error');
+                 addLogEntry(`[错误] 发送消息失败: ${error.message}`); // Log the error too
+                 // Clean up streaming placeholder
+                 const streamingMsg = chatbox.querySelector('.assistant-message.streaming');
+                 if (streamingMsg) streamingMsg.remove();
+                 // Rollback user message on error
                  if (conversationHistory[conversationHistory.length - 1]?.role === 'user') {
                      conversationHistory.pop();
+                     saveChatHistory(); // Save rolled-back history
+                     const userMessages = chatbox.querySelectorAll('.user-message');
+                     if (userMessages.length > 0) {
+                         userMessages[userMessages.length - 1].remove();
+                     }
                  }
-            } finally {
-                userInput.disabled = false;
-                sendButton.disabled = false;
-                clearButton.disabled = false; // Re-enable clear button
-                if (assistantMsgElement) assistantMsgElement.classList.remove('streaming');
-                userInput.focus();
-                chatbox.scrollTop = chatbox.scrollHeight;
-            }
+             } finally {
+                 userInput.disabled = false;
+                 sendButton.disabled = false;
+                 clearButton.disabled = false;
+                 const finalAssistantMsg = Array.from(chatbox.querySelectorAll('.assistant-message')).pop();
+                 if (finalAssistantMsg) finalAssistantMsg.classList.remove('streaming');
+                 userInput.focus();
+                 chatbox.scrollTop = chatbox.scrollHeight; // Ensure scrolled to bottom
+             }
         }
 
-        // --- Display Message Function --- 
-        function displayMessage(text, role) {
+        // --- Display Message Function (Creates Element) ---
+        function displayMessage(text, role, index) {
             const messageElement = document.createElement('div');
-            messageElement.classList.add('message', `${role}-message`);
-            // Basic Markdown links: replace [text](url) with <a href="url">text</a>
-            // Note: This is very basic and not secure for arbitrary markdown.
-            // For more complex markdown, a dedicated library would be needed.
-             const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
-             const linkedText = text.replace(linkRegex, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-           
-            // Basic Markdown code blocks: replace ```lang\ncode``` with <pre><code>code</code></pre>
-            // This is a simplified version, doesn't handle inline code or complex cases well.
-            const blockRegex = /```(?:\\w*\\n)?([\\s\\S]+?)\\n?```/g;
-            const finalHtml = linkedText.replace(blockRegex, (match, code) => {
-                // Basic HTML escaping for the code content
-                const escapedCode = code.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                return `<pre><code>${escapedCode}</code></pre>`;
-            });
-           
-            messageElement.innerHTML = finalHtml; // Use innerHTML to render links/code
-            // messageElement.textContent = text; // Original line
+            messageElement.classList.add('message');
+            // Ensure role class is only added if it's user or assistant or system
+            if ([ 'user', 'assistant', 'system', 'error' ].includes(role)) {
+                messageElement.classList.add(`${role}-message`);
+            }
+
+            // Store index and original content for editing/deleting
+            if (index !== undefined && (role === 'user' || role === 'assistant')) {
+                messageElement.dataset.index = index;
+            }
+
+            const messageContentElement = document.createElement('div');
+            messageContentElement.classList.add('message-content');
+
+            // Render content immediately
+            if (text || role === 'system') { // System messages can be empty initially
+                 renderMessageContent(messageContentElement, text);
+            }
+
+            messageElement.appendChild(messageContentElement);
+
             chatbox.appendChild(messageElement);
-            chatbox.scrollTop = chatbox.scrollHeight; 
+             // Scroll after adding element and potential reflow
+             setTimeout(() => {
+                 if (chatbox.lastChild === messageElement) { // Only scroll if it's the last message added
+                    chatbox.scrollTop = chatbox.scrollHeight;
+                 }
+             }, 0);
             return messageElement;
         }
 
+        // --- Render Message Content (Handles Markdown/HTML, Improved) ---
+        function renderMessageContent(element, text) {
+             // Escape HTML to prevent XSS before applying markdown
+             const escapeHtml = (unsafe) => {
+                 return unsafe
+                     .replace(/&/g, "&amp;")
+                     .replace(/</g, "&lt;")
+                     .replace(/>/g, "&gt;")
+                     .replace(/"/g, "&quot;")
+                     .replace(/'/g, "&#039;");
+             };
+
+             // Process markdown after escaping HTML
+             let safeText = escapeHtml(text);
+
+             // Code Blocks (```lang\ncode``` or ```\ncode```)
+             const blockRegex = /```(?:[\w-]*\n)?([\s\S]+?)\n?```/g;
+             let htmlContent = safeText.replace(blockRegex, (match, code) => {
+                  // No need to escape again, already done by escapeHtml
+                 return `<pre><code>${code.trim()}</code></pre>`; // Keep escaped code
+             });
+
+             // Inline Code (`code`)
+             const inlineCodeRegex = /`([^`]+)`/g;
+             htmlContent = htmlContent.replace(inlineCodeRegex, '<code>$1</code>'); // Keep escaped content
+
+             // Links ([text](url)) - Need to be careful here not to double-escape
+             const linkRegex = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g;
+             // Temporarily use placeholders for links before applying other markdown
+             const links = [];
+             htmlContent = htmlContent.replace(linkRegex, (match, linkText, url) => {
+                 links.push({ text: linkText, url: url }); // Store original (already escaped) text and raw URL
+                 return `__LINK_${links.length - 1}__`;
+             });
+
+             // Basic Bold (**text** or __text__)
+             const boldRegex = /(\*\*|__)(?=\S)([\s\S]*?\S)\1/g;
+             htmlContent = htmlContent.replace(boldRegex, '<strong>$2</strong>');
+
+             // Basic Italic (*text* or _text_)
+             const italicRegex = /(\*|_)(?=\S)([\s\S]*?\S)\1/g;
+             htmlContent = htmlContent.replace(italicRegex, '<em>$2</em>');
+
+
+             // Restore links, ensuring URL is safe (already checked for http/https)
+             htmlContent = htmlContent.replace(/__LINK_(\d+)__/g, (match, index) => {
+                 const link = links[parseInt(index)];
+                 // Re-escape URL just in case, though regex limits it.
+                 const safeUrl = escapeHtml(link.url);
+                 // Link text is already escaped.
+                 return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${link.text}</a>`;
+             });
+
+             // Handle newlines -> <br> (outside of pre/code)
+             // This is tricky. A simpler approach might be needed.
+             // For now, rely on `white-space: pre-wrap;` in CSS for assistant messages.
+             // If more complex markdown parsing is needed, a library is recommended.
+
+             element.innerHTML = htmlContent;
+
+             // Add syntax highlighting to code blocks if available
+             if (typeof hljs !== 'undefined' && element.querySelectorAll('pre code').length > 0) {
+                  element.querySelectorAll('pre code').forEach((block) => {
+                     hljs.highlightElement(block);
+                 });
+             }
+        }
+
+        // --- Persistence Functions ---
+        function saveChatHistory() {
+            try {
+                localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(conversationHistory));
+            } catch (e) {
+                console.error("Error saving chat history to localStorage:", e);
+                addLogEntry("[错误] 保存聊天记录到 localStorage 失败。");
+            }
+        }
+
+        function loadChatHistory() {
+            try {
+                const storedHistory = localStorage.getItem(CHAT_HISTORY_KEY);
+                if (storedHistory) {
+                    const parsedHistory = JSON.parse(storedHistory);
+                    // Basic validation: check if it's an array and has the system prompt
+                    if (Array.isArray(parsedHistory) && parsedHistory.length > 0 && parsedHistory[0].role === 'system') {
+                        conversationHistory = parsedHistory;
+                        // Don't display system message again, start from index 1
+                        for (let i = 1; i < conversationHistory.length; i++) {
+                            const msg = conversationHistory[i];
+                            displayMessage(msg.content, msg.role, i); // Pass index
+                        }
+                        console.log("Chat history loaded from localStorage.");
+                        addLogEntry("[信息] 从 localStorage 加载了聊天记录。");
+                        return true; // Indicate history was loaded
+                    } else {
+                        console.warn("Invalid chat history found in localStorage. Starting fresh.");
+                        localStorage.removeItem(CHAT_HISTORY_KEY); // Clear invalid data
+                    }
+                }
+            } catch (e) {
+                console.error("Error loading chat history from localStorage:", e);
+                addLogEntry("[错误] 从 localStorage 加载聊天记录失败。");
+                localStorage.removeItem(CHAT_HISTORY_KEY); // Clear potentially corrupt data
+            }
+            return false; // Indicate history was not loaded
+        }
+
+        function saveLogHistory() {
+            try {
+                localStorage.setItem(LOG_HISTORY_KEY, JSON.stringify(logHistory));
+            } catch (e) {
+                console.error("Error saving log history to localStorage:", e);
+                // Avoid adding log entry here to prevent potential loop
+            }
+        }
+
+        function loadLogHistory() {
+            try {
+                const storedLogs = localStorage.getItem(LOG_HISTORY_KEY);
+                if (storedLogs) {
+                    const parsedLogs = JSON.parse(storedLogs);
+                    if (Array.isArray(parsedLogs)) {
+                        logHistory = parsedLogs;
+                        logTerminal.innerHTML = ''; // Clear any default messages
+                        parsedLogs.forEach(logMsg => {
+                            const logEntry = document.createElement('div');
+                            logEntry.classList.add('log-entry');
+                            logEntry.textContent = logMsg;
+                            logTerminal.appendChild(logEntry);
+                        });
+                        logTerminal.scrollTop = logTerminal.scrollHeight; // Scroll to bottom
+                        console.log("Log history loaded from localStorage.");
+                        return true;
+                    }
+                }
+            } catch (e) {
+                console.error("Error loading log history from localStorage:", e);
+                localStorage.removeItem(LOG_HISTORY_KEY); // Clear potentially corrupt data
+            }
+            return false;
+        }
+
     </script>
+    <!-- Optional: Add highlight.js for code syntax highlighting -->
+    <!-- <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css"> -->
+    <!-- <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script> -->
+    <!-- <script>hljs.highlightAll();</script> -->
 </body>
 </html> 

@@ -13,6 +13,8 @@ import json
 import asyncio
 import threading
 import queue
+import logging
+import logging.handlers
 
 # 尝试导入 launch_server (用于实验性功能)
 try:
@@ -44,10 +46,16 @@ STORAGE_STATE_PATH = os.path.join(os.path.dirname(__file__), "auth_state.json")
 AUTH_PROFILES_DIR = os.path.join(os.path.dirname(__file__), "auth_profiles")
 ACTIVE_AUTH_DIR = os.path.join(AUTH_PROFILES_DIR, "active")
 SAVED_AUTH_DIR = os.path.join(AUTH_PROFILES_DIR, "saved")
+# --- 新增：日志文件路径 ---
+LOG_DIR = os.path.join(os.path.dirname(__file__), 'logs')
+LOG_FILE_PATH = os.path.join(LOG_DIR, 'launch_app.log') # 使用不同的日志文件名
 
 # --- 修改：全局变量需要同时支持两种模式 --- 
 camoufox_proc = None # subprocess 模式 (现在是主要的 Camoufox 进程)
 server_py_proc = None
+
+# --- 新增: 日志实例 ---
+logger = logging.getLogger("CamoufoxLauncher") # 获取指定名称的 logger
 
 # --- 新增：WebSocket 端点正则表达式 ---
 ws_regex = re.compile(r"(ws://\S+)")
@@ -69,24 +77,59 @@ def _enqueue_output(stream, output_queue):
         stream.close() # Ensure the stream is closed from the reader side
         print("[Reader Thread] Exiting.", flush=True)
 
+# --- 新增：日志设置函数 (简化版) ---
+def setup_launcher_logging(log_level=logging.INFO):
+    """配置启动器日志记录 (文件 + stderr)"""
+    os.makedirs(LOG_DIR, exist_ok=True)
+    # --- 文件日志格式 (详细) ---
+    file_log_formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - [%(name)s:%(funcName)s:%(lineno)d] - %(message)s'
+    )
+    # --- 控制台日志格式 (简洁) ---
+    console_log_formatter = logging.Formatter('%(message)s') # <-- 简洁格式
+
+    launcher_logger = logging.getLogger("CamoufoxLauncher")
+    if launcher_logger.hasHandlers():
+        launcher_logger.handlers.clear()
+
+    launcher_logger.setLevel(log_level)
+    launcher_logger.propagate = False
+
+    # 1. Rotating File Handler (使用详细格式)
+    file_handler = logging.handlers.RotatingFileHandler(
+        LOG_FILE_PATH, maxBytes=2*1024*1024, backupCount=3, encoding='utf-8' # 文件小一点
+    )
+    file_handler.setFormatter(file_log_formatter) # <-- 使用详细格式
+    launcher_logger.addHandler(file_handler)
+
+    # 2. Stream Handler (to stderr, 使用简洁格式)
+    stream_handler = logging.StreamHandler(sys.stderr)
+    stream_handler.setFormatter(console_log_formatter) # <-- 使用简洁格式
+    launcher_logger.addHandler(stream_handler)
+
+    # 使用 logger 记录初始化信息（这些会同时进文件和控制台，控制台是简洁格式）
+    launcher_logger.info("=" * 30 + " 启动器日志系统已初始化 " + "=" * 30)
+    launcher_logger.info(f"日志级别: {logging.getLevelName(log_level)}")
+    launcher_logger.info(f"日志文件: {LOG_FILE_PATH}")
+
 def ensure_auth_dirs_exist():
     """确保认证文件目录存在"""
-    print("--- 检查认证目录 ---")
+    logger.info("--- 检查认证目录 ---")
     try:
         os.makedirs(ACTIVE_AUTH_DIR, exist_ok=True)
-        print(f"   ✓ 激活认证目录: {ACTIVE_AUTH_DIR}")
+        logger.info(f"   ✓ 激活认证目录: {ACTIVE_AUTH_DIR}")
         os.makedirs(SAVED_AUTH_DIR, exist_ok=True)
-        print(f"   ✓ 保存认证目录: {SAVED_AUTH_DIR}")
+        logger.info(f"   ✓ 保存认证目录: {SAVED_AUTH_DIR}")
     except PermissionError as pe:
-        print(f"   ❌ 权限错误: {pe}")
+        logger.error(f"   ❌ 权限错误: {pe}")
         sys.exit(1)
     except FileExistsError as fee:
-        print(f"   ❌ 文件已存在错误: {fee}")
+        logger.error(f"   ❌ 文件已存在错误: {fee}")
         sys.exit(1)
     except OSError as e:
-        print(f"   ❌ 创建认证目录时出错: {e}")
+        logger.error(f"   ❌ 创建认证目录时出错: {e}")
         sys.exit(1)
-    print("--------------------")
+    logger.info("--------------------")
 
 def cleanup():
     """Ensures subprocesses and server thread are terminated on exit."""
@@ -294,14 +337,20 @@ def check_dependencies():
 # def run_launch_server_debug_direct_output(...):
 #     ...
 
-def start_main_server(ws_endpoint, launch_mode, active_auth_json=None):
+def start_main_server(ws_endpoint, launch_mode, server_port, active_auth_json=None):
     """Starts the main server.py script, passing info via environment variables."""
     print(f"DEBUG [launch_camoufox]: Received ws_endpoint in start_main_server: {ws_endpoint} (Type: {type(ws_endpoint)})" )
     global server_py_proc
     print(f"-------------------------------------------------")
     print(f"--- 步骤 3: 启动主 FastAPI 服务器 ({SERVER_PY_FILENAME}) ---")
     server_script_path = os.path.join(os.path.dirname(__file__), SERVER_PY_FILENAME)
-    cmd = [PYTHON_EXECUTABLE, '-u', server_script_path]
+
+    # --- 修改命令，加入 --port ---
+    cmd = [
+        PYTHON_EXECUTABLE, '-u', server_script_path,
+        '--disable-print-redirect',
+        '--port', str(server_port) # <-- 将端口号作为参数传递
+    ]
     print(f"   执行命令: {' '.join(cmd)}")
 
     env = os.environ.copy()
@@ -318,6 +367,8 @@ def start_main_server(ws_endpoint, launch_mode, active_auth_json=None):
     if active_auth_json:
         print(f"   设置环境变量 ACTIVE_AUTH_JSON_PATH={os.path.basename(active_auth_json)}")
     print(f"   设置环境变量 CAMOUFOX_WS_ENDPOINT={ws_endpoint[:25]}...")
+    print(f"   将禁用 server.py 的 print 重定向以保持终端清洁。")
+    print(f"   指定 server.py 监听端口: {server_port}") # <-- 告知用户端口
 
     try:
         # 修改：捕获 server.py 的输出
@@ -470,6 +521,7 @@ async def save_auth_state_debug(ws_endpoint: str): # 新增 async 函数用于�
 
 
 if __name__ == "__main__":
+    # --- 解析命令行参数 (移到前面，因为日志初始化需要判断它) ---
     parser = argparse.ArgumentParser(
         description="启动 Camoufox 服务器和 FastAPI 代理服务器。支持无头模式和调试模式。", # 更新描述
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -488,6 +540,14 @@ if __name__ == "__main__":
         '--internal-auth-file', type=str, default=None, help=argparse.SUPPRESS
     )
 
+    # --- 添加 --server-port 参数 ---
+    parser.add_argument(
+        "--server-port",
+        type=int,
+        default=2048, # <-- 设置默认端口为 2048
+        help="FastAPI 服务器 (server.py) 监听的端口"
+    )
+
     # --- 修改：使用互斥组 ---
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument(
@@ -500,8 +560,14 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    # --- 在主程序开始时设置日志 (只有非内部启动才执行) ---
+    if not args.internal_launch:
+        setup_launcher_logging(log_level=logging.INFO)
+    # ----------------------------------
+
     # ======= 处理内部启动模式 =======
     if args.internal_launch:
+        # 内部启动逻辑不再需要调用 setup_launcher_logging
         if not launch_server:
             print("❌ 内部错误：launch_server 未定义。", file=sys.stderr)
             sys.exit(1)
@@ -532,22 +598,22 @@ if __name__ == "__main__":
         sys.exit(0)
 
     # ===============================
-
-    print(f"🚀 Camoufox 启动器 🚀")
-    print(f"=================================================")
+    # --- 以下是非内部启动模式的逻辑 ---
+    logger.info(f"🚀 Camoufox 启动器 🚀") # 现在这行会在 setup_launcher_logging 之后执行
+    logger.info(f"=================================================")
     ensure_auth_dirs_exist() # <--- 调用目录创建函数
-    check_dependencies()
-    print(f"=================================================")
+    check_dependencies() # check_dependencies 内部的 print 会继续使用 stderr
+    logger.info(f"=================================================")
 
-    print(f"--- 检查遗留登录状态 ({os.path.basename(STORAGE_STATE_PATH)}) ---") # 修改提示
+    logger.info(f"--- 检查遗留登录状态 ({os.path.basename(STORAGE_STATE_PATH)}) ---")
     auth_state_exists = os.path.exists(STORAGE_STATE_PATH)
 
     if auth_state_exists:
-        print(f"   ⚠️ 警告：找到旧的登录状态文件 '{os.path.basename(STORAGE_STATE_PATH)}'。") # 修改提示
-        print(f"      此文件不再直接使用。请通过 '调试模式' 生成新的认证文件并放入 'auth_profiles/active'。")
+        logger.warning(f"   ⚠️ 警告：找到旧的登录状态文件 '{os.path.basename(STORAGE_STATE_PATH)}'。")
+        logger.warning(f"      此文件不再直接使用。请通过 '调试模式' 生成新的认证文件并放入 'auth_profiles/active'。")
     # else: # 不再需要提示未找到旧文件
-    #    print(f"   ✓ 未找到旧的登录状态文件 '{os.path.basename(STORAGE_STATE_PATH)}' (预期行为)。") # 确认新行为
-    print(f"-------------------------------------------------")
+    #    logger.info(f"   ✓ 未找到旧的登录状态文件 '{os.path.basename(STORAGE_STATE_PATH)}' (预期行为)。") # 确认新行为
+    logger.info(f"-------------------------------------------------")
 
 
     launch_mode = None # 'headless', 'debug'
@@ -660,15 +726,6 @@ if __name__ == "__main__":
                 print(f"   ❌ 处理队列或读取输出时出错: {read_err}", flush=True)
                 break # 退出循环
 
-            # 移除旧的 os.read 逻辑
-            # try:
-            #     chunk = os.read(stdout_fd, 4096)
-            #     ...
-            # except BlockingIOError:
-            #     time.sleep(0.1)
-            # except Exception as read_err:
-            #     ...
-
         # --- 结束读取循环 --- 
 
         # --- 清理读取线程 (虽然是 daemon, 但尝试 join 一下) ---
@@ -683,7 +740,7 @@ if __name__ == "__main__":
         else:
             # ... (调用 start_main_server 逻辑不变) ...
             print(f"   调用 start_main_server 完成。脚本将等待其结束...", flush=True)
-            start_main_server(ws_endpoint, launch_mode) # 调用 server.py
+            start_main_server(ws_endpoint, launch_mode, args.server_port) # 调用 server.py
 
     elif launch_mode == 'headless':
         print(f"--- 即将启动：无头模式 (实验性) --- ")
@@ -811,7 +868,7 @@ if __name__ == "__main__":
             else:
                 # ... (调用 start_main_server 逻辑不变) ...
                 print(f"   调用 start_main_server 完成。脚本将等待其结束...", flush=True)
-                start_main_server(ws_endpoint, launch_mode, active_json_path) # 调用 server.py
+                start_main_server(ws_endpoint, launch_mode, args.server_port, active_json_path) # 调用 server.py
 
         except Exception as e: # 添加通用异常处理
             print(f"   ❌ 启动 Camoufox 子进程或捕获端点时出错: {e}")
@@ -830,3 +887,9 @@ if __name__ == "__main__":
 
 
 # Cleanup handled by atexit 
+# --- 确保日志在退出时关闭 ---
+def shutdown_logging():
+    logging.shutdown()
+
+atexit.register(shutdown_logging)
+# -------------------------
