@@ -1188,7 +1188,7 @@ async def get_response_via_copy_button(
             check_client_disconnected("复制响应 - 读取剪贴板后: ")
 
             if clipboard_content:
-                content_preview = clipboard_content[:100].replace('\n', '\\n')
+                content_preview = clipboard_content[:100].replace('\n', '\\\\n')
                 # print(f"[{req_id}]   - ✅ 成功获取剪贴板内容 (长度={len(clipboard_content)}): '{content_preview}...'", flush=True)
                 logger.info(f"[{req_id}]   - ✅ 成功获取剪贴板内容 (长度={len(clipboard_content)}): '{content_preview}...'") # logger
                 return clipboard_content
