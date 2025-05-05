@@ -650,7 +650,7 @@ async def _initialize_page_logic(browser: AsyncBrowser):
                     current_url = found_page.url
                     if login_url_pattern in current_url:
                          raise RuntimeError("手动登录尝试后仍在登录页面。")
-                    print("   ✅ 登录成功！")
+                    print("   ✅ 登录成功！请不要操作窗口，等待保存认证状态选择器启动。")
                     # Ask to save state (simplified)
                     save_prompt = "   是否要将当前的浏览器认证状态保存到文件？ (y/N): "
                     should_save = await loop.run_in_executor(None, input, save_prompt)
