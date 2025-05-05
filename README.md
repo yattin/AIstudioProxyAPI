@@ -6,7 +6,7 @@
 
 ---
 
-## 📝 目录
+## 目录
 
 1.  [项目概述](#项目概述)
 2.  [免责声明](#免责声明)
@@ -46,7 +46,7 @@
 
 通过此代理，支持 OpenAI API 的各种客户端（如 Open WebUI, LobeChat, NextChat 等）可以连接并使用 Google AI Studio 的模型。
 
-## ✋ 免责声明
+## 免责声明
 
 使用本项目即表示您已完整阅读、理解并同意本免责声明的全部内容。
 本项目通过自动化脚本（Playwright + Camoufox）与 Google AI Studio 网页版进行交互。这种自动化访问网页的方式可能违反 Google AI Studio 或相关 Google 服务的用户协议或服务条款（Terms of Service）。不当使用本项目可能导致您的 Google 账号受到警告、功能限制、暂时或永久封禁等处罚。项目作者及贡献者对此不承担任何责任。
@@ -56,7 +56,7 @@
 在任何情况下，项目作者或贡献者均不对因使用或无法使用本项目而产生的任何直接、间接、附带、特殊、惩罚性或后果性的损害承担责任。
 使用本项目，即视为您已完全理解并接受本免责声明的全部条款。如果您不同意本声明的任何内容，请立即停止使用本项目。
 
-## ✨ 核心特性 (Python 版本)
+## 核心特性 (Python 版本)
 
 *   **OpenAI API 兼容**: 提供 `/v1/chat/completions`, `/v1/models`, `/api/info` 端点 (默认端口 `2048`)。
 *   **流式/非流式响应**: 支持 `stream=true` 和 `stream=false`。
@@ -85,7 +85,7 @@
 *   **WebSocket 实时日志**: 提供 `/ws/logs` 端点，Web UI 通过此接口显示后端日志。
 *   **辅助端点**: 提供 `/health`, `/v1/queue`, `/v1/cancel/{req_id}` 等端点用于监控和管理。
 
-## ⚠️ 重要提示 (Python 版本)
+## 重要提示 (Python 版本)
 
 *   **非官方项目**: 依赖 AI Studio Web 界面，可能因页面更新失效。
 *   **认证文件是关键**: 无头模式 (通过 `start.py` 启动) **高度依赖**于 `auth_profiles/active/` 下有效的 `.json` 认证文件。**文件可能会过期**，需要定期通过 `launch_camoufox.py --debug` 模式手动运行、登录并保存新的认证文件来替换更新。
@@ -97,7 +97,7 @@
 *   **端口号**: 默认端口已更改为 `2048`。可在 `start.py` 和 `server.py` 中修改。
 *   **客户端管理历史，代理不支持 UI 内编辑**: 客户端负责维护完整的聊天记录并将其发送给代理。代理服务器本身不支持在 AI Studio 界面中对历史消息进行编辑或分叉操作；它总是处理客户端发送的完整消息列表，然后将其发送到 AI Studio 页面。
 
-## 🚀 快速开始 (推荐流程)
+## 快速开始 (推荐流程)
 
 推荐使用 `start.py` 脚本进行日常运行，它简化了无头模式的启动流程。仅在首次设置或认证过期时才需要使用 `launch_camoufox.py --debug`。
 
@@ -143,7 +143,7 @@
 
 **认证过期后，重复步骤 2 和 3（删除旧的 active 文件，重新 debug 获取并移动新的，然后用 `start.py` 启动）。**
 
-## 📝 详细步骤
+## 详细步骤
 
 ### 1. 先决条件
 
@@ -411,7 +411,7 @@ python launch_camoufox.py --debug --server-port 2048
 *   客户端设备需要支持 mDNS 才能解析 `.local` 域名 (大多数现代操作系统默认支持)。
 *   此脚本广播的是 `server.py` 实际监听的端口 (由 `mdns_publisher.py` 中的 `PORT` 变量决定)。确保这个端口与 `server.py` 实际使用的端口一致。
 
-## 💻 多平台指南 (Python 版本)
+## 多平台指南 (Python 版本)
 
 *   **macOS / Linux**:
     *   通常安装过程比较顺利。确保 Python 和 pip 已正确安装并配置在系统 PATH 中。
@@ -435,7 +435,7 @@ python launch_camoufox.py --debug --server-port 2048
         *   所有命令（`git clone`, `pip install`, `camoufox fetch`, `python start.py` 或 `python launch_camoufox.py` 等）都应在 WSL 终端内执行。
         *   在 WSL 中运行 `--debug` 模式：`launch_camoufox.py --debug` 会尝试启动 Camoufox。如果你的 WSL 配置了 GUI 应用支持（如 WSLg 或第三方 X Server），可以看到浏览器界面。否则，它可能无法显示界面，但服务本身仍会尝试启动。无头模式 (`start.py`) 不受影响。
 
-## 🔧 故障排除 (Python 版本)
+## 故障排除 (Python 版本)
 
 *   **`pip install camoufox[geoip]` 失败**:
     *   可能是网络问题或缺少编译环境。尝试不带 `[geoip]` 安装 (`pip install camoufox`)。
@@ -488,7 +488,7 @@ python launch_camoufox.py --debug --server-port 2048
     *   确认 WebSocket 连接 (`/ws/logs`) 是否成功建立。
     *   确认 `/health` 和 `/api/info` 端点是否能正常访问并返回数据。
 
-## 🦊 关于 Camoufox
+## 关于 Camoufox
 
 本项目使用 [Camoufox](https://camoufox.com/) 来提供具有增强反指纹检测能力的浏览器实例。
 
@@ -499,30 +499,13 @@ python launch_camoufox.py --debug --server-port 2048
 
 使用 Camoufox 的主要目的是提高与 AI Studio 网页交互时的隐蔽性，减少被检测或限制的可能性。但请注意，没有任何反指纹技术是绝对完美的。
 
-## 📄 关于 `fetch_camoufox_data.py`
+## 关于 `fetch_camoufox_data.py`
 
 项目根目录下包含一个名为 `fetch_camoufox_data.py` 的辅助脚本。
 
 *   **用途**: 此脚本的唯一目的是在运行 `camoufox fetch` 命令失败时，尝试**禁用 SSL 证书验证**来强制下载 Camoufox 所需的浏览器文件和数据。这有时可以解决因本地网络环境或代理服务器的 SSL 证书问题导致的下载失败。
 *   **风险**: **禁用 SSL 验证会带来安全风险！** 它意味着你的网络连接不再验证服务器的身份，可能使你受到中间人攻击。**请仅在完全了解风险并确认你的网络环境可信的情况下，才考虑运行此脚本。**
 *   **用法**: 如果 `camoufox fetch` 失败，可以尝试在项目根目录运行 `python fetch_camoufox_data.py`。脚本执行完毕后，SSL 验证将在下次正常运行 Python 时恢复。
-
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
-## 📄 License
-
-[MIT](LICENSE)
-
-## 🚀 未来计划 / Roadmap
-
-以下是一些计划中的改进方向：
-
-*   **Docker 支持**: 提供官方的 `Dockerfile` 以及 Docker Compose 配置，简化容器化部署流程。
-*   **云服务器部署指南**: 提供更详细的在主流云平台（如 AWS, GCP, Azure）上部署和管理服务的指南。
-*   **参数自动化 (探索性)**: 研究通过 Playwright 自动化操作 AI Studio 页面的参数设置区域的可行性。
-*   **认证更新流程优化**: 探索更便捷的认证文件更新机制，减少手动操作。
 
 ## 控制日志输出 (Python 版本)
 
@@ -570,12 +553,22 @@ python launch_camoufox.py --debug --server-port 2048
 
 通过组合使用这些方法，可以根据需要调整日志的详细程度和输出位置。对于日常运行，默认的日志级别通常足够；在排查问题时，可以查看日志文件或启用环境变量获取更详细的信息。
 
+## 未来计划 / Roadmap
+
+以下是一些计划中的改进方向：
+
+*   **Docker 支持**: 提供官方的 `Dockerfile` 以及 Docker Compose 配置，简化容器化部署流程。
+*   **云服务器部署指南**: 提供更详细的在主流云平台（如 AWS, GCP, Azure）上部署和管理服务的指南。
+*   **参数自动化 (探索性)**: 研究通过 Playwright 自动化操作 AI Studio 页面的参数设置区域的可行性。
+*   **认证更新流程优化**: 探索更便捷的认证文件更新机制，减少手动操作。
+*   **MCP兼容性支持**: 增加健壮性提高对MCP的兼容性。
+
 ---
 
-## 🤝 贡献
+## 贡献
 
 欢迎提交 Issue 和 Pull Request！
 
-## 📄 License
+## License
 
 [MIT](LICENSE)
