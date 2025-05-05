@@ -7,18 +7,26 @@ import os
 import signal
 import atexit
 import argparse
-import threading
+import select
 import traceback
 import json
 import asyncio
+import threading
+import queue
+import logging
+import logging.handlers
 
 # 尝试导入 launch_server (用于实验性功能)
 try:
     from camoufox.server import launch_server
 except ImportError:
-    # 不再退出，因为它是可选功能
-    launch_server = None
-    print("⚠️ 警告: 无法导入 'camoufox.server.launch_server'。实验性虚拟显示功能将不可用。")
+    # 如果在 internal-launch 模式下无法导入，则必须退出
+    if '--internal-launch' in sys.argv:
+        print("❌ 错误：内部启动模式需要 'camoufox.server.launch_server' 但无法导入。", file=sys.stderr)
+        sys.exit(1)
+    else:
+        launch_server = None
+        print("⚠️ 警告: 无法导入 'camoufox.server.launch_server'。实验性虚拟显示功能将不可用。")
 
 # 尝试导入 Playwright (用于临时连接保存状态)
 try:
@@ -31,44 +39,171 @@ except ImportError:
 SERVER_PY_FILENAME = "server.py"
 PYTHON_EXECUTABLE = sys.executable
 CAMOUFOX_START_TIMEOUT = 30 # seconds to wait for WS endpoint from output (subprocess mode)
-EXPERIMENTAL_WAIT_TIMEOUT = 60 # seconds to wait for user to paste endpoint
+# --- 修改：增加等待自动捕获端点的超时时间 ---
+ENDPOINT_CAPTURE_TIMEOUT = 45 # seconds to wait for endpoint
 STORAGE_STATE_PATH = os.path.join(os.path.dirname(__file__), "auth_state.json")
 # --- 新增：认证文件目录 ---
 AUTH_PROFILES_DIR = os.path.join(os.path.dirname(__file__), "auth_profiles")
 ACTIVE_AUTH_DIR = os.path.join(AUTH_PROFILES_DIR, "active")
 SAVED_AUTH_DIR = os.path.join(AUTH_PROFILES_DIR, "saved")
+# --- 新增：日志文件路径 ---
+LOG_DIR = os.path.join(os.path.dirname(__file__), 'logs')
+LOG_FILE_PATH = os.path.join(LOG_DIR, 'launch_app.log') # 使用不同的日志文件名
 
 # --- 修改：全局变量需要同时支持两种模式 --- 
-camoufox_proc = None # subprocess 模式
-camoufox_server_thread = None # launch_server 模式
-camoufox_server_instance = None # launch_server 返回值
-stop_server_event = threading.Event() # launch_server 模式
+camoufox_proc = None # subprocess 模式 (现在是主要的 Camoufox 进程)
 server_py_proc = None
 
-# --- 新增：确保目录存在 ---
+# --- 新增: 日志实例 ---
+logger = logging.getLogger("CamoufoxLauncher") # 获取指定名称的 logger
+
+# --- 新增：WebSocket 端点正则表达式 ---
+ws_regex = re.compile(r"(ws://\S+)")
+
+# --- 新增：用于后台读取子进程输出的函数 ---
+def _enqueue_output(stream, output_queue):
+    """Reads lines from a stream and puts them into a queue."""
+    try:
+        for line in iter(stream.readline, ''):
+            output_queue.put(line)
+    except ValueError:
+        # stream might be closed prematurely
+        pass
+    except Exception as e:
+        print(f"[Reader Thread] Error reading stream: {e}", file=sys.stderr)
+    finally:
+        # Signal EOF by putting None
+        output_queue.put(None)
+        stream.close() # Ensure the stream is closed from the reader side
+        print("[Reader Thread] Exiting.", flush=True)
+
+# --- 新增：日志设置函数 (简化版) ---
+def setup_launcher_logging(log_level=logging.INFO):
+    """配置启动器日志记录 (文件 + stderr)"""
+    os.makedirs(LOG_DIR, exist_ok=True)
+    # --- 文件日志格式 (详细) ---
+    file_log_formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - [%(name)s:%(funcName)s:%(lineno)d] - %(message)s'
+    )
+    # --- 控制台日志格式 (简洁) ---
+    console_log_formatter = logging.Formatter('%(message)s') # <-- 简洁格式
+
+    launcher_logger = logging.getLogger("CamoufoxLauncher")
+    if launcher_logger.hasHandlers():
+        launcher_logger.handlers.clear()
+
+    launcher_logger.setLevel(log_level)
+    launcher_logger.propagate = False
+
+    # 1. Rotating File Handler (使用详细格式)
+    file_handler = logging.handlers.RotatingFileHandler(
+        LOG_FILE_PATH, maxBytes=2*1024*1024, backupCount=3, encoding='utf-8' # 文件小一点
+    )
+    file_handler.setFormatter(file_log_formatter) # <-- 使用详细格式
+    launcher_logger.addHandler(file_handler)
+
+    # 2. Stream Handler (to stderr, 使用简洁格式)
+    stream_handler = logging.StreamHandler(sys.stderr)
+    stream_handler.setFormatter(console_log_formatter) # <-- 使用简洁格式
+    launcher_logger.addHandler(stream_handler)
+
+    # 使用 logger 记录初始化信息（这些会同时进文件和控制台，控制台是简洁格式）
+    launcher_logger.info("=" * 30 + " 启动器日志系统已初始化 " + "=" * 30)
+    launcher_logger.info(f"日志级别: {logging.getLevelName(log_level)}")
+    launcher_logger.info(f"日志文件: {LOG_FILE_PATH}")
+
 def ensure_auth_dirs_exist():
     """确保认证文件目录存在"""
-    print("--- 检查认证目录 ---")
+    logger.info("--- 检查认证目录 ---")
     try:
         os.makedirs(ACTIVE_AUTH_DIR, exist_ok=True)
-        print(f"   ✓ 激活认证目录: {ACTIVE_AUTH_DIR}")
+        logger.info(f"   ✓ 激活认证目录: {ACTIVE_AUTH_DIR}")
         os.makedirs(SAVED_AUTH_DIR, exist_ok=True)
-        print(f"   ✓ 保存认证目录: {SAVED_AUTH_DIR}")
-    except OSError as e:
-        print(f"   ❌ 创建认证目录时出错: {e}")
+        logger.info(f"   ✓ 保存认证目录: {SAVED_AUTH_DIR}")
+    except PermissionError as pe:
+        logger.error(f"   ❌ 权限错误: {pe}")
         sys.exit(1)
-    print("--------------------")
+    except FileExistsError as fee:
+        logger.error(f"   ❌ 文件已存在错误: {fee}")
+        sys.exit(1)
+    except OSError as e:
+        logger.error(f"   ❌ 创建认证目录时出错: {e}")
+        sys.exit(1)
+    logger.info("--------------------")
 
 def cleanup():
     """Ensures subprocesses and server thread are terminated on exit."""
-    global camoufox_proc, server_py_proc, camoufox_server_thread, stop_server_event, camoufox_server_instance
+    global camoufox_proc, server_py_proc
     print(f"\n--- 开始清理 --- ")
+    
     # 1. 终止主 FastAPI 服务器进程 (server.py)
     if server_py_proc and server_py_proc.poll() is None:
         print(f"   正在终止 server.py (PID: {server_py_proc.pid})...")
         try:
             # 尝试发送 SIGTERM
+            print(f"   -> 发送 SIGTERM 到 server.py (PID: {server_py_proc.pid})")
             server_py_proc.terminate()
+
+            # --- 新增：尝试读取 server.py 关闭时的输出 --- 
+            print(f"   -> 等待最多 5 秒并尝试读取 server.py 的最后输出...") # 更新时间
+            shutdown_read_start_time = time.time()
+            try:
+                 stdout_fd = server_py_proc.stdout.fileno()
+                 stderr_fd = server_py_proc.stderr.fileno()
+                 # 使用 select 监听，避免完全阻塞
+                 while time.time() - shutdown_read_start_time < 5.0: # 更新时间
+                     # 检查进程是否已退出
+                     if server_py_proc.poll() is not None:
+                          break
+                     
+                     fds_to_watch = []
+                     # 只有在流对象仍然存在且未显式关闭时才添加到监视列表
+                     if server_py_proc.stdout and not server_py_proc.stdout.closed:
+                          fds_to_watch.append(stdout_fd)
+                     if server_py_proc.stderr and not server_py_proc.stderr.closed:
+                          fds_to_watch.append(stderr_fd)
+                          
+                     if not fds_to_watch: # 如果两个流都关闭了，则退出
+                          break
+                          
+                     readable_fds, _, _ = select.select(fds_to_watch, [], [], 0.1) # 短暂等待
+                     
+                     for fd in readable_fds:
+                         try:
+                              if fd == stdout_fd:
+                                   line = server_py_proc.stdout.readline()
+                                   if line:
+                                        print(f"   [server.py shutdown stdout]: {line.strip()}", flush=True)
+                                   else:
+                                        # EOF on stdout during shutdown read
+                                        pass 
+                              elif fd == stderr_fd:
+                                   line = server_py_proc.stderr.readline()
+                                   if line:
+                                        print(f"   [server.py shutdown stderr]: {line.strip()}", flush=True)
+                                   else:
+                                        # EOF on stderr during shutdown read
+                                        pass
+                         except ValueError:
+                              # 文件描述符可能已失效
+                              print(f"   [server.py shutdown]: 读取时文件描述符无效，停止读取。")
+                              break # 退出内部 for 循环
+                         except Exception as read_line_err:
+                              print(f"   [server.py shutdown]: 读取行时出错: {read_line_err}")
+                              break # 退出内部 for 循环
+                     else: # 跳出内部 for 后跳出外部 while
+                           break
+                     
+                     # 如果 select 超时（没有可读的 fd），则继续循环直到 5 秒结束
+                     
+            except ValueError as ve:
+                 # fileno() 可能在进程快速退出时失败
+                 print(f"   [server.py shutdown]: 获取文件描述符时出错 (可能已关闭): {ve}")
+            except Exception as e_read:
+                 print(f"   [server.py shutdown]: 尝试读取关闭输出时出错: {e_read}")
+            # --- 结束新增部分 ---
+
+            # 现在等待进程真正结束
             server_py_proc.wait(timeout=5)
             print(f"   ✓ server.py 已终止 (SIGTERM)。")
         except subprocess.TimeoutExpired:
@@ -88,65 +223,49 @@ def cleanup():
     # 2. 清理 Camoufox 资源 (根据启动模式不同)
     # --- 清理 subprocess (调试模式) --- 
     if camoufox_proc and camoufox_proc.poll() is None:
-        print(f"   正在终止 Camoufox 服务器进程 (调试模式 - subprocess, PID: {camoufox_proc.pid})...")
+        print(f"   正在终止 Camoufox 服务器子进程 (PID: {camoufox_proc.pid})...")
         try:
-            # 使用进程组 ID 终止 (如果可用)
             if sys.platform != "win32":
-                print(f"   尝试使用进程组 (PGID: {os.getpgid(camoufox_proc.pid)}) 终止 (SIGKILL)...")
-                os.killpg(os.getpgid(camoufox_proc.pid), signal.SIGKILL)
-            else:
-                 print(f"   尝试强制终止 (SIGKILL)...")
-                 camoufox_proc.kill()
-            camoufox_proc.wait(timeout=3) # Wait briefly after kill
-            print(f"   ✓ Camoufox 服务器进程 (调试模式) 已终止 (SIGKILL)。")
+                # 尝试使用进程组终止（如果以 start_new_session=True 启动）
+                try:
+                    pgid = os.getpgid(camoufox_proc.pid)
+                    print(f"   尝试使用进程组 (PGID: {pgid}) 终止 (SIGTERM)...")
+                    os.killpg(pgid, signal.SIGTERM)
+                    time.sleep(1) # 给点时间响应 SIGTERM
+                    # 检查是否仍在运行
+                    if camoufox_proc.poll() is None:
+                        print(f"   进程组 SIGTERM 后仍在运行，尝试强制终止 (SIGKILL)..." )
+                        os.killpg(pgid, signal.SIGKILL)
+                        camoufox_proc.wait(timeout=3) # 等待 SIGKILL
+                except ProcessLookupError:
+                    print(f"   ℹ️ 进程组不存在或获取 PGID 失败，尝试直接终止 PID {camoufox_proc.pid}...")
+                    camoufox_proc.terminate() # 先尝试 SIGTERM
+                    try:
+                        camoufox_proc.wait(timeout=5)
+                        print(f"   ✓ Camoufox 子进程已终止 (SIGTERM)。")
+                    except subprocess.TimeoutExpired:
+                        print(f"   ⚠️ Camoufox 子进程未能优雅终止 (SIGTERM 超时)，强制终止 (SIGKILL)..." )
+                        camoufox_proc.kill()
+                        try: camoufox_proc.wait(timeout=3)
+                        except subprocess.TimeoutExpired:
+                             print(f"   ⚠️ 等待 Camoufox SIGKILL 后超时。")
+                        print(f"   ✓ Camoufox 子进程已强制终止 (SIGKILL)。")
+                except Exception as e:
+                    print(f"   ❌ 终止 Camoufox 子进程时出错: {e}")
         except ProcessLookupError:
-             print(f"   ℹ️ Camoufox 服务器进程 (调试模式) 可能已自行终止。")
+            print(f"   ℹ️ Camoufox 服务器子进程可能已自行终止。")
         except subprocess.TimeoutExpired:
-             print(f"   ⚠️ 等待 Camoufox (调试模式) SIGKILL 后超时。")
+            print(f"   ⚠️ 等待 Camoufox 子进程终止时超时。")
         except Exception as e:
-            print(f"   ❌ 终止 Camoufox 服务器进程 (调试模式) 时出错: {e}")
+            print(f"   ❌ 终止 Camoufox 子进程时出错: {e}")
         finally:
              camoufox_proc = None # Ensure it's None after handling
     elif camoufox_proc: # Process exists but already terminated
-         print(f"   Camoufox 服务器进程 (调试模式) 已自行结束 (代码: {camoufox_proc.poll()})。")
+         print(f"   Camoufox 服务器子进程已自行结束 (代码: {camoufox_proc.poll()})。")
          camoufox_proc = None
+    else:
+         print(f"   Camoufox 服务器子进程未启动或已清理。")
 
-    # --- 清理后台线程和 launch_server 实例 (无头模式) --- 
-    if camoufox_server_thread and camoufox_server_thread.is_alive():
-        print(f"   正在请求 Camoufox 服务器线程 (无头模式 - launch_server) 停止...")
-        stop_server_event.set() # 发送停止信号给线程内的 wait
-        
-        # 尝试关闭 launch_server 返回的实例 (如果它支持)
-        if camoufox_server_instance and hasattr(camoufox_server_instance, 'close'):
-            try:
-                print("      尝试调用 camoufox_server_instance.close()...")
-                # 注意：close() 可能是阻塞的，或者需要异步处理
-                # 这里假设它是快速的，或者 launch_server 内部处理了关闭
-                camoufox_server_instance.close() 
-                print("      实例 close() 调用完成。")
-            except Exception as e:
-                print(f"      调用 close() 时出错: {e}")
-                
-        camoufox_server_thread.join(timeout=10) # 等待线程结束
-        if camoufox_server_thread.is_alive():
-            print(f"   ⚠️ Camoufox 服务器线程 (无头模式) 未能及时停止。")
-            # 强制退出可能比较困难且不安全，依赖 atexit
-        else:
-             print(f"   ✓ Camoufox 服务器线程 (无头模式) 已停止。")
-        camoufox_server_thread = None # Mark as cleaned up
-        camoufox_server_instance = None
-    elif camoufox_server_thread: # Thread object exists but isn't alive
-         print(f"   Camoufox 服务器线程 (无头模式) 已自行结束。")
-         camoufox_server_thread = None
-         camoufox_server_instance = None
-
-    # --- 移除旧的 subprocess 清理逻辑 (已合并到上面) ---
-    # if camoufox_proc and camoufox_proc.poll() is None:
-    #     ...
-    # --- 移除旧的后台线程清理逻辑 (已合并到上面) ---
-    # if camoufox_server_thread and camoufox_server_thread.is_alive():
-    #     ...
-             
     print(f"--- 清理完成 --- ")
 
 # Register cleanup function to be called on script exit
@@ -213,68 +332,25 @@ def check_dependencies():
 # def start_camoufox_server_virtual(): ...
 
 # --- 新增：函数用于无头模式后台线程 ---
-def run_launch_server_headless_in_thread(json_path: str, stop_event: threading.Event):
-    """在后台线程中运行 launch_server(headless=True, storage_state=json_path)。
-    """
-    global camoufox_server_instance
-    if not launch_server:
-        print("   后台线程: ❌ 错误: launch_server 未导入，无法启动。", file=sys.stderr, flush=True)
-        return
+# def run_launch_server_headless_in_thread(...):
+#     ...
+# def run_launch_server_debug_direct_output(...):
+#     ...
 
-    print(f"   后台线程: 使用认证文件 '{os.path.basename(json_path)}' 准备调用 launch_server(headless=True)...", flush=True)
-    try:
-        # 运行 launch_server
-        # 注意：这里假设 launch_server 会阻塞直到服务器停止
-        camoufox_server_instance = launch_server(headless=True, storage_state=json_path)
-        print("   后台线程: launch_server 调用完成 (可能已阻塞)。等待停止信号...", flush=True)
-        stop_event.wait() # 等待主线程的停止信号
-        print("   后台线程: 收到停止信号，即将退出。", flush=True)
-
-    except RuntimeError as e:
-        if "Server process terminated unexpectedly" in str(e):
-            print(f"   后台线程: ⚠️ 检测到服务器进程终止，这通常是关闭过程的一部分。", flush=True)
-        else:
-            print(f"\n   后台线程: ❌ 意外 RuntimeError: {e}", file=sys.stderr, flush=True)
-            traceback.print_exc(file=sys.stderr)
-    except Exception as e:
-        print(f"\n   后台线程: ❌ 其他错误: {e}", file=sys.stderr, flush=True)
-        traceback.print_exc(file=sys.stderr)
-    finally:
-        print("   后台线程: run_launch_server_headless_in_thread 结束。", flush=True)
-
-# --- 新增：函数用于调试模式后台线程 (直接输出) ---
-def run_launch_server_debug_direct_output(stop_event: threading.Event):
-    global camoufox_server_instance
-    if not launch_server:
-        print("ERROR (Thread-Debug): launch_server not imported.", file=sys.stderr, flush=True)
-        return
-    try:
-        print("INFO (Thread-Debug): Calling launch_server(headless=False)... Output will appear directly.", flush=True)
-        camoufox_server_instance = launch_server(headless=False)
-        print("INFO (Thread-Debug): launch_server call returned. Waiting for stop signal.", flush=True)
-        stop_event.wait()
-        print("INFO (Thread-Debug): Stop signal received, exiting.", flush=True)
-    except RuntimeError as re:
-        # 特别处理服务器意外终止的情况
-        if "Server process terminated unexpectedly" in str(re):
-            print("INFO (Thread-Debug): Camoufox服务器已终止，可能是正常关闭的一部分", flush=True)
-        else:
-            print(f"ERROR (Thread-Debug): 运行时错误: {re}", file=sys.stderr, flush=True)
-            traceback.print_exc(file=sys.stderr)
-    except Exception as e:
-        print(f"ERROR (Thread-Debug): {e}", file=sys.stderr, flush=True)
-        traceback.print_exc(file=sys.stderr)
-    finally:
-        print("INFO (Thread-Debug): Thread exiting.", flush=True)
-
-def start_main_server(ws_endpoint, launch_mode, active_auth_json=None):
+def start_main_server(ws_endpoint, launch_mode, server_port, active_auth_json=None):
     """Starts the main server.py script, passing info via environment variables."""
     print(f"DEBUG [launch_camoufox]: Received ws_endpoint in start_main_server: {ws_endpoint} (Type: {type(ws_endpoint)})" )
     global server_py_proc
     print(f"-------------------------------------------------")
     print(f"--- 步骤 3: 启动主 FastAPI 服务器 ({SERVER_PY_FILENAME}) ---")
     server_script_path = os.path.join(os.path.dirname(__file__), SERVER_PY_FILENAME)
-    cmd = [PYTHON_EXECUTABLE, server_script_path]
+
+    # --- 修改命令，加入 --port ---
+    cmd = [
+        PYTHON_EXECUTABLE, '-u', server_script_path,
+        '--disable-print-redirect',
+        '--port', str(server_port) # <-- 将端口号作为参数传递
+    ]
     print(f"   执行命令: {' '.join(cmd)}")
 
     env = os.environ.copy()
@@ -291,12 +367,106 @@ def start_main_server(ws_endpoint, launch_mode, active_auth_json=None):
     if active_auth_json:
         print(f"   设置环境变量 ACTIVE_AUTH_JSON_PATH={os.path.basename(active_auth_json)}")
     print(f"   设置环境变量 CAMOUFOX_WS_ENDPOINT={ws_endpoint[:25]}...")
+    print(f"   将禁用 server.py 的 print 重定向以保持终端清洁。")
+    print(f"   指定 server.py 监听端口: {server_port}") # <-- 告知用户端口
 
     try:
-        server_py_proc = subprocess.Popen(cmd, text=True, env=env)
-        print(f"   主服务器正在后台启动... (查看后续日志)")
+        # 修改：捕获 server.py 的输出
+        server_py_proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, # 分开捕获 stderr
+            text=True,
+            encoding='utf-8',
+            errors='ignore',
+            env=env
+        )
+        print(f"   主服务器 server.py 已启动 (PID: {server_py_proc.pid})。正在捕获其输出...")
 
-        server_py_proc.wait()
+        # --- 实时读取并打印 server.py 的输出 --- 
+        output_buffer = {"stdout": "", "stderr": ""}
+        stdout_closed = False
+        stderr_closed = False
+
+        # Helper to read and print a line
+        def read_and_print_line(stream, stream_name):
+            nonlocal output_buffer, stdout_closed, stderr_closed
+            if (stream_name == 'stdout' and stdout_closed) or \
+               (stream_name == 'stderr' and stderr_closed) or \
+               not stream:
+                return True # Stream already closed
+            line = stream.readline()
+            if line:
+                 print(f"   [server.py {stream_name}]: {line.strip()}", flush=True)
+                 output_buffer[stream_name] += line
+                 return False # Read successfully
+            else:
+                 print(f"   [server.py {stream_name}]: 输出流已关闭 (EOF).", flush=True)
+                 if stream_name == 'stdout':
+                     stdout_closed = True
+                 else:
+                     stderr_closed = True
+                 return True # Stream is now closed
+
+        # Loop until both stdout and stderr are closed
+        stdout_fd = server_py_proc.stdout.fileno()
+        stderr_fd = server_py_proc.stderr.fileno()
+
+        while not (stdout_closed and stderr_closed):
+            # Check if process exited prematurely
+            return_code = server_py_proc.poll()
+            if return_code is not None:
+                print(f"   [server.py]: 进程在输出结束前意外退出 (代码: {return_code})。", flush=True)
+                # Try one last read after exit before breaking
+                try:
+                     while True: # Drain stdout
+                         if read_and_print_line(server_py_proc.stdout, "stdout"): break
+                except: pass # Ignore errors on final read
+                try:
+                     while True: # Drain stderr
+                          if read_and_print_line(server_py_proc.stderr, "stderr"): break
+                except: pass
+                # Explicitly update flags based on return value, though nonlocal should handle it too
+                stdout_closed = True # Mark as closed since process exited
+                stderr_closed = True
+                break # Exit the reading loop
+
+            # --- 使用 select 等待可读事件 --- 
+            fds_to_watch = []
+            if not stdout_closed: fds_to_watch.append(stdout_fd)
+            if not stderr_closed: fds_to_watch.append(stderr_fd)
+
+            if not fds_to_watch:
+                 # Should not happen if loop condition is correct, but as safety break
+                 break
+
+            try:
+                 # Wait up to 0.5 seconds for either stdout or stderr to have data
+                 readable_fds, _, _ = select.select(fds_to_watch, [], [], 0.5)
+
+                 for fd in readable_fds:
+                     if fd == stdout_fd:
+                         # Read one line if available
+                         read_and_print_line(server_py_proc.stdout, "stdout")
+                     elif fd == stderr_fd:
+                         # Read one line if available
+                         read_and_print_line(server_py_proc.stderr, "stderr")
+            except ValueError:
+                 # select might raise ValueError if a file descriptor becomes invalid (e.g., closed)
+                 print("   [server.py]: select() 遇到无效的文件描述符，可能已关闭。更新状态...")
+                 # Re-check poll and stream status on error
+                 if server_py_proc.poll() is not None:
+                      stdout_closed = True
+                      stderr_closed = True
+                 else:
+                      if server_py_proc.stdout.closed: stdout_closed = True
+                      if server_py_proc.stderr.closed: stderr_closed = True
+            except Exception as select_err:
+                 print(f"   [server.py]: select() 发生错误: {select_err}")
+                 # Consider breaking or more robust error handling here
+                 time.sleep(0.1) # Fallback sleep on select error
+
+        # --- 结束后获取最终退出码 --- 
         print(f"\n👋 主服务器进程已结束 (代码: {server_py_proc.returncode})。")
 
     except FileNotFoundError:
@@ -351,41 +521,114 @@ async def save_auth_state_debug(ws_endpoint: str): # 新增 async 函数用于�
 
 
 if __name__ == "__main__":
+    # --- 解析命令行参数 (移到前面，因为日志初始化需要判断它) ---
     parser = argparse.ArgumentParser(
-        description="启动 Camoufox 服务器和 FastAPI 代理服务器。默认启动无头模式 (实验性)。",
+        description="启动 Camoufox 服务器和 FastAPI 代理服务器。支持无头模式和调试模式。", # 更新描述
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
+    # --- 新增：内部启动参数 --- 
     parser.add_argument(
+        '--internal-launch', action='store_true', help=argparse.SUPPRESS # 隐藏此参数
+    )
+    parser.add_argument(
+        '--internal-headless', action='store_true', help=argparse.SUPPRESS
+    )
+    parser.add_argument(
+        '--internal-debug', action='store_true', help=argparse.SUPPRESS
+    )
+    parser.add_argument(
+        '--internal-auth-file', type=str, default=None, help=argparse.SUPPRESS
+    )
+
+    # --- 添加 --server-port 参数 ---
+    parser.add_argument(
+        "--server-port",
+        type=int,
+        default=2048, # <-- 设置默认端口为 2048
+        help="FastAPI 服务器 (server.py) 监听的端口"
+    )
+
+    # --- 修改：使用互斥组 ---
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
         "--debug", action="store_true",
-        help="启动调试模式 (有界面)，允许手动操作和保存认证文件，而不是默认的无头模式。"
+        help="启动调试模式 (有界面)，允许手动操作和保存认证文件。"
+    )
+    mode_group.add_argument(
+        "--headless", action="store_true",
+        help="启动无头模式 (实验性)。需要 'auth_profiles/active' 目录下有认证文件。"
     )
     args = parser.parse_args()
 
-    print(f"🚀 Camoufox 启动器 🚀")
-    print(f"=================================================")
-    ensure_auth_dirs_exist() # <--- 调用目录创建函数
-    check_dependencies()
-    print(f"=================================================")
+    # --- 在主程序开始时设置日志 (只有非内部启动才执行) ---
+    if not args.internal_launch:
+        setup_launcher_logging(log_level=logging.INFO)
+    # ----------------------------------
 
-    print(f"--- 检查遗留登录状态 ({os.path.basename(STORAGE_STATE_PATH)}) ---") # 修改提示
+    # ======= 处理内部启动模式 =======
+    if args.internal_launch:
+        # 内部启动逻辑不再需要调用 setup_launcher_logging
+        if not launch_server:
+            print("❌ 内部错误：launch_server 未定义。", file=sys.stderr)
+            sys.exit(1)
+
+        internal_mode = 'debug' if args.internal_debug else 'headless'
+        auth_file = args.internal_auth_file
+
+        print(f"--- [内部启动] 模式: {internal_mode}, 认证文件: {os.path.basename(auth_file) if auth_file else '无'} ---", flush=True)
+        print(f"--- [内部启动] 将尝试捕获 WebSocket 端点... ---", flush=True)
+
+        try:
+            # 直接调用 launch_server，让它打印到标准输出/错误
+            if internal_mode == 'headless':
+                if not auth_file or not os.path.exists(auth_file):
+                    print(f"❌ [内部启动] 错误：无头模式需要有效的认证文件，但未提供或不存在: {auth_file}", file=sys.stderr, flush=True)
+                    sys.exit(1)
+                print(f"   [内部启动] 调用 launch_server(headless=True, storage_state='{os.path.basename(auth_file)}')", flush=True)
+                launch_server(headless=True, storage_state=auth_file)
+            else: # debug mode
+                print("   [内部启动] 调用 launch_server(headless=False)", flush=True)
+                launch_server(headless=False)
+            print("--- [内部启动] launch_server 调用完成/返回 (可能已正常停止) --- ", flush=True)
+        except Exception as e:
+            print(f"❌ [内部启动] 执行 launch_server 时出错: {e}", file=sys.stderr, flush=True)
+            traceback.print_exc(file=sys.stderr)
+            sys.exit(1)
+        # launch_server 正常结束后退出
+        sys.exit(0)
+
+    # ===============================
+    # --- 以下是非内部启动模式的逻辑 ---
+    logger.info(f"🚀 Camoufox 启动器 🚀") # 现在这行会在 setup_launcher_logging 之后执行
+    logger.info(f"=================================================")
+    ensure_auth_dirs_exist() # <--- 调用目录创建函数
+    check_dependencies() # check_dependencies 内部的 print 会继续使用 stderr
+    logger.info(f"=================================================")
+
+    logger.info(f"--- 检查遗留登录状态 ({os.path.basename(STORAGE_STATE_PATH)}) ---")
     auth_state_exists = os.path.exists(STORAGE_STATE_PATH)
 
     if auth_state_exists:
-        print(f"   ⚠️ 警告：找到旧的登录状态文件 '{os.path.basename(STORAGE_STATE_PATH)}'。") # 修改提示
-        print(f"      此文件不再直接使用。请通过 '调试模式' 生成新的认证文件并放入 'auth_profiles/active'。")
+        logger.warning(f"   ⚠️ 警告：找到旧的登录状态文件 '{os.path.basename(STORAGE_STATE_PATH)}'。")
+        logger.warning(f"      此文件不再直接使用。请通过 '调试模式' 生成新的认证文件并放入 'auth_profiles/active'。")
     # else: # 不再需要提示未找到旧文件
-    #    print(f"   ✓ 未找到旧的登录状态文件 '{os.path.basename(STORAGE_STATE_PATH)}' (预期行为)。") # 确认新行为
-    print(f"-------------------------------------------------")
+    #    logger.info(f"   ✓ 未找到旧的登录状态文件 '{os.path.basename(STORAGE_STATE_PATH)}' (预期行为)。") # 确认新行为
+    logger.info(f"-------------------------------------------------")
+
 
     launch_mode = None # 'headless', 'debug'
     ws_endpoint = None
+    camoufox_proc = None # 重置确保变量存在
 
     # 1. 确定模式：优先看标志，否则询问用户
-    if args.debug: # 检查新的 --debug 标志
+    if args.debug:
         print("--- 模式选择：命令行指定 [--debug] -> 调试模式 (有界面) ---")
         launch_mode = 'debug'
+    elif args.headless:
+        print("--- 模式选择：命令行指定 [--headless] -> 无头模式 (实验性) ---")
+        launch_mode = 'headless'
     else:
-        # 没有 --debug 标志，询问用户
+        # 没有标志，询问用户
         print("\n--- 请选择启动模式 ---")
         print("   [1] 无头模式 (实验性) ")
         print("   [2] 调试模式 (有界面)")
@@ -403,79 +646,108 @@ if __name__ == "__main__":
 
     print(f"-------------------------------------------------")
 
-    # 2. 根据最终确定的 launch_mode 执行启动逻辑
+    # 2. 根据最终确定的 launch_mode 启动 Camoufox 子进程并捕获端点
     if launch_mode == 'debug':
         print(f"--- 即将启动：调试模式 (有界面) --- ")
-        ws_endpoint = None
-        camoufox_server_instance = None # Reset instance variable
-        stop_server_event.clear() # Ensure event is clear before starting thread
-
-        # <<< 新逻辑：启动后台线程直接输出，主线程等待用户输入 >>>
-        try:
-            print(f"   正在后台启动 Camoufox 服务器 (有界面)...", flush=True)
-            camoufox_server_thread = threading.Thread(
-                target=run_launch_server_debug_direct_output, # 使用新的直接输出函数
-                args=(stop_server_event,),
-                daemon=True
-            )
-            camoufox_server_thread.start()
-            print(f"   后台线程已启动。", flush=True)
-
-            # 短暂等待，让后台线程有机会打印启动信息
-            time.sleep(2) # Wait 2 seconds
-
-            print(f"\n--- 请查看上面或新窗口中的 Camoufox 输出 --- ")
-            print(f"--- 找到 'Websocket endpoint: ws://...' 行并复制端点 --- ")
-            print(f"    (格式为: ws://localhost:xxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)")
-
-            # 循环提示直到获得有效输入或用户中断
-            ws_regex = re.compile(r"\s*(ws://\S+)\s*")
-            while ws_endpoint is None:
-                try:
-                    pasted_endpoint = input("   请粘贴 WebSocket 端点并按回车: ").strip()
-                    if not pasted_endpoint:
-                        continue # 忽略空输入
-
-                    match = ws_regex.fullmatch(pasted_endpoint) # 使用 fullmatch
-                    if match:
-                        ws_endpoint = match.group(1)
-                        print(f"   ✅ 已获取端点: {ws_endpoint}")
-                    else:
-                        print(f"   ❌ 格式错误，请确保粘贴了完整的 'ws://...' 端点。")
-                except EOFError: # 用户可能按了 Ctrl+D
-                    print("\n   检测到 EOF，退出。")
-                    sys.exit(1)
-                except KeyboardInterrupt: # 用户按了 Ctrl+C
-                     print("\n   检测到中断信号，退出。")
-                     sys.exit(1)
-
-        except Exception as e:
-            print(f"   ❌ 启动 Camoufox 调试线程或获取用户输入时出错: {e}")
-            traceback.print_exc()
-            sys.exit(1)
-
-        # <<< 结束新逻辑 >>>
-
-        # 如果成功获取端点，则启动主服务器
-        if ws_endpoint:
-            print(f"-------------------------------------------------", flush=True)
-            print(f"   ✅ WebSocket 端点已获取。准备调用 start_main_server...", flush=True)
-            start_main_server(ws_endpoint, launch_mode)
-            print(f"   调用 start_main_server 完成。脚本将等待其结束...", flush=True)
+        cmd = [sys.executable, __file__, '--internal-launch', '--internal-debug']
+        print(f"   执行命令: {' '.join(cmd)}")
+        print(f"   正在启动 Camoufox 子进程 (调试模式)...", flush=True)
+        # 设置进程启动选项
+        popen_kwargs = {
+            'stdout': subprocess.PIPE,
+            'stderr': subprocess.STDOUT, # 合并 stderr 到 stdout
+            'text': True,
+            'bufsize': 1, # 行缓冲
+            'encoding': 'utf-8', # 显式指定编码
+            'errors': 'ignore' # 忽略解码错误
+        }
+        if sys.platform != "win32":
+            popen_kwargs['start_new_session'] = True
         else:
-            # 这个分支理论上只会在启动线程/输入环节出错时到达
-            print(f"--- 未能成功获取 WebSocket 端点，无法启动主服务器。 ---", flush=True)
-            # 确保仍在运行的后台线程被通知停止
-            if camoufox_server_thread and camoufox_server_thread.is_alive():
-                print("   通知后台线程停止...")
-                stop_server_event.set()
+            popen_kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
+
+        camoufox_proc = subprocess.Popen(cmd, **popen_kwargs)
+
+        print(f"   Camoufox 子进程已启动 (PID: {camoufox_proc.pid})。等待 WebSocket 端点输出 (最多 {ENDPOINT_CAPTURE_TIMEOUT} 秒)...", flush=True)
+
+        start_time = time.time()
+        output_lines = [] # 存储输出以便调试
+
+        # --- 修改：使用线程和队列读取 --- 
+        output_queue = queue.Queue()
+        reader_thread = threading.Thread(
+            target=_enqueue_output,
+            args=(camoufox_proc.stdout, output_queue),
+            daemon=True # 设置为守护线程
+        )
+        reader_thread.start()
+
+        ws_endpoint = None # 初始化
+        # read_buffer = "" # 不再需要，按行处理
+
+        while time.time() - start_time < ENDPOINT_CAPTURE_TIMEOUT:
+            # 检查进程是否已意外退出
+            if camoufox_proc.poll() is not None:
+                print(f"   ⚠️ Camoufox 子进程在捕获端点期间意外退出 (代码: {camoufox_proc.returncode})。", flush=True)
+                break
+
+            try:
+                # 从队列获取行，计算剩余超时时间
+                remaining_timeout = ENDPOINT_CAPTURE_TIMEOUT - (time.time() - start_time)
+                if remaining_timeout <= 0:
+                    raise queue.Empty # 手动触发超时
+                
+                line = output_queue.get(timeout=max(0.1, min(remaining_timeout, 1.0))) # 动态超时
+
+                if line is None: # EOF marker from reader thread
+                    print("   ℹ️ 读取线程报告输出流已结束 (EOF)。", flush=True)
+                    break # 退出循环
+
+                # 正常处理行
+                line = line.strip()
+                print(f"   [Camoufox output]: {line}", flush=True) # 打印所有行
+                output_lines.append(line)
+                match = ws_regex.search(line) # 在行内搜索
+                if match:
+                    ws_endpoint = match.group(1)
+                    print(f"\n   ✅ 自动捕获到 WebSocket 端点: {ws_endpoint[:40]}...", flush=True)
+                    break # 成功获取，退出循环
+
+            except queue.Empty:
+                # 超时或队列为空，检查进程状态并继续循环
+                if time.time() - start_time >= ENDPOINT_CAPTURE_TIMEOUT:
+                     # 真正的总超时
+                     print(f"   ❌ 获取 WebSocket 端点超时 ({ENDPOINT_CAPTURE_TIMEOUT} 秒)。", flush=True)
+                     ws_endpoint = None # 明确标记为 None
+                     break
+                # 否则只是 queue.get 的小超时，继续循环
+                continue
+            except Exception as read_err:
+                print(f"   ❌ 处理队列或读取输出时出错: {read_err}", flush=True)
+                break # 退出循环
+
+        # --- 结束读取循环 --- 
+
+        # --- 清理读取线程 (虽然是 daemon, 但尝试 join 一下) ---
+        # if reader_thread.is_alive():
+        #    print("   尝试等待读取线程结束...")
+        #    # reader_thread.join(timeout=1.0) # 短暂等待
+
+        # 检查最终结果 (逻辑不变)
+        if not ws_endpoint:
+            # ... (错误处理逻辑不变) ...
             sys.exit(1)
+        else:
+            # ... (调用 start_main_server 逻辑不变) ...
+            print(f"   调用 start_main_server 完成。脚本将等待其结束...", flush=True)
+            start_main_server(ws_endpoint, launch_mode, args.server_port) # 调用 server.py
 
     elif launch_mode == 'headless':
         print(f"--- 即将启动：无头模式 (实验性) --- ")
         active_json_path = None
+        camoufox_proc = None # 重置
 
-        # 步骤 9: 检查 active profiles
+        # 检查 active profiles
         print(f"   检查激活认证目录: {ACTIVE_AUTH_DIR}")
         found_json_files = []
         if os.path.isdir(ACTIVE_AUTH_DIR):
@@ -490,70 +762,134 @@ if __name__ == "__main__":
 
         if not found_json_files:
             print(f"   ❌ 错误: 未在 '{ACTIVE_AUTH_DIR}' 目录中找到任何 '.json' 认证文件。")
-            print(f"      请先使用 '--debug' 模式运行一次，选择 '1' 保存认证文件，然后将其从 '{SAVED_AUTH_DIR}' 移动到 '{ACTIVE_AUTH_DIR}'。")
+            print(f"      请先使用 '--debug' 模式运行一次，登录后选择 '保存状态' (如果可用)，")
+            print(f"      然后将生成的 '.json' 文件从 '{SAVED_AUTH_DIR}' (或 Playwright 保存的位置) 移动到 '{ACTIVE_AUTH_DIR}'。")
             sys.exit(1)
         else:
             active_json_path = found_json_files[0] # 选择第一个
             print(f"   ✓ 找到认证文件: {len(found_json_files)} 个。将使用第一个: {os.path.basename(active_json_path)}")
 
-        # 启动后台线程
-        stop_server_event.clear() # 重置停止事件
-        ws_endpoint = None
+        try:
+            # --- 启动子进程 --- 
+            cmd = [
+                sys.executable, __file__,
+                '--internal-launch',
+                '--internal-headless',
+                '--internal-auth-file', active_json_path
+            ]
+            print(f"   执行命令: {' '.join(cmd)}")
+            print(f"   正在启动 Camoufox 子进程 (无头模式)...", flush=True)
+            popen_kwargs = {
+                'stdout': subprocess.PIPE,
+                'stderr': subprocess.STDOUT, # 合并 stderr
+                'text': True,
+                'bufsize': 1,
+                'encoding': 'utf-8',
+                'errors': 'ignore'
+            }
+            if sys.platform != "win32":
+                popen_kwargs['start_new_session'] = True
+            else:
+                popen_kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
 
-        print("   启动后台线程运行 launch_server...")
-        camoufox_server_thread = threading.Thread(
-            target=run_launch_server_headless_in_thread,
-            args=(active_json_path, stop_server_event),
-            daemon=True
-        )
-        camoufox_server_thread.start()
+            camoufox_proc = subprocess.Popen(cmd, **popen_kwargs)
+            print(f"   Camoufox 子进程已启动 (PID: {camoufox_proc.pid})。等待 WebSocket 端点输出 (最多 {ENDPOINT_CAPTURE_TIMEOUT} 秒)...", flush=True)
 
-        # 等待几秒让服务器启动并输出信息
-        time.sleep(2)
+            start_time = time.time()
+            output_lines = []
 
-        print(f"\n--- 请查看上面输出中的 'Websocket endpoint:' 行 --- ")
-        print(f"--- 复制形如 'ws://localhost:xxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' 的端点 --- ")
+            # --- 修改：使用线程和队列读取 (与 debug 模式相同) --- 
+            output_queue = queue.Queue()
+            reader_thread = threading.Thread(
+                target=_enqueue_output,
+                args=(camoufox_proc.stdout, output_queue),
+                daemon=True
+            )
+            reader_thread.start()
 
-        # 循环提示直到获得有效输入
-        ws_regex = re.compile(r"\s*(ws://\S+)\s*")
-        while ws_endpoint is None:
-            try:
-                pasted_endpoint = input("   请粘贴 WebSocket 端点并按回车: ").strip()
-                if not pasted_endpoint:
+            ws_endpoint = None # 初始化
+            # read_buffer = "" # 不再需要
+
+            while time.time() - start_time < ENDPOINT_CAPTURE_TIMEOUT:
+                if camoufox_proc.poll() is not None:
+                    print(f"   ⚠️ Camoufox 子进程在捕获端点期间意外退出 (代码: {camoufox_proc.returncode})。", flush=True)
+                    break
+
+                try:
+                    remaining_timeout = ENDPOINT_CAPTURE_TIMEOUT - (time.time() - start_time)
+                    if remaining_timeout <= 0:
+                         raise queue.Empty
+                    
+                    line = output_queue.get(timeout=max(0.1, min(remaining_timeout, 1.0)))
+
+                    if line is None: # EOF
+                        print("   ℹ️ 读取线程报告输出流已结束 (EOF)。", flush=True)
+                        break
+
+                    line = line.strip()
+                    print(f"   [Camoufox output]: {line}", flush=True)
+                    output_lines.append(line)
+                    match = ws_regex.search(line) # 在行内搜索
+                    if match:
+                        ws_endpoint = match.group(1)
+                        print(f"\n   ✅ 自动捕获到 WebSocket 端点: {ws_endpoint[:40]}...", flush=True)
+                        break # 成功获取，退出循环
+
+                except queue.Empty:
+                    if time.time() - start_time >= ENDPOINT_CAPTURE_TIMEOUT:
+                         print(f"   ❌ 获取 WebSocket 端点超时 ({ENDPOINT_CAPTURE_TIMEOUT} 秒)。", flush=True)
+                         ws_endpoint = None
+                         break
                     continue
+                except Exception as read_err:
+                    print(f"   ❌ 处理队列或读取输出时出错: {read_err}", flush=True)
+                    break
 
-                match = ws_regex.fullmatch(pasted_endpoint)
-                if match:
-                    ws_endpoint = match.group(1)
-                    print(f"   ✅ 已获取端点: {ws_endpoint}")
-                else:
-                    print(f"   ❌ 格式错误，请确保粘贴了完整的 'ws://...' 端点。")
-            except EOFError:
-                print("\n   检测到 EOF，退出。")
-                sys.exit(1)
-            except KeyboardInterrupt:
-                print("\n   检测到中断信号，退出。")
-                sys.exit(1)
+            # 移除旧的 os.read 逻辑
+            # try:
+            #     chunk = os.read(stdout_fd, 4096)
+            #     ...
+            # except BlockingIOError:
+            #     ...
+            # except Exception as read_err:
+            #     ...
 
-        # 如果成功获取端点，则启动主服务器
-        if ws_endpoint:
-            print(f"-------------------------------------------------", flush=True)
-            print(f"   ✅ WebSocket 端点已获取。准备调用 start_main_server...", flush=True)
-            start_main_server(ws_endpoint, launch_mode, active_json_path)
-            print(f"   调用 start_main_server 完成。脚本将等待其结束...", flush=True)
-        else:
-            print(f"--- 未能成功获取 WebSocket 端点，无法启动主服务器。 ---", flush=True)
-            # 确保仍在运行的后台线程被通知停止
-            if camoufox_server_thread and camoufox_server_thread.is_alive():
-                print("   通知后台线程停止...")
-                stop_server_event.set()
+            # --- 结束读取循环 --- 
+
+            # --- 清理读取线程 --- 
+            # if reader_thread.is_alive():
+            #    print("   尝试等待读取线程结束...")
+            #    # reader_thread.join(timeout=1.0)
+
+            # 检查最终结果 (逻辑不变)
+            if not ws_endpoint:
+                # ... (错误处理逻辑不变) ...
+                sys.exit(1)
+            else:
+                # ... (调用 start_main_server 逻辑不变) ...
+                print(f"   调用 start_main_server 完成。脚本将等待其结束...", flush=True)
+                start_main_server(ws_endpoint, launch_mode, args.server_port, active_json_path) # 调用 server.py
+
+        except Exception as e: # 添加通用异常处理
+            print(f"   ❌ 启动 Camoufox 子进程或捕获端点时出错: {e}")
+            traceback.print_exc()
+            ws_endpoint = None
+            # 确保子进程被终止 (与 debug 模式相同)
+            if camoufox_proc and camoufox_proc.poll() is None:
+                 print("   正在终止未完成的 Camoufox 子进程...")
+                 try:
+                      if sys.platform != "win32": os.killpg(os.getpgid(camoufox_proc.pid), signal.SIGKILL)
+                      else: subprocess.run(['taskkill', '/F', '/T', '/PID', str(camoufox_proc.pid)], check=False, capture_output=True)
+                      camoufox_proc.wait(timeout=3)
+                 except Exception as kill_err:
+                      print(f"    终止子进程时出错: {kill_err}")
             sys.exit(1)
 
-        print(f"-------------------------------------------------", flush=True)
-
-        # 步骤 14: 更新 cleanup (已完成)
-        # 步骤 15-19: 修改 server.py (已完成)
-
-        # print("启动器脚本执行完毕。") # 可以取消注释这个来确认
 
 # Cleanup handled by atexit 
+# --- 确保日志在退出时关闭 ---
+def shutdown_logging():
+    logging.shutdown()
+
+atexit.register(shutdown_logging)
+# -------------------------

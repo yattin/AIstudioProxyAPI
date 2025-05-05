@@ -213,6 +213,7 @@ venv.bak/
 
 # Error snapshots directory (Python specific)
 errors_py/
+logs/
 
 # Authentication Profiles (Sensitive)
 auth_profiles/active/

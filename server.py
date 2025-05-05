@@ -9,14 +9,23 @@ import traceback
 from contextlib import asynccontextmanager
 import sys
 import platform
+# --- 新增: 日志相关导入 ---
+import logging
+import logging.handlers
+# -----------------------
 from asyncio import Queue, Lock, Future, Task, Event # Add Queue, Lock, Future, Task, Event
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
+# --- 新增: WebSocket 导入 ---
+from fastapi import WebSocket, WebSocketDisconnect
+# -------------------------
 from pydantic import BaseModel, Field
 from playwright.async_api import Page as AsyncPage, Browser as AsyncBrowser, Playwright as AsyncPlaywright, Error as PlaywrightAsyncError, expect as expect_async, BrowserContext as AsyncBrowserContext, Locator
 from playwright.async_api import async_playwright
 from urllib.parse import urljoin, urlparse # << Add urlparse
+import uuid
+import datetime
 
 # --- 全局日志控制配置 ---
 DEBUG_LOGS_ENABLED = os.environ.get('DEBUG_LOGS_ENABLED', 'false').lower() in ('true', '1', 'yes')
@@ -29,7 +38,7 @@ AI_STUDIO_URL_PATTERN = 'aistudio.google.com/'
 RESPONSE_COMPLETION_TIMEOUT = 300000 # 5 minutes total timeout (in ms)
 POLLING_INTERVAL = 300 # ms
 POLLING_INTERVAL_STREAM = 180 # ms
-SILENCE_TIMEOUT_MS = 3000 # ms
+SILENCE_TIMEOUT_MS = 10000 # ms
 POST_SPINNER_CHECK_DELAY_MS = 500
 FINAL_STATE_CHECK_TIMEOUT_MS = 1500
 SPINNER_CHECK_TIMEOUT_MS = 1000
@@ -47,6 +56,10 @@ FINISH_EDIT_BUTTON_SELECTOR = 'ms-chat-turn:last-child .actions-container button
 AUTH_PROFILES_DIR = os.path.join(os.path.dirname(__file__), 'auth_profiles')
 ACTIVE_AUTH_DIR = os.path.join(AUTH_PROFILES_DIR, 'active')
 SAVED_AUTH_DIR = os.path.join(AUTH_PROFILES_DIR, 'saved')
+# --- 新增: 日志文件路径 ---
+LOG_DIR = os.path.join(os.path.dirname(__file__), 'logs')
+LOG_FILE_PATH = os.path.join(LOG_DIR, 'app.log')
+# -----------------------
 
 # --- Constants ---
 MODEL_NAME = 'AI-Studio_Camoufox-Proxy'
@@ -77,6 +90,190 @@ is_initializing = False
 request_queue: Queue = Queue()
 processing_lock: Lock = Lock()
 worker_task: Optional[Task] = None
+# --- 新增: WebSocket 连接管理器 ---
+class WebSocketConnectionManager:
+    def __init__(self):
+        self.active_connections = {}  # 使用字典，client_id 作为键，WebSocket 作为值
+
+    async def connect(self, client_id, websocket):
+        self.active_connections[client_id] = websocket
+        logger.info(f"WebSocket 客户端已连接: {client_id}")
+
+    def disconnect(self, client_id):
+        if client_id in self.active_connections:
+            del self.active_connections[client_id]
+            logger.info(f"WebSocket 客户端已断开: {client_id}")
+
+    async def broadcast(self, message):
+        # 使用字典的 items() 创建副本进行迭代，防止在迭代过程中修改字典
+        disconnected_clients = []
+        active_conns_copy = list(self.active_connections.items())
+        # logger.debug(f"[WS Broadcast] Preparing to broadcast to {len(active_conns_copy)} client(s). Message starts with: {message[:80]}...") # Debug log (Removed)
+
+        for client_id, connection in active_conns_copy:
+            # logger.debug(f"[WS Broadcast] Attempting to send to client {client_id}...") # Debug log (Removed)
+            try:
+                await connection.send_text(message)
+                # logger.debug(f"[WS Broadcast] Sent successfully to client {client_id}.") # Debug log (Removed)
+            except WebSocketDisconnect:
+                logger.info(f"[WS Broadcast] Client {client_id} disconnected during broadcast.") # Info log
+                disconnected_clients.append(client_id)
+            except RuntimeError as e: # 处理连接已关闭的错误
+                 if "Connection is closed" in str(e):
+                     logger.info(f"[WS Broadcast] Client {client_id} connection already closed.") # Info log
+                     disconnected_clients.append(client_id)
+                 else:
+                     logger.error(f"广播到 WebSocket {client_id} 时出错 (RuntimeError): {e}")
+                     disconnected_clients.append(client_id) # Also disconnect on other RuntimeErrors
+            except Exception as e:
+                logger.error(f"广播到 WebSocket {client_id} 时出错 (Exception): {e}")
+                disconnected_clients.append(client_id)
+        # 清理已断开的连接
+        if disconnected_clients:
+             logger.info(f"[WS Broadcast] Cleaning up disconnected clients: {disconnected_clients}") # Info log
+             for client_id in disconnected_clients:
+                 self.disconnect(client_id)
+
+log_ws_manager = WebSocketConnectionManager()
+# ------------------------------------
+
+# --- 新增: StreamToLogger 类，用于重定向 print ---
+class StreamToLogger:
+    """
+    伪文件流对象，将写入重定向到日志实例。
+    """
+    def __init__(self, logger_instance, log_level=logging.INFO):
+        self.logger = logger_instance
+        self.log_level = log_level
+        self.linebuf = ''
+
+    def write(self, buf):
+        try:
+            temp_linebuf = self.linebuf + buf
+            self.linebuf = ''
+            for line in temp_linebuf.splitlines(True):
+                if line.endswith(('\\n', '\\r')):
+                    self.logger.log(self.log_level, line.rstrip())
+                else:
+                    self.linebuf += line # 保留不完整行
+        except Exception as e:
+            # 如果日志失败，回退到原始 stderr
+            print(f"StreamToLogger 错误: {e}", file=sys.__stderr__)
+
+    def flush(self):
+        try:
+            if self.linebuf != '':
+                self.logger.log(self.log_level, self.linebuf.rstrip())
+            self.linebuf = ''
+        except Exception as e:
+            print(f"StreamToLogger Flush 错误: {e}", file=sys.__stderr__)
+
+    def isatty(self):
+        # 一些库检查这个，返回 False 避免问题
+        return False
+
+# --- 新增: WebSocketLogHandler 类 ---
+class WebSocketLogHandler(logging.Handler):
+    """
+    将日志记录广播到 WebSocket 客户端的处理程序。
+    """
+    def __init__(self, manager: WebSocketConnectionManager):
+        super().__init__()
+        self.manager = manager
+        self.formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s') # WebSocket 使用简单格式
+
+    def emit(self, record: logging.LogRecord):
+        # 仅当有连接时才尝试广播
+        if self.manager.active_connections:
+            try:
+                log_entry = self.format(record)
+                # 使用 asyncio.create_task 在事件循环中异步发送
+                try:
+                     loop = asyncio.get_running_loop()
+                     loop.create_task(self.manager.broadcast(log_entry))
+                except RuntimeError:
+                     # 如果没有运行的事件循环（例如在关闭期间），则忽略
+                     pass
+            except Exception as e:
+                # 这里打印错误到原始 stderr，以防日志系统本身出问题
+                print(f"WebSocketLogHandler 错误: 广播日志失败 - {e}", file=sys.__stderr__)
+
+# --- 新增: 日志设置函数 ---
+def setup_logging(log_level=logging.INFO, redirect_print=False): # <-- 默认改为 False
+    """配置全局日志记录"""
+    # ... (目录创建不变) ...
+    os.makedirs(LOG_DIR, exist_ok=True)
+    os.makedirs(ACTIVE_AUTH_DIR, exist_ok=True)
+    os.makedirs(SAVED_AUTH_DIR, exist_ok=True)
+
+    # --- 文件日志格式 (详细) ---
+    file_log_formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - [%(name)s:%(funcName)s:%(lineno)d] - %(message)s'
+    )
+    # --- 控制台日志格式 (简洁) ---
+    console_log_formatter = logging.Formatter('%(message)s')
+
+    root_logger = logging.getLogger()
+    if root_logger.hasHandlers():
+        root_logger.handlers.clear()
+    root_logger.setLevel(log_level) # <-- Revert back to INFO (or original log_level)
+
+    # 1. Rotating File Handler (使用详细格式)
+    file_handler = logging.handlers.RotatingFileHandler(
+        LOG_FILE_PATH, maxBytes=5*1024*1024, backupCount=5, encoding='utf-8'
+    )
+    file_handler.setFormatter(file_log_formatter)
+    root_logger.addHandler(file_handler)
+
+    # 2. Stream Handler (to stderr, 使用简洁格式)
+    stream_handler = logging.StreamHandler(sys.__stderr__) # 直接输出到原始 stderr
+    stream_handler.setFormatter(console_log_formatter) # <-- 使用简洁格式
+    root_logger.addHandler(stream_handler)
+
+    # 3. WebSocket Handler (格式保持不变或根据需要调整)
+    ws_handler = WebSocketLogHandler(log_ws_manager)
+    ws_handler.setLevel(logging.INFO) # 可以为 WS Handler 设置不同的级别
+    root_logger.addHandler(ws_handler)
+
+    # --- 按需重定向 print ---
+    if redirect_print:
+        print("--- 注意：正在重定向 print 输出到日志系统 ---", file=sys.__stderr__) # 加个提示
+        # 标准输出重定向 (可选，如果希望 print 也进日志文件)
+        stdout_logger = logging.getLogger('stdout')
+        stdout_logger.propagate = False # 通常不希望 print 的内容重复出现在根 logger 的控制台输出
+        stdout_logger.addHandler(file_handler) # print 内容进文件
+        # 如果需要 print 也进 WS，取消下一行注释
+        # stdout_logger.addHandler(ws_handler)
+        stdout_logger.setLevel(logging.INFO)
+        sys.stdout = StreamToLogger(stdout_logger, logging.INFO)
+
+        # 标准错误重定向 (同上)
+        stderr_logger = logging.getLogger('stderr')
+        stderr_logger.propagate = False
+        stderr_logger.addHandler(file_handler) # stderr 内容进文件
+        # 如果需要 stderr 也进 WS，取消下一行注释
+        # stderr_logger.addHandler(ws_handler)
+        stderr_logger.setLevel(logging.ERROR)
+        sys.stderr = StreamToLogger(stderr_logger, logging.ERROR)
+    # else: 不重定向，print 直接输出到终端
+
+    # --- 设置库日志级别 (保持不变) ---
+    # ... (设置 uvicorn, websockets, playwright 日志级别) ...
+    logging.getLogger("uvicorn").setLevel(logging.INFO)
+    logging.getLogger("uvicorn.error").setLevel(logging.INFO) # uvicorn 错误仍然显示
+    logging.getLogger("uvicorn.access").setLevel(logging.INFO) # <-- 修改回 INFO
+    logging.getLogger("websockets").setLevel(logging.INFO)
+    logging.getLogger("playwright").setLevel(logging.INFO) # playwright 日志也减少一些
+
+
+    root_logger.info("=" * 30 + " 日志系统已初始化 " + "=" * 30)
+    root_logger.info(f"日志级别: {logging.getLevelName(log_level)}")
+    root_logger.info(f"日志文件: {LOG_FILE_PATH}")
+    root_logger.info(f"重定向 print: {'启用' if redirect_print else '禁用'}")
+
+# --- 新增: 日志实例 ---
+logger = logging.getLogger("AIStudioProxyServer") # 获取指定名称的 logger
+# ----------------------
 
 # --- Pydantic Models ---
 class MessageContentItem(BaseModel):
@@ -118,9 +315,11 @@ def prepare_combined_prompt(messages: List[Message], req_id: str) -> str:
                 system_prompt_content = msg.content.strip()
                 processed_indices.add(i)
                 first_system_msg_index = i
-                print(f"[{req_id}] (Prepare Prompt) Found system prompt at index {i}: '{system_prompt_content[:80]}...'")
+                # print(f"[{req_id}] (Prepare Prompt) Found system prompt at index {i}: '{system_prompt_content[:80]}...'")
+                logger.info(f"[{req_id}] (Prepare Prompt) Found system prompt at index {i}: '{system_prompt_content[:80]}...'") # logger
             else:
-                 print(f"[{req_id}] (Prepare Prompt) Ignoring non-string or empty system message at index {i}.")
+                 # print(f"[{req_id}] (Prepare Prompt) Ignoring non-string or empty system message at index {i}.")
+                 logger.warning(f"[{req_id}] (Prepare Prompt) Ignoring non-string or empty system message at index {i}.") # logger warning
                  processed_indices.add(i) # Mark as processed even if ignored
             break # Only process the first system message found
 
@@ -128,7 +327,12 @@ def prepare_combined_prompt(messages: List[Message], req_id: str) -> str:
     if system_prompt_content:
         # Add a separator only if there will be other messages following
         separator = "\\n\\n" if any(idx not in processed_indices for idx in range(len(messages))) else ""
-        combined_parts.append(f"System Instructions:\\n{system_prompt_content}{separator}")
+        # 预构建带换行符的字符串，避免在f-string中使用反斜杠
+        system_instr_prefix = "System Instructions:\\n"
+        combined_parts.append(f"{system_instr_prefix}{system_prompt_content}{separator}")
+    else:
+        # print(f"[{req_id}] (Prepare Prompt) 未找到有效的系统提示，继续处理其他消息。")
+        logger.info(f"[{req_id}] (Prepare Prompt) 未找到有效的系统提示，继续处理其他消息。") # logger
 
 
     # 3. Iterate through remaining messages (user and assistant roles primarily)
@@ -141,7 +345,8 @@ def prepare_combined_prompt(messages: List[Message], req_id: str) -> str:
         role = msg.role.capitalize()
         # Skip 'System' role here as we handled the first one already
         if role == 'System':
-            print(f"[{req_id}] (Prepare Prompt) Skipping subsequent system message at index {i}.")
+            # print(f"[{req_id}] (Prepare Prompt) Skipping subsequent system message at index {i}.")
+            logger.info(f"[{req_id}] (Prepare Prompt) Skipping subsequent system message at index {i}.") # logger
             continue
 
         content = ""
@@ -159,18 +364,21 @@ def prepare_combined_prompt(messages: List[Message], req_id: str) -> str:
                           text_parts.append(item_model.text)
                      else:
                           # Handle non-text parts if necessary, e.g., log a warning
-                           print(f"[{req_id}] (Prepare Prompt) Warning: Ignoring non-text part in message at index {i}: type={item_model.type}")
+                           # print(f"[{req_id}] (Prepare Prompt) Warning: Ignoring non-text part in message at index {i}: type={item_model.type}")
+                           logger.warning(f"[{req_id}] (Prepare Prompt) Ignoring non-text part in message at index {i}: type={item_model.type}") # logger
                  else:
                       # If it's somehow already a dict (less likely with Pydantic)
                       item_dict = dict(item_model) # Try converting
                       if item_dict.get('type') == 'text' and isinstance(item_dict.get('text'), str):
                            text_parts.append(item_dict['text'])
                       else:
-                           print(f"[{req_id}] (Prepare Prompt) Warning: Unexpected item format in message list at index {i}. Item: {item_model}")
+                           # print(f"[{req_id}] (Prepare Prompt) Warning: Unexpected item format in message list at index {i}. Item: {item_model}")
+                           logger.warning(f"[{req_id}] (Prepare Prompt) Unexpected item format in message list at index {i}. Item: {item_model}") # logger
 
             content = "\\n".join(text_parts)
         else:
-            print(f"[{req_id}] (Prepare Prompt) Warning: Unexpected content type ({type(msg.content)}) for role {role} at index {i}. Converting to string.")
+            # print(f"[{req_id}] (Prepare Prompt) Warning: Unexpected content type ({type(msg.content)}) for role {role} at index {i}. Converting to string.")
+            logger.warning(f"[{req_id}] (Prepare Prompt) Unexpected content type ({type(msg.content)}) for role {role} at index {i}. Converting to string.") # logger
             content = str(msg.content)
 
         content = content.strip() # Trim whitespace
@@ -180,15 +388,22 @@ def prepare_combined_prompt(messages: List[Message], req_id: str) -> str:
             if not is_first_turn_after_system:
                  combined_parts.append(turn_separator)
 
-            combined_parts.append(f"{role}:\\n{content}")
+            # 预构建带换行符的字符串，避免在f-string中使用反斜杠
+            role_prefix = f"{role}:\\n"
+            combined_parts.append(f"{role_prefix}{content}")
             is_first_turn_after_system = False # No longer the first turn
         else:
-            print(f"[{req_id}] (Prepare Prompt) Skipping empty message for role {role} at index {i}.")
+            # print(f"[{req_id}] (Prepare Prompt) Skipping empty message for role {role} at index {i}.")
+            logger.info(f"[{req_id}] (Prepare Prompt) Skipping empty message for role {role} at index {i}.") # logger
 
     final_prompt = "".join(combined_parts)
-    print(f"[{req_id}] (Prepare Prompt) Combined prompt length: {len(final_prompt)}. Preview: '{final_prompt[:200].replace('\\n', '\\\\n')}...'") # Log preview with escaped newlines
+    # Pre-calculate the preview string with escaped newlines
+    preview_text = final_prompt[:200].replace('\\n', '\\\\n')
+    # print(f"[{req_id}] (Prepare Prompt) Combined prompt length: {len(final_prompt)}. Preview: '{preview_text}...'") # Log preview with escaped newlines
+    logger.info(f"[{req_id}] (Prepare Prompt) Combined prompt length: {len(final_prompt)}. Preview: '{preview_text}...'") # logger
     # Add a final newline if not empty, helps UI sometimes
-    return final_prompt + "\\n" if final_prompt else ""
+    final_newline = "\\n"
+    return final_prompt + final_newline if final_prompt else ""
 
 # --- END V4 Combined Prompt Logic ---
 
@@ -201,7 +416,7 @@ def validate_chat_request(messages: List[Message], req_id: str) -> Dict[str, Opt
         raise ValueError(f"[{req_id}] Invalid request: No user or assistant messages found.")
     # Optional: Check for alternating user/assistant roles if needed for AI Studio
     # ... (validation logic can be added here if necessary) ...
-    print(f"[{req_id}] (Validation) Basic validation passed for {len(messages)} messages.")
+    logger.info(f"[{req_id}] (Validation) Basic validation passed for {len(messages)} messages.")
     return {} # Return empty dict as it no longer extracts prompts
 
 async def get_raw_text_content(response_element: Locator, previous_text: str, req_id: str) -> str:
@@ -222,19 +437,22 @@ async def get_raw_text_content(response_element: Locator, previous_text: str, re
             except PlaywrightAsyncError as pre_err:
                 if DEBUG_LOGS_ENABLED:
                     error_message_first_line = pre_err.message.split('\n')[0]
-                    print(f"[{req_id}] (Warn) Failed to get innerText from visible <pre>: {error_message_first_line}", flush=True)
+                    # print(f"[{req_id}] (Warn) Failed to get innerText from visible <pre>: {error_message_first_line}", flush=True)
+                    logger.warning(f"[{req_id}] Failed to get innerText from visible <pre>: {error_message_first_line}") # logger
                 try:
                      raw_text = await response_element.inner_text(timeout=1000)
                 except PlaywrightAsyncError as e_parent:
                      if DEBUG_LOGS_ENABLED:
-                         print(f"[{req_id}] (Warn) getRawTextContent (inner_text) failed on parent after <pre> fail: {e_parent}. Returning previous.", flush=True)
+                         # print(f"[{req_id}] (Warn) getRawTextContent (inner_text) failed on parent after <pre> fail: {e_parent}. Returning previous.", flush=True)
+                         logger.warning(f"[{req_id}] getRawTextContent (inner_text) failed on parent after <pre> fail: {e_parent}. Returning previous.") # logger
                      raw_text = previous_text
         else:
             try:
                  raw_text = await response_element.inner_text(timeout=1500)
             except PlaywrightAsyncError as e_parent:
                  if DEBUG_LOGS_ENABLED:
-                     print(f"[{req_id}] (Warn) getRawTextContent (inner_text) failed on parent (no pre): {e_parent}. Returning previous.", flush=True)
+                     # print(f"[{req_id}] (Warn) getRawTextContent (inner_text) failed on parent (no pre): {e_parent}. Returning previous.", flush=True)
+                     logger.warning(f"[{req_id}] getRawTextContent (inner_text) failed on parent (no pre): {e_parent}. Returning previous.") # logger
                  raw_text = previous_text
 
         if raw_text and isinstance(raw_text, str):
@@ -251,12 +469,14 @@ async def get_raw_text_content(response_element: Locator, previous_text: str, re
             if found_junk:
                 cleaned_text = "\n".join([line.strip() for line in cleaned_text.splitlines() if line.strip()])
                 if DEBUG_LOGS_ENABLED:
-                     print(f"[{req_id}] (清理) 已移除响应文本中的已知UI元素。", flush=True)
+                     # print(f"[{req_id}] (清理) 已移除响应文本中的已知UI元素。", flush=True)
+                     logger.debug(f"[{req_id}] (清理) 已移除响应文本中的已知UI元素。") # logger debug
                 raw_text = cleaned_text
         return raw_text
     except PlaywrightAsyncError: return previous_text
     except Exception as e_general:
-         print(f"[{req_id}] (Warn) getRawTextContent unexpected error: {e_general}. Returning previous.", flush=True)
+         # print(f"[{req_id}] (Warn) getRawTextContent unexpected error: {e_general}. Returning previous.", flush=True)
+         logger.warning(f"[{req_id}] getRawTextContent unexpected error: {e_general}. Returning previous.") # logger
          return previous_text
 
 def generate_sse_chunk(delta: str, req_id: str, model: str) -> str:
@@ -299,8 +519,14 @@ def check_dependencies():
 
 # --- Page Initialization --- (Simplified)
 async def _initialize_page_logic(browser: AsyncBrowser):
-    # ... (Existing implementation, ensure it sets page_instance correctly) ...
-    global page_instance, is_page_ready
+    """初始化页面逻辑，连接到已有浏览器
+
+    Args:
+        browser: 已连接的浏览器实例
+
+    Returns:
+        tuple: (page_instance, is_page_ready) - 页面实例和就绪状态
+    """
     print("--- 初始化页面逻辑 (连接到现有浏览器) ---")
     temp_context = None
     storage_state_path_to_use = None
@@ -376,7 +602,13 @@ async def _initialize_page_logic(browser: AsyncBrowser):
                 if not p.is_closed() and target_url_base in page_url_check and "/prompts/" in page_url_check:
                     found_page = p; current_url = page_url_check; break
                 # Add logic to navigate existing non-chat pages if needed
-            except Exception as e: print(f"   警告: 检查页面 URL 时出错: {e}")
+            except PlaywrightAsyncError as pw_err:
+                print(f"   警告: 检查页面 URL 时出现Playwright错误: {pw_err}")
+            except AttributeError as attr_err:
+                print(f"   警告: 检查页面 URL 时出现属性错误: {attr_err}")
+            except Exception as e:
+                print(f"   警告: 检查页面 URL 时出现其他未预期错误: {e}")
+                print(f"   错误类型: {type(e).__name__}")
 
         if not found_page:
             print(f"-> 未找到合适的现有页面，正在打开新页面并导航到 {target_full_url}...")
@@ -387,6 +619,21 @@ async def _initialize_page_logic(browser: AsyncBrowser):
                 print(f"-> 新页面导航尝试完成。当前 URL: {current_url}")
             except Exception as new_page_nav_err:
                 await save_error_snapshot(f"init_new_page_nav_fail")
+                # --- 新增: 检查特定网络错误并提供用户提示 ---
+                error_str = str(new_page_nav_err)
+                if "NS_ERROR_NET_INTERRUPT" in error_str:
+                    print("\n" + "="*30 + " 网络导航错误提示 " + "="*30)
+                    print(f"❌ 导航到 '{target_full_url}' 失败，出现网络中断错误 (NS_ERROR_NET_INTERRUPT)。")
+                    print("   这通常表示浏览器在尝试加载页面时连接被意外断开。")
+                    print("   可能的原因及排查建议:")
+                    print("     1. 网络连接: 请检查你的本地网络连接是否稳定，并尝试在普通浏览器中访问目标网址。")
+                    print("     2. AI Studio 服务: 确认 aistudio.google.com 服务本身是否可用。")
+                    print("     3. 防火墙/代理/VPN: 检查本地防火墙、杀毒软件、代理或 VPN 设置，确保它们没有阻止 Python 或浏览器的网络访问。")
+                    print("     4. Camoufox 服务: 确认 launch_camoufox.py 脚本是否正常运行，并且没有相关错误。")
+                    print("     5. 资源问题: 确保系统有足够的内存和 CPU 资源。")
+                    print("   请根据上述建议排查后重试。")
+                    print("="*74 + "\n")
+                # --- 结束新增部分 ---
                 raise RuntimeError(f"导航新页面失败: {new_page_nav_err}") from new_page_nav_err
 
         # Handle login redirect (simplified logic shown)
@@ -435,9 +682,10 @@ async def _initialize_page_logic(browser: AsyncBrowser):
             await expect_async(input_wrapper_locator).to_be_visible(timeout=35000)
             await expect_async(found_page.locator(INPUT_SELECTOR)).to_be_visible(timeout=10000)
             print("-> ✅ 核心输入区域可见。")
-            page_instance = found_page # Assign to global variable
-            is_page_ready = True
+            result_page = found_page
+            result_ready = True
             print(f"✅ 页面逻辑初始化成功。")
+            return result_page, result_ready
         except Exception as input_visible_err:
              await save_error_snapshot(f"init_fail_input_timeout")
              raise RuntimeError(f"页面初始化失败：核心输入区域未在预期时间内变为可见。最后的 URL 是 {found_page.url}") from input_visible_err
@@ -449,20 +697,33 @@ async def _initialize_page_logic(browser: AsyncBrowser):
             except: pass
         await save_error_snapshot(f"init_unexpected_error")
         raise RuntimeError(f"页面初始化意外错误: {e}") from e
-    # Note: temp_context is intentionally not closed on success, page_instance belongs to it.
+    # Note: temp_context is intentionally not closed on success, result_page belongs to it.
     # The context will be closed when the browser connection closes during shutdown.
 
 # --- Page Shutdown --- (Simplified)
 async def _close_page_logic():
-    # ... (Existing implementation) ...
+    """关闭页面并重置状态
+
+    Returns:
+        tuple: (page, is_ready) - 更新后的页面实例(None)和就绪状态(False)
+    """
     global page_instance, is_page_ready
     print("--- 运行页面逻辑关闭 --- ")
     if page_instance and not page_instance.is_closed():
-        try: await page_instance.close(); print("   ✅ 页面已关闭")
-        except Exception as e: print(f"   ⚠️ 关闭页面时出错: {e}")
+        try:
+            await page_instance.close()
+            print("   ✅ 页面已关闭")
+        except PlaywrightAsyncError as pw_err:
+            print(f"   ⚠️ 关闭页面时出现Playwright错误: {pw_err}")
+        except asyncio.TimeoutError as timeout_err:
+            print(f"   ⚠️ 关闭页面时超时: {timeout_err}")
+        except Exception as other_err:
+            print(f"   ⚠️ 关闭页面时出现意外错误: {other_err}")
+            print(f"   错误类型: {type(other_err).__name__}")
     page_instance = None
     is_page_ready = False
     print("页面逻辑状态已重置。")
+    return None, False
 
 # --- Camoufox Shutdown Signal --- (Simplified)
 async def signal_camoufox_shutdown():
@@ -507,7 +768,9 @@ async def lifespan(app_param: FastAPI):
         except Exception as connect_err:
             raise RuntimeError(f"未能连接到 Camoufox 服务器: {connect_err}") from connect_err
 
-        await _initialize_page_logic(browser_instance)
+        # 从初始化函数获取返回值，而不是依赖函数直接修改全局变量
+        global page_instance, is_page_ready
+        page_instance, is_page_ready = await _initialize_page_logic(browser_instance)
 
         if is_page_ready and is_browser_connected:
              print(f"   启动请求队列 Worker...")
@@ -544,7 +807,9 @@ async def lifespan(app_param: FastAPI):
              except asyncio.CancelledError: print(f"   ✅ 请求队列 Worker 已确认取消。")
              except Exception as wt_err: print(f"   ❌ 等待 Worker 停止时出错: {wt_err}")
 
-        await _close_page_logic()
+        # 获取_close_page_logic返回的更新状态并设置全局变量
+        page_instance, is_page_ready = await _close_page_logic()
+
         browser_ready_for_shutdown = bool(browser_instance and browser_instance.is_connected())
         if browser_ready_for_shutdown: await signal_camoufox_shutdown()
 
@@ -628,13 +893,18 @@ async def detect_and_extract_page_error(page: AsyncPage, req_id: str) -> Optiona
         message_locator = error_toast_locator.locator('span.content-text')
         error_message = await message_locator.text_content(timeout=500)
         if error_message:
-             print(f"[{req_id}]    检测到并提取错误消息: {error_message}")
+             # print(f"[{req_id}]    检测到并提取错误消息: {error_message}")
+             logger.error(f"[{req_id}]    检测到并提取错误消息: {error_message}") # logger
              return error_message.strip()
         else:
-             print(f"[{req_id}]    警告: 检测到错误提示框，但无法提取消息。")
+             # print(f"[{req_id}]    警告: 检测到错误提示框，但无法提取消息。")
+             logger.warning(f"[{req_id}]    检测到错误提示框，但无法提取消息。") # logger
              return "检测到错误提示框，但无法提取特定消息。"
     except PlaywrightAsyncError: return None
-    except Exception as e: print(f"[{req_id}]    警告: 检查页面错误时出错: {e}"); return None
+    except Exception as e:
+        # print(f"[{req_id}]    警告: 检查页面错误时出错: {e}")
+        logger.warning(f"[{req_id}]    检查页面错误时出错: {e}") # logger
+        return None
 
 # --- Snapshot Helper --- (Simplified)
 async def save_error_snapshot(error_name: str = 'error'):
@@ -645,9 +915,11 @@ async def save_error_snapshot(error_name: str = 'error'):
     log_prefix = f"[{req_id}]" if req_id else "[无请求ID]"
     page_to_snapshot = page_instance
     if not browser_instance or not browser_instance.is_connected() or not page_to_snapshot or page_to_snapshot.is_closed():
-        print(f"{log_prefix} 无法保存快照 ({base_error_name})，浏览器/页面不可用。")
+        # print(f"{log_prefix} 无法保存快照 ({base_error_name})，浏览器/页面不可用。")
+        logger.warning(f"{log_prefix} 无法保存快照 ({base_error_name})，浏览器/页面不可用。") # logger
         return
-    print(f"{log_prefix} 尝试保存错误快照 ({base_error_name})...")
+    # print(f"{log_prefix} 尝试保存错误快照 ({base_error_name})...")
+    logger.info(f"{log_prefix} 尝试保存错误快照 ({base_error_name})...") # logger
     timestamp = int(time.time() * 1000)
     error_dir = os.path.join(os.path.dirname(__file__), 'errors_py')
     try:
@@ -656,13 +928,39 @@ async def save_error_snapshot(error_name: str = 'error'):
         filename_base = f"{base_error_name}_{filename_suffix}"
         screenshot_path = os.path.join(error_dir, f"{filename_base}.png")
         html_path = os.path.join(error_dir, f"{filename_base}.html")
-        try: await page_to_snapshot.screenshot(path=screenshot_path, full_page=True, timeout=15000); print(f"{log_prefix}   快照已保存到: {screenshot_path}")
-        except Exception as ss_err: print(f"{log_prefix}   保存屏幕截图失败 ({base_error_name}): {ss_err}")
+        try:
+            await page_to_snapshot.screenshot(path=screenshot_path, full_page=True, timeout=15000)
+            # print(f"{log_prefix}   快照已保存到: {screenshot_path}")
+            logger.info(f"{log_prefix}   快照已保存到: {screenshot_path}") # logger
+        except Exception as ss_err:
+            # print(f"{log_prefix}   保存屏幕截图失败 ({base_error_name}): {ss_err}")
+            logger.error(f"{log_prefix}   保存屏幕截图失败 ({base_error_name}): {ss_err}") # logger
         try:
             content = await page_to_snapshot.content()
-            with open(html_path, 'w', encoding='utf-8') as f: f.write(content)
-            print(f"{log_prefix}   HTML 已保存到: {html_path}")
-        except Exception as html_err: print(f"{log_prefix}   保存 HTML 失败 ({base_error_name}): {html_err}")
+            f = None
+            try:
+                f = open(html_path, 'w', encoding='utf-8')
+                f.write(content)
+                # print(f"{log_prefix}   HTML 已保存到: {html_path}")
+                logger.info(f"{log_prefix}   HTML 已保存到: {html_path}") # logger
+            except Exception as write_err:
+                # print(f"{log_prefix}   保存 HTML 失败 ({base_error_name}): {write_err}")
+                logger.error(f"{log_prefix}   保存 HTML 失败 ({base_error_name}): {write_err}") # logger
+            finally:
+                if f:
+                    try:
+                        f.close()
+                        # print(f"{log_prefix}   HTML 文件已正确关闭")
+                        logger.debug(f"{log_prefix}   HTML 文件已正确关闭") # logger debug
+                    except Exception as close_err:
+                        # print(f"{log_prefix}   关闭 HTML 文件时出错: {close_err}")
+                        logger.error(f"{log_prefix}   关闭 HTML 文件时出错: {close_err}") # logger
+        except Exception as html_err:
+            # print(f"{log_prefix}   获取页面内容失败 ({base_error_name}): {html_err}")
+            logger.error(f"{log_prefix}   获取页面内容失败 ({base_error_name}): {html_err}") # logger
+    except Exception as dir_err:
+        # print(f"{log_prefix}   创建错误目录或保存快照时出错: {dir_err}")
+            print(f"{log_prefix}   获取页面内容失败 ({base_error_name}): {html_err}")
     except Exception as dir_err: print(f"{log_prefix}   创建错误目录或保存快照时出错: {dir_err}")
 
 # --- V4: New Helper - Get response via Edit Button ---
@@ -707,30 +1005,36 @@ async def get_response_via_edit_button(
             check_client_disconnected("编辑响应 - 文本区域可见后: ")
 
             # Try getting content from data-value attribute first
-            print(f"[{req_id}]   - 尝试获取 data-value 属性...", flush=True)
+            # print(f"[{req_id}]   - 尝试获取 data-value 属性...", flush=True)
+            # logger.debug(f"[{req_id}]   - 尝试获取 data-value 属性...") # logger debug (Removed)
             try:
                 # Direct evaluate call (no specific timeout in Playwright evaluate)
                 data_value_content = await textarea.evaluate('el => el.getAttribute("data-value")')
                 check_client_disconnected("编辑响应 - evaluate data-value 后: ")
                 if data_value_content is not None:
                     response_content = str(data_value_content)
-                    print(f"[{req_id}]   - 成功从 data-value 获取。", flush=True)
+                    # print(f"[{req_id}]   - 成功从 data-value 获取。", flush=True)
+                    # logger.debug(f"[{req_id}]   - 成功从 data-value 获取。") # logger debug (Removed)
             except Exception as data_val_err:
-                print(f"[{req_id}]   - 获取 data-value 失败: {data_val_err}", flush=True)
+                # print(f"[{req_id}]   - 获取 data-value 失败: {data_val_err}", flush=True)
+                logger.warning(f"[{req_id}]   - 获取 data-value 失败: {data_val_err}") # logger warning
                 check_client_disconnected("编辑响应 - evaluate data-value 错误后: ")
 
             # If data-value failed or returned empty, try input_value
             if not response_content:
-                print(f"[{req_id}]   - data-value 失败或为空，尝试 input_value...", flush=True)
+                # print(f"[{req_id}]   - data-value 失败或为空，尝试 input_value...", flush=True)
+                # logger.debug(f"[{req_id}]   - data-value 失败或为空，尝试 input_value...") # logger debug (Removed)
                 try:
                     # Direct input_value call with timeout
                     input_val_content = await textarea.input_value(timeout=CLICK_TIMEOUT_MS)
                     check_client_disconnected("编辑响应 - input_value 后: ")
                     if input_val_content is not None:
                         response_content = str(input_val_content)
-                        print(f"[{req_id}]   - 成功从 input_value 获取。", flush=True)
+                        # print(f"[{req_id}]   - 成功从 input_value 获取。", flush=True)
+                        # logger.debug(f"[{req_id}]   - 成功从 input_value 获取。") # logger debug (Removed)
                 except Exception as input_val_err:
-                     print(f"[{req_id}]   - 获取 input_value 失败: {input_val_err}", flush=True)
+                     # print(f"[{req_id}]   - 获取 input_value 失败: {input_val_err}", flush=True)
+                     logger.warning(f"[{req_id}]   - 获取 input_value 失败: {input_val_err}") # logger warning
                      check_client_disconnected("编辑响应 - input_value 错误后: ")
 
             # Now check the final result from either method
@@ -791,14 +1095,16 @@ async def get_response_via_copy_button(
     """Attempts to get the response content using the copy markdown button.
        Implementation mirrors original stream logic closely.
     """
-    print(f"[{req_id}] (Helper) 尝试通过复制按钮获取响应...", flush=True)
+    # print(f"[{req_id}] (Helper) 尝试通过复制按钮获取响应...", flush=True)
+    logger.info(f"[{req_id}] (Helper) 尝试通过复制按钮获取响应...") # logger
     more_options_button = page.locator(MORE_OPTIONS_BUTTON_SELECTOR).last # Target last message
     copy_button_primary = page.locator(COPY_MARKDOWN_BUTTON_SELECTOR)
     copy_button_alt = page.locator(COPY_MARKDOWN_BUTTON_SELECTOR_ALT)
 
     try:
         # 1. Hover over the last message to reveal options
-        print(f"[{req_id}]   - 尝试悬停最后一条消息以显示选项...", flush=True)
+        # print(f"[{req_id}]   - 尝试悬停最后一条消息以显示选项...", flush=True)
+        logger.info(f"[{req_id}]   - 尝试悬停最后一条消息以显示选项...") # logger
         last_message_container = page.locator('ms-chat-turn').last
         try:
             # Direct hover call with timeout
@@ -806,22 +1112,27 @@ async def get_response_via_copy_button(
             check_client_disconnected("复制响应 - 悬停后: ")
             await asyncio.sleep(0.5) # Use asyncio.sleep
             check_client_disconnected("复制响应 - 悬停后延时后: ")
-            print(f"[{req_id}]   - 已悬停。", flush=True)
+            # print(f"[{req_id}]   - 已悬停。", flush=True)
+            logger.info(f"[{req_id}]   - 已悬停。") # logger
         except Exception as hover_err:
-            print(f"[{req_id}]   - ⚠️ 悬停失败: {hover_err}。尝试直接查找按钮...", flush=True)
+            # print(f"[{req_id}]   - ⚠️ 悬停失败: {hover_err}。尝试直接查找按钮...", flush=True)
+            logger.warning(f"[{req_id}]   - 悬停失败: {hover_err}。尝试直接查找按钮...") # logger
             check_client_disconnected("复制响应 - 悬停失败后: ")
             # Continue, maybe buttons are already visible
 
         # 2. Click "More options" button
-        print(f"[{req_id}]   - 定位并点击 '更多选项' 按钮...", flush=True)
+        # print(f"[{req_id}]   - 定位并点击 '更多选项' 按钮...", flush=True)
+        logger.info(f"[{req_id}]   - 定位并点击 '更多选项' 按钮...") # logger
         try:
             # Direct Playwright calls with timeout
             await expect_async(more_options_button).to_be_visible(timeout=CLICK_TIMEOUT_MS)
             check_client_disconnected("复制响应 - 更多选项按钮可见后: ")
             await more_options_button.click(timeout=CLICK_TIMEOUT_MS)
-            print(f"[{req_id}]   - '更多选项' 已点击。", flush=True)
+            # print(f"[{req_id}]   - '更多选项' 已点击。", flush=True)
+            logger.info(f"[{req_id}]   - '更多选项' 已点击。") # logger
         except Exception as more_opts_err:
-            print(f"[{req_id}]   - ❌ '更多选项' 按钮不可见或点击失败: {more_opts_err}", flush=True)
+            # print(f"[{req_id}]   - ❌ '更多选项' 按钮不可见或点击失败: {more_opts_err}", flush=True)
+            logger.error(f"[{req_id}]   - '更多选项' 按钮不可见或点击失败: {more_opts_err}") # logger
             await save_error_snapshot(f"copy_response_more_options_failed_{req_id}")
             return None
 
@@ -830,7 +1141,8 @@ async def get_response_via_copy_button(
         check_client_disconnected("复制响应 - 点击更多选项后延时后: ")
 
         # 3. Find and click "Copy Markdown" button (try primary, then alt)
-        print(f"[{req_id}]   - 定位并点击 '复制 Markdown' 按钮...", flush=True)
+        # print(f"[{req_id}]   - 定位并点击 '复制 Markdown' 按钮...", flush=True)
+        logger.info(f"[{req_id}]   - 定位并点击 '复制 Markdown' 按钮...") # logger
         copy_success = False
         try:
             # Try primary selector
@@ -838,9 +1150,11 @@ async def get_response_via_copy_button(
             check_client_disconnected("复制响应 - 主复制按钮可见后: ")
             await copy_button_primary.click(timeout=CLICK_TIMEOUT_MS, force=True)
             copy_success = True
-            print(f"[{req_id}]   - 已点击 '复制 Markdown' (主选择器)。", flush=True)
+            # print(f"[{req_id}]   - 已点击 '复制 Markdown' (主选择器)。", flush=True)
+            logger.info(f"[{req_id}]   - 已点击 '复制 Markdown' (主选择器)。") # logger
         except Exception as primary_copy_err:
-            print(f"[{req_id}]   - 主选择器失败 ({primary_copy_err})，尝试备选...", flush=True)
+            # print(f"[{req_id}]   - 主选择器失败 ({primary_copy_err})，尝试备选...", flush=True)
+            logger.warning(f"[{req_id}]   - 主复制按钮选择器失败 ({primary_copy_err})，尝试备选...") # logger
             check_client_disconnected("复制响应 - 主复制按钮失败后: ")
             try:
                 # Try alternative selector
@@ -848,14 +1162,17 @@ async def get_response_via_copy_button(
                 check_client_disconnected("复制响应 - 备选复制按钮可见后: ")
                 await copy_button_alt.click(timeout=CLICK_TIMEOUT_MS, force=True)
                 copy_success = True
-                print(f"[{req_id}]   - 已点击 '复制 Markdown' (备选选择器)。", flush=True)
+                # print(f"[{req_id}]   - 已点击 '复制 Markdown' (备选选择器)。", flush=True)
+                logger.info(f"[{req_id}]   - 已点击 '复制 Markdown' (备选选择器)。") # logger
             except Exception as alt_copy_err:
-                print(f"[{req_id}]   - ❌ 备选 '复制 Markdown' 按钮失败: {alt_copy_err}", flush=True)
+                # print(f"[{req_id}]   - ❌ 备选 '复制 Markdown' 按钮失败: {alt_copy_err}", flush=True)
+                logger.error(f"[{req_id}]   - 备选 '复制 Markdown' 按钮失败: {alt_copy_err}") # logger
                 await save_error_snapshot(f"copy_response_copy_button_failed_{req_id}")
                 return None
 
         if not copy_success:
-             print(f"[{req_id}]   - ❌ 未能点击任何 '复制 Markdown' 按钮。", flush=True)
+             # print(f"[{req_id}]   - ❌ 未能点击任何 '复制 Markdown' 按钮。", flush=True)
+             logger.error(f"[{req_id}]   - 未能点击任何 '复制 Markdown' 按钮。") # logger
              return None
 
         check_client_disconnected("复制响应 - 点击复制按钮后: ")
@@ -863,7 +1180,8 @@ async def get_response_via_copy_button(
         check_client_disconnected("复制响应 - 点击复制按钮后延时后: ")
 
         # 4. Read clipboard content
-        print(f"[{req_id}]   - 正在读取剪贴板内容...", flush=True)
+        # print(f"[{req_id}]   - 正在读取剪贴板内容...", flush=True)
+        logger.info(f"[{req_id}]   - 正在读取剪贴板内容...") # logger
         try:
             # Direct evaluate call (no specific timeout needed)
             clipboard_content = await page.evaluate('navigator.clipboard.readText()')
@@ -871,25 +1189,31 @@ async def get_response_via_copy_button(
 
             if clipboard_content:
                 content_preview = clipboard_content[:100].replace('\n', '\\n')
-                print(f"[{req_id}]   - ✅ 成功获取剪贴板内容 (长度={len(clipboard_content)}): '{content_preview}...'", flush=True)
+                # print(f"[{req_id}]   - ✅ 成功获取剪贴板内容 (长度={len(clipboard_content)}): '{content_preview}...'", flush=True)
+                logger.info(f"[{req_id}]   - ✅ 成功获取剪贴板内容 (长度={len(clipboard_content)}): '{content_preview}...'") # logger
                 return clipboard_content
             else:
-                print(f"[{req_id}]   - ❌ 剪贴板内容为空。", flush=True)
+                # print(f"[{req_id}]   - ❌ 剪贴板内容为空。", flush=True)
+                logger.error(f"[{req_id}]   - 剪贴板内容为空。") # logger
                 return None
         except Exception as clipboard_err:
             if "clipboard-read" in str(clipboard_err):
-                 print(f"[{req_id}]   - ❌ 读取剪贴板失败: 可能是权限问题。错误: {clipboard_err}", flush=True) # Log adjusted
+                 # print(f"[{req_id}]   - ❌ 读取剪贴板失败: 可能是权限问题。错误: {clipboard_err}", flush=True) # Log adjusted
+                 logger.error(f"[{req_id}]   - 读取剪贴板失败: 可能是权限问题。错误: {clipboard_err}") # logger
             else:
-                 print(f"[{req_id}]   - ❌ 读取剪贴板失败: {clipboard_err}", flush=True)
+                 # print(f"[{req_id}]   - ❌ 读取剪贴板失败: {clipboard_err}", flush=True)
+                 logger.error(f"[{req_id}]   - 读取剪贴板失败: {clipboard_err}") # logger
             await save_error_snapshot(f"copy_response_clipboard_read_failed_{req_id}")
             return None
 
     except ClientDisconnectedError:
-        print(f"[{req_id}] (Helper Copy) 客户端断开连接。", flush=True)
+        # print(f"[{req_id}] (Helper Copy) 客户端断开连接。", flush=True)
+        logger.info(f"[{req_id}] (Helper Copy) 客户端断开连接。") # logger
         raise
     except Exception as e:
-        print(f"[{req_id}] ❌ 复制响应过程中发生意外错误: {e}", flush=True)
-        traceback.print_exc()
+        # print(f"[{req_id}] ❌ 复制响应过程中发生意外错误: {e}", flush=True)
+        # traceback.print_exc()
+        logger.exception(f"[{req_id}] ❌ 复制响应过程中发生意外错误") # logger
         await save_error_snapshot(f"copy_response_unexpected_error_{req_id}")
         return None
 
@@ -898,14 +1222,15 @@ async def _wait_for_response_completion(
     page: AsyncPage,
     req_id: str,
     response_element: Locator, # Pass the located response element
-    interruptible_wait_for: Callable,
+    interruptible_wait_for: Callable, # This argument is no longer used, can be removed later
     check_client_disconnected: Callable,
-    interruptible_sleep: Callable
+    interruptible_sleep: Callable # This argument is no longer used, can be removed later
 ) -> bool:
     """Waits for the AI Studio response to complete, primarily checking for the edit button.
        Implementation mirrors original stream logic closely.
     """
-    print(f"[{req_id}] (Helper Wait) 开始等待响应完成... (超时: {RESPONSE_COMPLETION_TIMEOUT}ms)", flush=True)
+    # print(f"[{req_id}] (Helper Wait) 开始等待响应完成... (超时: {RESPONSE_COMPLETION_TIMEOUT}ms)", flush=True)
+    logger.info(f"[{req_id}] (Helper Wait) 开始等待响应完成... (超时: {RESPONSE_COMPLETION_TIMEOUT}ms)") # logger
     start_time_ns = time.time()
     spinner_locator = page.locator(LOADING_SPINNER_SELECTOR)
     input_field = page.locator(INPUT_SELECTOR)
@@ -961,8 +1286,9 @@ async def _wait_for_response_completion(
         # --- Exception Handling for State Checks (Only for truly unexpected errors) ---
         except ClientDisconnectedError: raise
         except Exception as unexpected_state_err:
-             print(f"[{req_id}] (Helper Wait) ❌ 状态检查中发生意外错误: {unexpected_state_err}", flush=True)
-             traceback.print_exc()
+             # print(f"[{req_id}] (Helper Wait) ❌ 状态检查中发生意外错误: {unexpected_state_err}", flush=True)
+             # traceback.print_exc()
+             logger.exception(f"[{req_id}] (Helper Wait) ❌ 状态检查中发生意外错误") # logger
              await save_error_snapshot(f"wait_completion_state_check_unexpected_{req_id}")
              await asyncio.sleep(POLLING_INTERVAL_STREAM / 1000) # Still use sleep here
              continue
@@ -973,13 +1299,15 @@ async def _wait_for_response_completion(
             if DEBUG_LOGS_ENABLED:
                 reason = "Spinner not hidden" if not spinner_hidden else ("Input not empty" if not input_empty else "Submit button not disabled")
                 error_info = f" (Last Check Error: {type(state_check_error).__name__})" if state_check_error else ""
-                print(f"[{req_id}] (Helper Wait) 基础状态未满足 ({reason}{error_info})。继续轮询...", flush=True)
+                # print(f"[{req_id}] (Helper Wait) 基础状态未满足 ({reason}{error_info})。继续轮询...", flush=True)
+                logger.debug(f"[{req_id}] (Helper Wait) 基础状态未满足 ({reason}{error_info})。继续轮询...") # logger debug
             # Use standard asyncio.sleep with stream interval
             await asyncio.sleep(POLLING_INTERVAL_STREAM / 1000)
             continue
 
         # --- If base conditions met, check for Edit Button --- (Mirroring original stream logic)
-        print(f"[{req_id}] (Helper Wait) 检测到基础最终状态。开始检查编辑按钮可见性 (最长 {SILENCE_TIMEOUT_MS}ms)...", flush=True)
+        # print(f"[{req_id}] (Helper Wait) 检测到基础最终状态。开始检查编辑按钮可见性 (最长 {SILENCE_TIMEOUT_MS}ms)...", flush=True)
+        logger.info(f"[{req_id}] (Helper Wait) 检测到基础最终状态。开始检查编辑按钮可见性 (最长 {SILENCE_TIMEOUT_MS}ms)...") # logger
         edit_button_check_start = time.time()
         edit_button_visible = False
         last_focus_attempt_time = 0
@@ -991,17 +1319,21 @@ async def _wait_for_response_completion(
             current_time = time.time()
             if current_time - last_focus_attempt_time > 1.0:
                 try:
-                    if DEBUG_LOGS_ENABLED: print(f"[{req_id}] (Helper Wait)   - 尝试聚焦响应元素...", flush=True)
+                    if DEBUG_LOGS_ENABLED:
+                        # print(f"[{req_id}] (Helper Wait)   - 尝试聚焦响应元素...", flush=True)
+                        logger.debug(f"[{req_id}] (Helper Wait)   - 尝试聚焦响应元素...") # logger debug
                     # Revert focus click to direct call if strict matching is required
                     await response_element.click(timeout=1000, position={'x': 10, 'y': 10}, force=True)
                     last_focus_attempt_time = current_time
                     await asyncio.sleep(0.1) # Use asyncio.sleep
                 except (PlaywrightAsyncError, asyncio.TimeoutError) as focus_err:
                      if DEBUG_LOGS_ENABLED:
-                          print(f"[{req_id}] (Helper Wait)   - 聚焦响应元素失败 (忽略): {type(focus_err).__name__}", flush=True)
+                          # print(f"[{req_id}] (Helper Wait)   - 聚焦响应元素失败 (忽略): {type(focus_err).__name__}", flush=True)
+                          logger.debug(f"[{req_id}] (Helper Wait)   - 聚焦响应元素失败 (忽略): {type(focus_err).__name__}") # logger debug
                 except ClientDisconnectedError: raise
                 except Exception as unexpected_focus_err:
-                     print(f"[{req_id}] (Helper Wait)   - 聚焦响应元素时意外错误 (忽略): {unexpected_focus_err}", flush=True)
+                     # print(f"[{req_id}] (Helper Wait)   - 聚焦响应元素时意外错误 (忽略): {unexpected_focus_err}", flush=True)
+                     logger.warning(f"[{req_id}] (Helper Wait)   - 聚焦响应元素时意外错误 (忽略): {unexpected_focus_err}") # logger warning
                 check_client_disconnected("等待完成 - 编辑按钮循环聚焦后: ")
 
             # Check Edit button visibility using is_visible() directly
@@ -1013,22 +1345,26 @@ async def _wait_for_response_completion(
                 except asyncio.TimeoutError:
                     is_visible = False # Treat timeout as not visible
                 except PlaywrightAsyncError as pw_vis_err:
-                    print(f"[{req_id}] (Helper Wait)   - is_visible 检查Playwright错误(忽略): {pw_vis_err}")
+                    # print(f"[{req_id}] (Helper Wait)   - is_visible 检查Playwright错误(忽略): {pw_vis_err}")
+                    logger.warning(f"[{req_id}] (Helper Wait)   - is_visible 检查Playwright错误(忽略): {pw_vis_err}") # logger warning
                     is_visible = False
 
                 check_client_disconnected("等待完成 - 编辑按钮 is_visible 检查后: ")
 
                 if is_visible:
-                    print(f"[{req_id}] (Helper Wait) ✅ 编辑按钮已出现 (is_visible)，确认响应完成。", flush=True)
+                    # print(f"[{req_id}] (Helper Wait) ✅ 编辑按钮已出现 (is_visible)，确认响应完成。", flush=True)
+                    logger.info(f"[{req_id}] (Helper Wait) ✅ 编辑按钮已出现 (is_visible)，确认响应完成。") # logger
                     edit_button_visible = True
                     return True
                 else:
                       if DEBUG_LOGS_ENABLED and (time.time() - edit_button_check_start) > 1.0:
-                           print(f"[{req_id}] (Helper Wait)   - 编辑按钮尚不可见... (is_visible returned False or timed out)", flush=True)
+                           # print(f"[{req_id}] (Helper Wait)   - 编辑按钮尚不可见... (is_visible returned False or timed out)", flush=True)
+                           logger.debug(f"[{req_id}] (Helper Wait)   - 编辑按钮尚不可见... (is_visible returned False or timed out)") # logger debug
 
             except ClientDisconnectedError: raise
             except Exception as unexpected_btn_err:
-                 print(f"[{req_id}] (Helper Wait)   - 检查编辑按钮时意外错误: {unexpected_btn_err}", flush=True)
+                 # print(f"[{req_id}] (Helper Wait)   - 检查编辑按钮时意外错误: {unexpected_btn_err}", flush=True)
+                 logger.warning(f"[{req_id}] (Helper Wait)   - 检查编辑按钮时意外错误: {unexpected_btn_err}") # logger warning
 
             # Wait before next check using asyncio.sleep
             await asyncio.sleep(POLLING_INTERVAL_STREAM / 1000)
@@ -1036,12 +1372,14 @@ async def _wait_for_response_completion(
 
         # If edit button didn't appear within SILENCE_TIMEOUT_MS after base state met
         if not edit_button_visible:
-            print(f"[{req_id}] (Helper Wait) ⚠️ 基础状态满足后，编辑按钮未在 {SILENCE_TIMEOUT_MS}ms 内出现。判定为超时。", flush=True) # Log adjusted
+            # print(f"[{req_id}] (Helper Wait) ⚠️ 基础状态满足后，编辑按钮未在 {SILENCE_TIMEOUT_MS}ms 内出现。判定为超时。", flush=True) # Log adjusted
+            logger.warning(f"[{req_id}] (Helper Wait) 基础状态满足后，编辑按钮未在 {SILENCE_TIMEOUT_MS}ms 内出现。判定为超时。") # logger
             await save_error_snapshot(f"wait_completion_edit_button_timeout_{req_id}")
             return False
 
     # --- End of Main While Loop (Overall Timeout) ---
-    print(f"[{req_id}] (Helper Wait) ❌ 等待响应完成超时 ({RESPONSE_COMPLETION_TIMEOUT}ms)。", flush=True)
+    # print(f"[{req_id}] (Helper Wait) ❌ 等待响应完成超时 ({RESPONSE_COMPLETION_TIMEOUT}ms)。", flush=True)
+    logger.error(f"[{req_id}] (Helper Wait) ❌ 等待响应完成超时 ({RESPONSE_COMPLETION_TIMEOUT}ms)。") # logger
     await save_error_snapshot(f"wait_completion_overall_timeout_{req_id}")
     return False # Indicate timeout
 
@@ -1054,7 +1392,8 @@ async def _get_final_response_content(
     """Gets the final response content, trying Edit Button then Copy Button.
        Implementation mirrors original stream logic closely.
     """
-    print(f"[{req_id}] (Helper GetContent) 开始获取最终响应内容...", flush=True)
+    # print(f"[{req_id}] (Helper GetContent) 开始获取最终响应内容...", flush=True)
+    logger.info(f"[{req_id}] (Helper GetContent) 开始获取最终响应内容...") # logger
 
     # 1. Try getting content via Edit Button first (more reliable)
     response_content = await get_response_via_edit_button(
@@ -1062,27 +1401,32 @@ async def _get_final_response_content(
     )
 
     if response_content is not None:
-        print(f"[{req_id}] (Helper GetContent) ✅ 成功通过编辑按钮获取内容。", flush=True)
+        # print(f"[{req_id}] (Helper GetContent) ✅ 成功通过编辑按钮获取内容。", flush=True)
+        logger.info(f"[{req_id}] (Helper GetContent) ✅ 成功通过编辑按钮获取内容。") # logger
         return response_content
 
     # 2. If Edit Button failed, fall back to Copy Button
-    print(f"[{req_id}] (Helper GetContent) 编辑按钮方法失败或返回空，回退到复制按钮方法...", flush=True)
+    # print(f"[{req_id}] (Helper GetContent) 编辑按钮方法失败或返回空，回退到复制按钮方法...", flush=True)
+    logger.warning(f"[{req_id}] (Helper GetContent) 编辑按钮方法失败或返回空，回退到复制按钮方法...") # logger
     response_content = await get_response_via_copy_button(
         page, req_id, check_client_disconnected
     )
 
     if response_content is not None:
-        print(f"[{req_id}] (Helper GetContent) ✅ 成功通过复制按钮获取内容。", flush=True)
+        # print(f"[{req_id}] (Helper GetContent) ✅ 成功通过复制按钮获取内容。", flush=True)
+        logger.info(f"[{req_id}] (Helper GetContent) ✅ 成功通过复制按钮获取内容。") # logger
         return response_content
 
     # 3. If both methods failed
-    print(f"[{req_id}] (Helper GetContent) ❌ 所有获取响应内容的方法均失败。", flush=True)
+    # print(f"[{req_id}] (Helper GetContent) ❌ 所有获取响应内容的方法均失败。", flush=True)
+    logger.error(f"[{req_id}] (Helper GetContent) ❌ 所有获取响应内容的方法均失败。") # logger
     await save_error_snapshot(f"get_content_all_methods_failed_{req_id}")
     return None
 
 # --- Queue Worker --- (Enhanced)
 async def queue_worker():
-    print("--- 队列 Worker 已启动 ---")
+    # print("--- 队列 Worker 已启动 ---")
+    logger.info("--- 队列 Worker 已启动 ---") # logger
     was_last_request_streaming = False
     last_request_completion_time = 0
 
@@ -1212,7 +1556,8 @@ async def _process_request_refactored(
     result_future: Future
 ) -> Optional[Event]: # Return completion event only for streaming
     """Refactored core logic for processing a single request."""
-    print(f"[{req_id}] (Refactored Process) 开始处理请求...")
+    # print(f"[{req_id}] (Refactored Process) 开始处理请求...")
+    logger.info(f"[{req_id}] (Refactored Process) 开始处理请求...") # logger
     is_streaming = request.stream
     page: Optional[AsyncPage] = page_instance # Use global instance
     completion_event: Optional[Event] = None # For streaming
@@ -1227,28 +1572,32 @@ async def _process_request_refactored(
         while not client_disconnected_event.is_set():
             try:
                 if await http_request.is_disconnected():
-                    print(f"[{req_id}] (Disco Check Task) 客户端断开。设置事件并尝试停止。", flush=True)
+                    # print(f"[{req_id}] (Disco Check Task) 客户端断开。设置事件并尝试停止。", flush=True)
+                    logger.info(f"[{req_id}] (Disco Check Task) 客户端断开。设置事件并尝试停止。") # logger
                     client_disconnected_event.set()
                     try: # Attempt to click stop button
                         if await submit_button_locator.is_enabled(timeout=1500):
                              if await input_field_locator.input_value(timeout=1500) == '':
-                                 print(f"[{req_id}] (Disco Check Task)   点击停止...")
+                                 # print(f"[{req_id}] (Disco Check Task)   点击停止...")
+                                 logger.info(f"[{req_id}] (Disco Check Task)   点击停止...") # logger
                                  await submit_button_locator.click(timeout=3000, force=True)
-                    except Exception as click_err: print(f"[{req_id}] (Disco Check Task) 停止按钮点击失败: {click_err}")
+                    except Exception as click_err: logger.warning(f"[{req_id}] (Disco Check Task) 停止按钮点击失败: {click_err}") # logger warning
                     if not result_future.done(): result_future.set_exception(HTTPException(status_code=499, detail=f"[{req_id}] 客户端在处理期间关闭了请求"))
                     break
                 await asyncio.sleep(1.0)
             except asyncio.CancelledError: break
             except Exception as e:
-                print(f"[{req_id}] (Disco Check Task) 错误: {e}"); client_disconnected_event.set()
+                # print(f"[{req_id}] (Disco Check Task) 错误: {e}")
+                logger.error(f"[{req_id}] (Disco Check Task) 错误: {e}") # logger
+                client_disconnected_event.set()
                 if not result_future.done(): result_future.set_exception(HTTPException(status_code=500, detail=f"[{req_id}] Internal disconnect checker error: {e}"))
                 break
 
     disconnect_check_task = asyncio.create_task(check_disconnect_periodically())
 
-    def check_client_disconnected(msg_prefix=""):
+    def check_client_disconnected(msg_prefix=""): # Changed to logger.info
         if client_disconnected_event.is_set():
-            print(f"[{req_id}] {msg_prefix}检测到客户端断开连接事件。", flush=True)
+            logger.info(f"[{req_id}] {msg_prefix}检测到客户端断开连接事件。")
             raise ClientDisconnectedError(f"[{req_id}] Client disconnected event set.")
         return False
 
@@ -1258,38 +1607,68 @@ async def _process_request_refactored(
             raise HTTPException(status_code=503, detail=f"[{req_id}] AI Studio 页面丢失或未就绪。", headers={"Retry-After": "30"})
         check_client_disconnected("Initial Page Check: ")
 
-        # --- 1. Validation & Prompt Prep --- (Same as before)
+        # --- 1. Validation & Prompt Prep --- (Use logger for validation message)
         try: validate_chat_request(request.messages, req_id)
         except ValueError as e: raise HTTPException(status_code=400, detail=f"[{req_id}] 无效请求: {e}")
+        # Validation log is already inside validate_chat_request using print, change it there too?
+        # For now, assume prepare_combined_prompt handles its own logging via print->logger
         prepared_prompt = prepare_combined_prompt(request.messages, req_id)
         check_client_disconnected("After Prompt Prep: ")
 
-        # --- 2. Clear Chat --- (Revert to direct calls)
-        print(f"[{req_id}] (Refactored Process) 开始清空聊天记录...")
+        # --- 2. Clear Chat --- (Revert to direct calls, use logger for messages)
+        # print(f"[{req_id}] (Refactored Process) 开始清空聊天记录...")
+        logger.info(f"[{req_id}] (Refactored Process) 开始清空聊天记录...") # logger
         try:
             clear_chat_button = page.locator(CLEAR_CHAT_BUTTON_SELECTOR)
+            confirm_button = page.locator(CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR)
+            overlay_locator = page.locator('div.cdk-overlay-backdrop') # Locator for the overlay
             proceed_with_clear_clicks = False
             try:
                 # Direct call with timeout
-                await expect_async(clear_chat_button).to_be_enabled(timeout=3000)
+                await expect_async(clear_chat_button).to_be_enabled(timeout=5000) # Increased timeout slightly
                 proceed_with_clear_clicks = True
             except Exception as e:
                 is_new_chat_url = '/prompts/new_chat' in page.url.rstrip('/')
-                if is_new_chat_url: print(f"[{req_id}] Info: 清空按钮在新聊天页未就绪 (预期)。")
-                else: print(f"[{req_id}] ⚠️ 警告: 等待清空按钮失败: {e}。跳过点击。")
+                if is_new_chat_url:
+                    # print(f"[{req_id}] Info: 清空按钮在新聊天页未就绪 (预期)。")
+                    logger.info(f"[{req_id}] 清空按钮在新聊天页未就绪 (预期)。") # logger
+                else:
+                    # print(f"[{req_id}] ⚠️ 警告: 等待清空按钮失败: {e}。跳过点击。")
+                    logger.warning(f"[{req_id}] 等待清空按钮失败: {e}。跳过点击。") # logger
 
             check_client_disconnected("After Clear Button Check: ")
 
             if proceed_with_clear_clicks:
+                # ** ADDED: Wait for potential overlay to disappear BEFORE clicking clear **
+                try:
+                    # logger.debug(f"[{req_id}] Waiting for overlay to disappear before clicking clear...")
+                    await expect_async(overlay_locator).to_be_hidden(timeout=3000) # Wait up to 3s
+                except Exception as overlay_err:
+                    logger.warning(f"[{req_id}] Overlay did not disappear before clear click (ignored): {overlay_err}")
+                check_client_disconnected("After Overlay Check (Before Clear): ")
+
                 # Direct calls with timeout
                 await clear_chat_button.click(timeout=5000)
                 check_client_disconnected("After Clear Button Click: ")
-                confirm_button = page.locator(CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR)
-                await expect_async(confirm_button).to_be_visible(timeout=5000)
-                check_client_disconnected("After Confirm Button Visible: ")
+
+                # ** ADDED: Wait for confirm button AND wait for overlay to disappear BEFORE clicking confirm **
+                try:
+                    # logger.debug(f"[{req_id}] Waiting for confirm button and overlay disappearance...")
+                    await expect_async(confirm_button).to_be_visible(timeout=5000)
+                    # ***** 移除这行错误的检查 *****
+                    # await expect_async(overlay_locator).to_be_hidden(timeout=5000) # Wait for overlay from confirmation dialog
+                    # logger.debug(f"[{req_id}] Confirm button visible and overlay hidden. Proceeding to click confirm.")
+                except Exception as confirm_wait_err:
+                    # Modify error message to be more accurate
+                    logger.error(f"[{req_id}] Error waiting for confirm button visibility: {confirm_wait_err}")
+                    await save_error_snapshot(f"clear_chat_confirm_wait_error_{req_id}")
+                    raise PlaywrightAsyncError(f"Confirm button wait failed: {confirm_wait_err}") from confirm_wait_err
+
+                check_client_disconnected("After Confirm Button/Overlay Wait: ")
                 await confirm_button.click(timeout=5000)
                 check_client_disconnected("After Confirm Button Click: ")
-                print(f"[{req_id}] >>确认按钮点击完成<<")
+                # print(f"[{req_id}] >>确认按钮点击完成<<")
+                logger.info(f"[{req_id}] 清空确认按钮已点击。") # logger
 
                 last_response_container = page.locator(RESPONSE_CONTAINER_SELECTOR).last
                 await asyncio.sleep(0.5) # Use asyncio.sleep
@@ -1297,20 +1676,25 @@ async def _process_request_refactored(
                 try:
                     # Direct call with timeout
                     await expect_async(last_response_container).to_be_hidden(timeout=CLEAR_CHAT_VERIFY_TIMEOUT_MS - 500)
-                    print(f"[{req_id}] ✅ 聊天已成功清空 (验证通过)。")
+                    # print(f"[{req_id}] ✅ 聊天已成功清空 (验证通过)。")
+                    logger.info(f"[{req_id}] ✅ 聊天已成功清空 (验证通过)。") # logger
                 except Exception as verify_err:
-                    print(f"[{req_id}] ⚠️ 警告: 清空聊天验证失败: {verify_err}")
+                    # print(f"[{req_id}] ⚠️ 警告: 清空聊天验证失败: {verify_err}")
+                    logger.warning(f"[{req_id}] ⚠️ 警告: 清空聊天验证失败: {verify_err}") # logger
         except (PlaywrightAsyncError, asyncio.TimeoutError, ClientDisconnectedError) as clear_err:
             if isinstance(clear_err, ClientDisconnectedError): raise
-            print(f"[{req_id}] ❌ 错误: 清空聊天阶段出错: {clear_err}")
+            # print(f"[{req_id}] ❌ 错误: 清空聊天阶段出错: {clear_err}")
+            logger.error(f"[{req_id}] ❌ 错误: 清空聊天阶段出错: {clear_err}") # logger
             await save_error_snapshot(f"clear_chat_error_{req_id}")
         except Exception as clear_exc:
-            print(f"[{req_id}] ❌ 错误: 清空聊天阶段意外错误: {clear_exc}")
+            # print(f"[{req_id}] ❌ 错误: 清空聊天阶段意外错误: {clear_exc}")
+            logger.exception(f"[{req_id}] ❌ 错误: 清空聊天阶段意外错误") # logger
             await save_error_snapshot(f"clear_chat_unexpected_{req_id}")
         check_client_disconnected("After Clear Chat Logic: ")
 
-        # --- 3. Fill & Submit Prompt --- (Revert to direct calls)
-        print(f"[{req_id}] (Refactored Process) 填充并提交提示 ({len(prepared_prompt)} chars)...")
+        # --- 3. Fill & Submit Prompt --- (Use logger)
+        # print(f"[{req_id}] (Refactored Process) 填充并提交提示 ({len(prepared_prompt)} chars)...")
+        logger.info(f"[{req_id}] (Refactored Process) 填充并提交提示 ({len(prepared_prompt)} chars)...") # logger
         input_field = page.locator(INPUT_SELECTOR)
         submit_button = page.locator(SUBMIT_BUTTON_SELECTOR)
         try:
@@ -1337,9 +1721,11 @@ async def _process_request_refactored(
                 # Check input cleared (direct call)
                 await expect_async(input_field).to_have_value('', timeout=1000)
                 submitted_successfully = True
-                print(f"[{req_id}]   - 快捷键提交成功。")
+                # print(f"[{req_id}]   - 快捷键提交成功。")
+                logger.info(f"[{req_id}]   - 快捷键提交成功。") # logger
             except Exception as shortcut_err:
-                print(f"[{req_id}]   - 快捷键提交失败或未确认: {shortcut_err}。回退到点击。")
+                # print(f"[{req_id}]   - 快捷键提交失败或未确认: {shortcut_err}。回退到点击。")
+                logger.warning(f"[{req_id}]   - 快捷键提交失败或未确认: {shortcut_err}。回退到点击。") # logger
 
             check_client_disconnected("After Shortcut Attempt Logic: ")
 
@@ -1352,24 +1738,28 @@ async def _process_request_refactored(
                 check_client_disconnected("After Click Fallback: ")
                 await expect_async(input_field).to_have_value('', timeout=3000)
                 submitted_successfully = True
-                print(f"[{req_id}]   - 点击提交成功。")
+                # print(f"[{req_id}]   - 点击提交成功。")
+                logger.info(f"[{req_id}]   - 点击提交成功。") # logger
 
             if not submitted_successfully:
                  raise PlaywrightAsyncError("Failed to submit prompt via shortcut or click.")
 
         except (PlaywrightAsyncError, asyncio.TimeoutError, ClientDisconnectedError) as submit_err:
             if isinstance(submit_err, ClientDisconnectedError): raise
-            print(f"[{req_id}] ❌ 错误: 填充或提交提示时出错: {submit_err}")
+            # print(f"[{req_id}] ❌ 错误: 填充或提交提示时出错: {submit_err}")
+            logger.error(f"[{req_id}] ❌ 错误: 填充或提交提示时出错: {submit_err}") # logger
             await save_error_snapshot(f"submit_prompt_error_{req_id}")
             raise HTTPException(status_code=502, detail=f"[{req_id}] Failed to submit prompt to AI Studio: {submit_err}")
         except Exception as submit_exc:
-            print(f"[{req_id}] ❌ 错误: 填充或提交提示时意外错误: {submit_exc}")
+            # print(f"[{req_id}] ❌ 错误: 填充或提交提示时意外错误: {submit_exc}")
+            logger.exception(f"[{req_id}] ❌ 错误: 填充或提交提示时意外错误") # logger
             await save_error_snapshot(f"submit_prompt_unexpected_{req_id}")
             raise HTTPException(status_code=500, detail=f"[{req_id}] Unexpected error during prompt submission: {submit_exc}")
         check_client_disconnected("After Submit Logic: ")
 
-        # --- 4. Locate Response Element --- (Revert to direct calls)
-        print(f"[{req_id}] (Refactored Process) 定位响应元素...")
+        # --- 4. Locate Response Element --- (Use logger)
+        # print(f"[{req_id}] (Refactored Process) 定位响应元素...")
+        logger.info(f"[{req_id}] (Refactored Process) 定位响应元素...") # logger
         response_container = page.locator(RESPONSE_CONTAINER_SELECTOR).last
         response_element = response_container.locator(RESPONSE_TEXT_SELECTOR)
         try:
@@ -1377,20 +1767,24 @@ async def _process_request_refactored(
             await expect_async(response_container).to_be_attached(timeout=20000)
             check_client_disconnected("After Response Container Attached: ")
             await expect_async(response_element).to_be_attached(timeout=90000)
-            print(f"[{req_id}]   - 响应元素已定位。")
+            # print(f"[{req_id}]   - 响应元素已定位。")
+            logger.info(f"[{req_id}]   - 响应元素已定位。") # logger
         except (PlaywrightAsyncError, asyncio.TimeoutError, ClientDisconnectedError) as locate_err:
             if isinstance(locate_err, ClientDisconnectedError): raise
-            print(f"[{req_id}] ❌ 错误: 定位响应元素失败或超时: {locate_err}")
+            # print(f"[{req_id}] ❌ 错误: 定位响应元素失败或超时: {locate_err}")
+            logger.error(f"[{req_id}] ❌ 错误: 定位响应元素失败或超时: {locate_err}") # logger
             await save_error_snapshot(f"response_locate_error_{req_id}")
             raise HTTPException(status_code=502, detail=f"[{req_id}] Failed to locate AI Studio response element: {locate_err}")
         except Exception as locate_exc:
-            print(f"[{req_id}] ❌ 错误: 定位响应元素时意外错误: {locate_exc}")
+            # print(f"[{req_id}] ❌ 错误: 定位响应元素时意外错误: {locate_exc}")
+            logger.exception(f"[{req_id}] ❌ 错误: 定位响应元素时意外错误") # logger
             await save_error_snapshot(f"response_locate_unexpected_{req_id}")
             raise HTTPException(status_code=500, detail=f"[{req_id}] Unexpected error locating response element: {locate_exc}")
         check_client_disconnected("After Locate Response: ")
 
         # --- 5. Wait for Completion --- (Uses helper, which was reverted internally)
-        print(f"[{req_id}] (Refactored Process) 等待响应生成完成...")
+        # print(f"[{req_id}] (Refactored Process) 等待响应生成完成...")
+        logger.info(f"[{req_id}] (Refactored Process) 等待响应生成完成...") # logger
         completion_detected = await _wait_for_response_completion(
             page, req_id, response_element, None, check_client_disconnected, None # Pass None for unused helpers
         )
@@ -1398,17 +1792,20 @@ async def _process_request_refactored(
             raise HTTPException(status_code=504, detail=f"[{req_id}] AI Studio response generation timed out.")
         check_client_disconnected("After Wait Completion: ")
 
-        # --- 6. Check for Page Errors --- (Keep as is)
-        print(f"[{req_id}] (Refactored Process) 检查页面错误提示...")
+        # --- 6. Check for Page Errors --- (Use logger)
+        # print(f"[{req_id}] (Refactored Process) 检查页面错误提示...")
+        logger.info(f"[{req_id}] (Refactored Process) 检查页面错误提示...") # logger
         page_error = await detect_and_extract_page_error(page, req_id)
         if page_error:
-            print(f"[{req_id}] ❌ 错误: AI Studio 页面返回错误: {page_error}")
+            # print(f"[{req_id}] ❌ 错误: AI Studio 页面返回错误: {page_error}")
+            logger.error(f"[{req_id}] ❌ 错误: AI Studio 页面返回错误: {page_error}") # logger
             await save_error_snapshot(f"page_error_detected_{req_id}")
             raise HTTPException(status_code=502, detail=f"[{req_id}] AI Studio Error: {page_error}")
         check_client_disconnected("After Page Error Check: ")
 
         # --- 7. Get Final Content --- (Uses helpers, which were reverted internally)
-        print(f"[{req_id}] (Refactored Process) 获取最终响应内容...")
+        # print(f"[{req_id}] (Refactored Process) 获取最终响应内容...")
+        logger.info(f"[{req_id}] (Refactored Process) 获取最终响应内容...") # logger
         final_content = await _get_final_response_content(
             page, req_id, check_client_disconnected # Pass only needed args
         )
@@ -1416,49 +1813,62 @@ async def _process_request_refactored(
             raise HTTPException(status_code=500, detail=f"[{req_id}] Failed to extract final response content from AI Studio.")
         check_client_disconnected("After Get Content: ")
 
-        # --- 8. Format and Return Result --- (Keep the structure, generator uses asyncio.sleep)
-        print(f"[{req_id}] (Refactored Process) 格式化并设置结果 (模式: {'流式' if is_streaming else '非流式'})...")
+        # --- 8. Format and Return Result --- (Use logger)
+        # print(f"[{req_id}] (Refactored Process) 格式化并设置结果 (模式: {'流式' if is_streaming else '非流式'})...")
+        logger.info(f"[{req_id}] (Refactored Process) 格式化并设置结果 (模式: {'流式' if is_streaming else '非流式'})...") # logger
         if is_streaming:
             completion_event = Event() # Create event for streaming
 
             async def create_stream_generator(event_to_set: Event, content_to_stream: str) -> AsyncGenerator[str, None]:
                 """Closure to generate SSE stream from final content."""
-                print(f"[{req_id}] (Stream Gen) 开始伪流式输出...")
+                # print(f"[{req_id}] (Stream Gen) 开始伪流式输出...")
+                logger.info(f"[{req_id}] (Stream Gen) 开始伪流式输出 ({len(content_to_stream)} chars)...") # logger
                 try:
                     char_count = 0
                     total_chars = len(content_to_stream)
                     for i in range(0, total_chars):
-                        if client_disconnected_event.is_set(): print(f"[{req_id}] (Stream Gen) 断开连接，停止。", flush=True); break
+                        if client_disconnected_event.is_set():
+                            # print(f"[{req_id}] (Stream Gen) 断开连接，停止。", flush=True)
+                            logger.info(f"[{req_id}] (Stream Gen) 断开连接，停止。") # logger
+                            break
                         delta = content_to_stream[i]
                         yield generate_sse_chunk(delta, req_id, MODEL_NAME)
                         char_count += 1
                         if char_count % 100 == 0 or char_count == total_chars:
-                            if DEBUG_LOGS_ENABLED: print(f"[{req_id}] (Stream Gen) 进度: {char_count}/{total_chars}", flush=True)
+                            if DEBUG_LOGS_ENABLED:
+                                # print(f"[{req_id}] (Stream Gen) 进度: {char_count}/{total_chars}", flush=True)
+                                # logger.debug(f"[{req_id}] (Stream Gen) 进度: {char_count}/{total_chars}") # logger debug (Removed)
+                                pass # Keep the structure, but no log needed here now
                         await asyncio.sleep(PSEUDO_STREAM_DELAY) # Use asyncio.sleep
 
                     yield generate_sse_stop_chunk(req_id, MODEL_NAME)
                     yield "data: [DONE]\n\n"
-                    print(f"[{req_id}] (Stream Gen) ✅ 伪流式响应发送完毕。")
+                    # print(f"[{req_id}] (Stream Gen) ✅ 伪流式响应发送完毕。")
+                    logger.info(f"[{req_id}] (Stream Gen) ✅ 伪流式响应发送完毕。") # logger
                 except asyncio.CancelledError:
-                    print(f"[{req_id}] (Stream Gen) 流生成器被取消。")
+                    # print(f"[{req_id}] (Stream Gen) 流生成器被取消。")
+                    logger.info(f"[{req_id}] (Stream Gen) 流生成器被取消。") # logger
                 except Exception as e:
-                    print(f"[{req_id}] (Stream Gen) ❌ 伪流式生成过程中出错: {e}")
-                    traceback.print_exc()
+                    # print(f"[{req_id}] (Stream Gen) ❌ 伪流式生成过程中出错: {e}")
+                    # traceback.print_exc()
+                    logger.exception(f"[{req_id}] (Stream Gen) ❌ 伪流式生成过程中出错") # logger
                     try: yield generate_sse_error_chunk(f"Stream generation error: {e}", req_id); yield "data: [DONE]\n\n"
                     except: pass
                 finally:
-                    print(f"[{req_id}] (Stream Gen) 设置完成事件。")
+                    # print(f"[{req_id}] (Stream Gen) 设置完成事件。")
+                    logger.info(f"[{req_id}] (Stream Gen) 设置完成事件。") # logger
                     if not event_to_set.is_set(): event_to_set.set()
 
             stream_generator_func = create_stream_generator(completion_event, final_content)
             if not result_future.done():
                 result_future.set_result(StreamingResponse(stream_generator_func, media_type="text/event-stream"))
-                print(f"[{req_id}] (Refactored Process) 流式响应生成器已设置。")
+                # print(f"[{req_id}] (Refactored Process) 流式响应生成器已设置。")
+                logger.info(f"[{req_id}] (Refactored Process) 流式响应生成器已设置。") # logger
             else:
-                print(f"[{req_id}] (Refactored Process) Future 已完成/取消，无法设置流式结果。")
+                # print(f"[{req_id}] (Refactored Process) Future 已完成/取消，无法设置流式结果。")
+                logger.warning(f"[{req_id}] (Refactored Process) Future 已完成/取消，无法设置流式结果。") # logger
                 if not completion_event.is_set(): completion_event.set()
             return completion_event
-
         else: # Non-streaming
             response_payload = {
                 "id": f"{CHAT_COMPLETION_ID_PREFIX}{req_id}-{int(time.time())}",
@@ -1474,46 +1884,57 @@ async def _process_request_refactored(
             }
             if not result_future.done():
                 result_future.set_result(JSONResponse(content=response_payload))
-                print(f"[{req_id}] (Refactored Process) 非流式 JSON 响应已设置。")
+                # print(f"[{req_id}] (Refactored Process) 非流式 JSON 响应已设置。")
+                logger.info(f"[{req_id}] (Refactored Process) 非流式 JSON 响应已设置。") # logger
             else:
-                print(f"[{req_id}] (Refactored Process) Future 已完成/取消，无法设置 JSON 结果。")
+                # print(f"[{req_id}] (Refactored Process) Future 已完成/取消，无法设置 JSON 结果。")
+                logger.warning(f"[{req_id}] (Refactored Process) Future 已完成/取消，无法设置 JSON 结果。") # logger
             return None
 
-    # --- Exception Handling --- (Keep as is)
+    # --- Exception Handling --- (Use logger)
     except ClientDisconnectedError as disco_err:
-        print(f"[{req_id}] (Refactored Process) 捕获到客户端断开连接信号: {disco_err}")
+        # print(f"[{req_id}] (Refactored Process) 捕获到客户端断开连接信号: {disco_err}")
+        logger.info(f"[{req_id}] (Refactored Process) 捕获到客户端断开连接信号: {disco_err}") # logger
         if not result_future.done():
              result_future.set_exception(HTTPException(status_code=499, detail=f"[{req_id}] Client disconnected during processing."))
     except HTTPException as http_err:
-        print(f"[{req_id}] (Refactored Process) 捕获到 HTTP 异常: {http_err.status_code} - {http_err.detail}")
+        # print(f"[{req_id}] (Refactored Process) 捕获到 HTTP 异常: {http_err.status_code} - {http_err.detail}")
+        logger.warning(f"[{req_id}] (Refactored Process) 捕获到 HTTP 异常: {http_err.status_code} - {http_err.detail}") # logger
         if not result_future.done(): result_future.set_exception(http_err)
     except PlaywrightAsyncError as pw_err:
-        print(f"[{req_id}] (Refactored Process) 捕获到 Playwright 错误: {pw_err}")
+        # print(f"[{req_id}] (Refactored Process) 捕获到 Playwright 错误: {pw_err}")
+        logger.error(f"[{req_id}] (Refactored Process) 捕获到 Playwright 错误: {pw_err}") # logger
         await save_error_snapshot(f"process_playwright_error_{req_id}")
         if not result_future.done(): result_future.set_exception(HTTPException(status_code=502, detail=f"[{req_id}] Playwright interaction failed: {pw_err}"))
     except asyncio.TimeoutError as timeout_err:
-        print(f"[{req_id}] (Refactored Process) 捕获到操作超时: {timeout_err}")
+        # print(f"[{req_id}] (Refactored Process) 捕获到操作超时: {timeout_err}")
+        logger.error(f"[{req_id}] (Refactored Process) 捕获到操作超时: {timeout_err}") # logger
         await save_error_snapshot(f"process_timeout_error_{req_id}")
         if not result_future.done(): result_future.set_exception(HTTPException(status_code=504, detail=f"[{req_id}] Operation timed out: {timeout_err}"))
     except asyncio.CancelledError:
-        print(f"[{req_id}] (Refactored Process) 任务被取消。")
+        # print(f"[{req_id}] (Refactored Process) 任务被取消。")
+        logger.info(f"[{req_id}] (Refactored Process) 任务被取消。") # logger
         if not result_future.done(): result_future.cancel("Processing task cancelled")
     except Exception as e:
-        print(f"[{req_id}] (Refactored Process) 捕获到意外错误: {e}")
-        traceback.print_exc()
+        # print(f"[{req_id}] (Refactored Process) 捕获到意外错误: {e}")
+        # traceback.print_exc()
+        logger.exception(f"[{req_id}] (Refactored Process) 捕获到意外错误") # logger
         await save_error_snapshot(f"process_unexpected_error_{req_id}")
         if not result_future.done(): result_future.set_exception(HTTPException(status_code=500, detail=f"[{req_id}] Unexpected server error: {e}"))
     finally:
-        # --- Cleanup Disconnect Task --- (Keep as is)
+        # --- Cleanup Disconnect Task --- (Use logger)
         if disconnect_check_task and not disconnect_check_task.done():
-            print(f"[{req_id}] (Refactored Process) 清理断开连接检查任务...")
+            # print(f"[{req_id}] (Refactored Process) 清理断开连接检查任务...")
+            # logger.debug(f"[{req_id}] (Refactored Process) 清理断开连接检查任务...") # logger debug (Removed)
             disconnect_check_task.cancel()
             try: await disconnect_check_task
             except asyncio.CancelledError: pass
-            except Exception as task_clean_err: print(f"[{req_id}] 清理任务时出错: {task_clean_err}")
-        print(f"[{req_id}] (Refactored Process) 处理完成。")
+            except Exception as task_clean_err: logger.error(f"[{req_id}] 清理任务时出错: {task_clean_err}") # logger
+        # print(f"[{req_id}] (Refactored Process) 处理完成。")
+        logger.info(f"[{req_id}] (Refactored Process) 处理完成。") # logger
         if is_streaming and completion_event and not completion_event.is_set() and (result_future.done() and result_future.exception() is not None):
-             print(f"[{req_id}] (Refactored Process) 流式请求异常，确保完成事件已设置。")
+             # print(f"[{req_id}] (Refactored Process) 流式请求异常，确保完成事件已设置。")
+             logger.warning(f"[{req_id}] (Refactored Process) 流式请求异常，确保完成事件已设置。") # logger
              completion_event.set()
         return completion_event
 
@@ -1521,12 +1942,14 @@ async def _process_request_refactored(
 @app.post("/v1/chat/completions")
 async def chat_completions(request: ChatCompletionRequest, http_request: Request):
     req_id = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=7))
-    print(f"[{req_id}] 收到 /v1/chat/completions 请求 (Stream={request.stream})")
+    # print(f"[{req_id}] 收到 /v1/chat/completions 请求 (Stream={request.stream})")
+    logger.info(f"[{req_id}] 收到 /v1/chat/completions 请求 (Stream={request.stream})") # logger
 
     if is_initializing or not is_page_ready or not is_browser_connected or not worker_task or worker_task.done():
         status_code = 503
         detail = f"[{req_id}] 服务当前不可用 (初始化中、页面/浏览器未就绪或 Worker 未运行)。请稍后重试。"
-        print(f"[{req_id}] 错误: {detail}")
+        # print(f"[{req_id}] 错误: {detail}")
+        logger.error(f"[{req_id}] 错误: {detail}") # logger
         raise HTTPException(status_code=status_code, detail=detail, headers={"Retry-After": "30"})
 
     result_future = Future()
@@ -1540,30 +1963,36 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
     }
 
     await request_queue.put(request_item)
-    print(f"[{req_id}] 请求已加入队列 (当前队列长度: {request_queue.qsize()})")
+    # print(f"[{req_id}] 请求已加入队列 (当前队列长度: {request_queue.qsize()})")
+    logger.info(f"[{req_id}] 请求已加入队列 (当前队列长度: {request_queue.qsize()})") # logger
 
     try:
         # Wait for the result from the worker
         # Add timeout to prevent indefinite hanging if worker fails unexpectedly
         timeout_seconds = RESPONSE_COMPLETION_TIMEOUT / 1000 + 120 # Base timeout + buffer
         result = await asyncio.wait_for(result_future, timeout=timeout_seconds)
-        print(f"[{req_id}] Worker 处理完成，返回结果。")
+        # print(f"[{req_id}] Worker 处理完成，返回结果。")
+        logger.info(f"[{req_id}] Worker 处理完成，返回结果。") # logger
         return result
     except asyncio.TimeoutError:
-        print(f"[{req_id}] ❌ 等待 Worker 响应超时 ({timeout_seconds}s)。")
+        # print(f"[{req_id}] ❌ 等待 Worker 响应超时 ({timeout_seconds}s)。")
+        logger.error(f"[{req_id}] ❌ 等待 Worker 响应超时 ({timeout_seconds}s)。") # logger
         # Mark the item in queue as cancelled (if possible, might be complex)
         # Best effort: Raise 504
         raise HTTPException(status_code=504, detail=f"[{req_id}] Request processing timed out waiting for worker response.")
     except asyncio.CancelledError:
-        print(f"[{req_id}] 请求 Future 被取消 (可能由客户端断开触发)。")
+        # print(f"[{req_id}] 请求 Future 被取消 (可能由客户端断开触发)。")
+        logger.info(f"[{req_id}] 请求 Future 被取消 (可能由客户端断开触发)。") # logger
         # Worker should have handled setting the 499, but raise defensively
         raise HTTPException(status_code=499, detail=f"[{req_id}] Request cancelled (likely client disconnect).")
     except HTTPException as http_err: # Re-raise exceptions set by worker
-        print(f"[{req_id}] Worker 抛出 HTTP 异常 {http_err.status_code}，重新抛出。")
+        # print(f"[{req_id}] Worker 抛出 HTTP 异常 {http_err.status_code}，重新抛出。")
+        logger.warning(f"[{req_id}] Worker 抛出 HTTP 异常 {http_err.status_code}，重新抛出。") # logger
         raise http_err
     except Exception as e:
-        print(f"[{req_id}] ❌ 等待 Worker 响应时发生意外错误: {e}")
-        traceback.print_exc()
+        # print(f"[{req_id}] ❌ 等待 Worker 响应时发生意外错误: {e}")
+        logger.exception(f"[{req_id}] ❌ 等待 Worker 响应时发生意外错误") # logger
+        # traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"[{req_id}] Unexpected error waiting for worker response: {e}")
 
 # --- 新增：辅助函数，搜索队列中的请求并标记为取消 --- (Helper from server未重构.py)
@@ -1581,7 +2010,8 @@ async def cancel_queued_request(req_id: str) -> bool:
         while True: # Process the whole queue or until found
             item = request_queue.get_nowait()
             if item.get("req_id") == req_id and not item.get("cancelled", False):
-                print(f"[{req_id}] 在队列中找到请求，标记为已取消。", flush=True)
+                # print(f"[{req_id}] 在队列中找到请求，标记为已取消。", flush=True)
+                logger.info(f"[{req_id}] 在队列中找到请求，标记为已取消。") # logger
                 item["cancelled"] = True
                 # Set exception on future immediately if possible
                 item_future = item.get("result_future")
@@ -1605,7 +2035,8 @@ async def cancel_queued_request(req_id: str) -> bool:
 @app.post("/v1/cancel/{req_id}")
 async def cancel_request(req_id: str):
     """取消指定ID的请求，如果它还在队列中等待处理"""
-    print(f"[{req_id}] 收到取消请求。", flush=True)
+    # print(f"[{req_id}] 收到取消请求。", flush=True)
+    logger.info(f"[{req_id}] 收到取消请求。") # logger
     cancelled = await cancel_queued_request(req_id)
     if cancelled:
         return JSONResponse(content={"success": True, "message": f"Request {req_id} marked as cancelled in queue."}) # Updated message
@@ -1650,22 +2081,67 @@ async def get_queue_status():
         "items": sorted(queue_items, key=lambda x: x.get("enqueue_time", 0)) # Sort by enqueue time
     })
 
+# --- 新增: WebSocket 日志端点 ---
+@app.websocket("/ws/logs")
+async def websocket_log_endpoint(websocket: WebSocket):
+    """WebSocket 端点，用于实时日志流"""
+    client_id = str(uuid.uuid4())
+    try:
+        # 接受 WebSocket 连接
+        await websocket.accept()
+
+        # 将连接添加到管理器
+        await log_ws_manager.connect(client_id, websocket) # <<-- 使用 await
+
+        # 发送欢迎消息
+        await websocket.send_text(json.dumps({
+            "type": "connection_status",
+            "status": "connected",
+            "message": "已连接到日志流。",
+            "timestamp": datetime.datetime.now().isoformat()
+        }))
+
+        # 保持连接打开，直到客户端断开连接
+        while True:
+            # 为防止超时，使用简单的心跳机制
+            await websocket.receive_text() # 等待客户端消息
+            # 可以选择性地回复一个 pong 消息，如果需要严格的心跳
+            # await websocket.send_text(json.dumps({"type": "pong"}))
+
+    except WebSocketDisconnect:
+        # 客户端断开连接时，从管理器中移除
+        log_ws_manager.disconnect(client_id)
+        logger.info(f"日志客户端已断开连接: {client_id}")
+    except Exception as e:
+        # 发生其他异常时，同样从管理器中移除
+        logger.error(f"日志 WebSocket 异常 ({client_id}): {str(e)}") # 添加 client_id
+        log_ws_manager.disconnect(client_id)
+
+
 # --- Main Execution --- (if running directly)
 if __name__ == "__main__":
     import uvicorn
     import argparse
 
-    parser = argparse.ArgumentParser(description="Run AI Studio Proxy Server")
-    parser.add_argument("--host", type=str, default="127.0.0.1", help="Host to bind the server to")
-    parser.add_argument("--port", type=int, default=2048, help="Port to run the server on")
+    parser = argparse.ArgumentParser(description="运行 AI Studio Proxy Server")
+    parser.add_argument("--host", type=str, default="127.0.0.1", help="服务器主机地址")
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=2048, # <-- 修改默认值为 2048
+        help="服务器端口"
+    )
+    # --- 新增参数 ---
+    parser.add_argument(
+        "--disable-print-redirect",
+        action="store_true", # 设置为 store_true，存在即为 True
+        help="禁用将 print 输出重定向到日志系统的功能，使终端输出更干净。"
+    )
     args = parser.parse_args()
 
-    # Check dependencies before starting
-    check_dependencies()
-
-    print(f"\n启动 FastAPI 服务器于 http://{args.host}:{args.port}")
-    print(f"请确保 launch_camoufox.py 脚本正在运行，并且 CAMOUFOX_WS_ENDPOINT 环境变量已设置。")
-    print(f"可以通过设置 DEBUG_LOGS_ENABLED=true 环境变量启用详细日志。")
+    # --- 修改调用 ---
+    # 如果提供了 --disable-print-redirect，则 redirect_print 为 False
+    setup_logging(log_level=logging.INFO, redirect_print=not args.disable_print_redirect)
 
     uvicorn.run(app, host=args.host, port=args.port)
 
