@@ -61,21 +61,21 @@ logger = logging.getLogger("CamoufoxLauncher") # 获取指定名称的 logger
 ws_regex = re.compile(r"(ws://\S+)")
 
 # --- 新增：用于后台读取子进程输出的函数 ---
-def _enqueue_output(stream, output_queue):
-    """Reads lines from a stream and puts them into a queue."""
+def _enqueue_output(stream, stream_name, output_queue):
+    """Reads lines from a stream and puts them into a queue with stream name."""
     try:
         for line in iter(stream.readline, ''):
-            output_queue.put(line)
+            output_queue.put((stream_name, line))
     except ValueError:
         # stream might be closed prematurely
         pass
     except Exception as e:
-        print(f"[Reader Thread] Error reading stream: {e}", file=sys.stderr)
+        print(f"[Reader Thread {stream_name}] Error reading stream: {e}", file=sys.stderr)
     finally:
-        # Signal EOF by putting None
-        output_queue.put(None)
+        # Signal EOF by putting None for this stream
+        output_queue.put((stream_name, None))
         stream.close() # Ensure the stream is closed from the reader side
-        print("[Reader Thread] Exiting.", flush=True)
+        print(f"[Reader Thread {stream_name}] Exiting.", flush=True)
 
 # --- 新增：日志设置函数 (简化版) ---
 def setup_launcher_logging(log_level=logging.INFO):
@@ -383,91 +383,58 @@ def start_main_server(ws_endpoint, launch_mode, server_port, active_auth_json=No
         )
         print(f"   主服务器 server.py 已启动 (PID: {server_py_proc.pid})。正在捕获其输出...")
 
-        # --- 实时读取并打印 server.py 的输出 --- 
-        output_buffer = {"stdout": "", "stderr": ""}
-        stdout_closed = False
-        stderr_closed = False
+        # --- 修改：使用线程和队列实时读取并打印 server.py 的输出 ---
+        output_queue = queue.Queue()
+        stdout_thread = threading.Thread(
+            target=_enqueue_output,
+            args=(server_py_proc.stdout, "stdout", output_queue), # <-- 传入 stdout 和 stream_name
+            daemon=True
+        )
+        stderr_thread = threading.Thread(
+            target=_enqueue_output,
+            args=(server_py_proc.stderr, "stderr", output_queue), # <-- 传入 stderr 和 stream_name
+            daemon=True
+        )
+        stdout_thread.start()
+        stderr_thread.start()
 
-        # Helper to read and print a line
-        def read_and_print_line(stream, stream_name):
-            nonlocal output_buffer, stdout_closed, stderr_closed
-            if (stream_name == 'stdout' and stdout_closed) or \
-               (stream_name == 'stderr' and stderr_closed) or \
-               not stream:
-                return True # Stream already closed
-            line = stream.readline()
-            if line:
-                 print(f"   [server.py {stream_name}]: {line.strip()}", flush=True)
-                 output_buffer[stream_name] += line
-                 return False # Read successfully
-            else:
-                 print(f"   [server.py {stream_name}]: 输出流已关闭 (EOF).", flush=True)
-                 if stream_name == 'stdout':
-                     stdout_closed = True
-                 else:
-                     stderr_closed = True
-                 return True # Stream is now closed
-
-        # Loop until both stdout and stderr are closed
-        stdout_fd = server_py_proc.stdout.fileno()
-        stderr_fd = server_py_proc.stderr.fileno()
-
-        while not (stdout_closed and stderr_closed):
-            # Check if process exited prematurely
-            return_code = server_py_proc.poll()
-            if return_code is not None:
-                print(f"   [server.py]: 进程在输出结束前意外退出 (代码: {return_code})。", flush=True)
-                # Try one last read after exit before breaking
-                try:
-                     while True: # Drain stdout
-                         if read_and_print_line(server_py_proc.stdout, "stdout"): break
-                except: pass # Ignore errors on final read
-                try:
-                     while True: # Drain stderr
-                          if read_and_print_line(server_py_proc.stderr, "stderr"): break
-                except: pass
-                # Explicitly update flags based on return value, though nonlocal should handle it too
-                stdout_closed = True # Mark as closed since process exited
-                stderr_closed = True
-                break # Exit the reading loop
-
-            # --- 使用 select 等待可读事件 --- 
-            fds_to_watch = []
-            if not stdout_closed: fds_to_watch.append(stdout_fd)
-            if not stderr_closed: fds_to_watch.append(stderr_fd)
-
-            if not fds_to_watch:
-                 # Should not happen if loop condition is correct, but as safety break
-                 break
+        eof_count = 0
+        while eof_count < 2: # 等待 stdout 和 stderr 都结束
+            # 检查进程是否已退出
+            if server_py_proc.poll() is not None:
+                 print(f"   [server.py]: 进程在读取完成前意外退出 (代码: {server_py_proc.returncode})。", flush=True)
+                 break # 退出读取循环
 
             try:
-                 # Wait up to 0.5 seconds for either stdout or stderr to have data
-                 readable_fds, _, _ = select.select(fds_to_watch, [], [], 0.5)
+                # 从队列获取数据，设置超时以允许检查进程状态
+                stream_name, line = output_queue.get(timeout=1.0)
 
-                 for fd in readable_fds:
-                     if fd == stdout_fd:
-                         # Read one line if available
-                         read_and_print_line(server_py_proc.stdout, "stdout")
-                     elif fd == stderr_fd:
-                         # Read one line if available
-                         read_and_print_line(server_py_proc.stderr, "stderr")
-            except ValueError:
-                 # select might raise ValueError if a file descriptor becomes invalid (e.g., closed)
-                 print("   [server.py]: select() 遇到无效的文件描述符，可能已关闭。更新状态...")
-                 # Re-check poll and stream status on error
-                 if server_py_proc.poll() is not None:
-                      stdout_closed = True
-                      stderr_closed = True
-                 else:
-                      if server_py_proc.stdout.closed: stdout_closed = True
-                      if server_py_proc.stderr.closed: stderr_closed = True
-            except Exception as select_err:
-                 print(f"   [server.py]: select() 发生错误: {select_err}")
-                 # Consider breaking or more robust error handling here
-                 time.sleep(0.1) # Fallback sleep on select error
+                if line is None: # EOF marker
+                    eof_count += 1
+                    print(f"   [server.py {stream_name}]: 输出流已关闭 (EOF).", flush=True)
+                else:
+                    # 打印读取到的行
+                    print(f"   [server.py {stream_name}]: {line.strip()}", flush=True)
 
-        # --- 结束后获取最终退出码 --- 
-        print(f"\n👋 主服务器进程已结束 (代码: {server_py_proc.returncode})。")
+            except queue.Empty:
+                # 超时，继续循环检查进程状态和队列
+                continue
+            except Exception as q_err:
+                 print(f"   [server.py]: 处理队列时出错: {q_err}", flush=True)
+                 break # 出现意外错误时退出
+
+        # --- 循环结束后 ---
+        print(f"   [server.py]: 读取循环结束 (EOF count: {eof_count})。")
+
+        # 确保读取线程结束 (虽然是 daemon, join 一下是好习惯)
+        print(f"   [server.py]: 等待读取线程结束...")
+        stdout_thread.join(timeout=1.0)
+        stderr_thread.join(timeout=1.0)
+
+        # 最终等待进程结束并获取退出码
+        print(f"   [server.py]: 等待进程完全结束...")
+        final_return_code = server_py_proc.wait() # 等待进程结束
+        print(f"\n👋 主服务器进程已结束 (代码: {final_return_code})。")
 
     except FileNotFoundError:
         print(f"❌ 错误: 无法执行命令。请确保 Python ({PYTHON_EXECUTABLE}) 和 '{SERVER_PY_FILENAME}' 存在。")
@@ -677,7 +644,7 @@ if __name__ == "__main__":
         output_queue = queue.Queue()
         reader_thread = threading.Thread(
             target=_enqueue_output,
-            args=(camoufox_proc.stdout, output_queue),
+            args=(camoufox_proc.stdout, "stdout", output_queue), # <-- 传入 stdout 和 stream_name
             daemon=True # 设置为守护线程
         )
         reader_thread.start()
@@ -692,20 +659,16 @@ if __name__ == "__main__":
                 break
 
             try:
-                # 从队列获取行，计算剩余超时时间
-                remaining_timeout = ENDPOINT_CAPTURE_TIMEOUT - (time.time() - start_time)
-                if remaining_timeout <= 0:
-                    raise queue.Empty # 手动触发超时
-                
-                line = output_queue.get(timeout=max(0.1, min(remaining_timeout, 1.0))) # 动态超时
+                # 从队列获取元组 (stream_name, line)
+                stream_name, line = output_queue.get(timeout=max(0.1, min(ENDPOINT_CAPTURE_TIMEOUT - (time.time() - start_time), 1.0))) # 动态超时
 
                 if line is None: # EOF marker from reader thread
-                    print("   ℹ️ 读取线程报告输出流已结束 (EOF)。", flush=True)
+                    print(f"   ℹ️ 读取线程报告 {stream_name} 输出流已结束 (EOF)。", flush=True)
                     break # 退出循环
 
                 # 正常处理行
                 line = line.strip()
-                print(f"   [Camoufox output]: {line}", flush=True) # 打印所有行
+                print(f"   [Camoufox output {stream_name}]: {line}", flush=True) # 打印所有行 (stream_name 总是 stdout 在这里)
                 output_lines.append(line)
                 match = ws_regex.search(line) # 在行内搜索
                 if match:
@@ -802,7 +765,7 @@ if __name__ == "__main__":
             output_queue = queue.Queue()
             reader_thread = threading.Thread(
                 target=_enqueue_output,
-                args=(camoufox_proc.stdout, output_queue),
+                args=(camoufox_proc.stdout, "stdout", output_queue), # <-- 传入 stdout 和 stream_name
                 daemon=True
             )
             reader_thread.start()
@@ -816,18 +779,15 @@ if __name__ == "__main__":
                     break
 
                 try:
-                    remaining_timeout = ENDPOINT_CAPTURE_TIMEOUT - (time.time() - start_time)
-                    if remaining_timeout <= 0:
-                         raise queue.Empty
-                    
-                    line = output_queue.get(timeout=max(0.1, min(remaining_timeout, 1.0)))
+                    # 从队列获取元组 (stream_name, line)
+                    stream_name, line = output_queue.get(timeout=max(0.1, min(ENDPOINT_CAPTURE_TIMEOUT - (time.time() - start_time), 1.0)))
 
                     if line is None: # EOF
-                        print("   ℹ️ 读取线程报告输出流已结束 (EOF)。", flush=True)
+                        print(f"   ℹ️ 读取线程报告 {stream_name} 输出流已结束 (EOF)。", flush=True)
                         break
 
                     line = line.strip()
-                    print(f"   [Camoufox output]: {line}", flush=True)
+                    print(f"   [Camoufox output {stream_name}]: {line}", flush=True) # stream_name 总是 stdout
                     output_lines.append(line)
                     match = ws_regex.search(line) # 在行内搜索
                     if match:
