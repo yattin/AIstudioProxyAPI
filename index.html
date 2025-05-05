@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" id="html-root">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,90 +7,140 @@
     <style>
         /* --- Modernized M3-Inspired Styles --- */
         :root {
-            /* Light Mode Palette (Refined M3 Inspired) */
-            --bg-color: #f7f9fc; /* Slightly different light background */
-            --container-bg: #ffffff;
-            --text-color: #1c1b1f; /* Near black */
-            --primary-color: #0d6efd; /* Keep primary blue */
-            --primary-container: #d0e3ff; /* Container for primary elements */
-            --on-primary-container: #001d36;
+            /* Light Mode Palette (M3 Baseline Blue - More Standard) */
+            /* Define RGB for RGBA usage */
+            --primary-rgb: 52, 110, 248;
+            --secondary-rgb: 88, 94, 113;
+            --on-surface-rgb: 26, 28, 30;
+
+            --bg-color: #f7f9fc; /* Neutral Light Background */
+            --container-bg: #fefbff; /* Surface */
+            --text-color: #1a1c1e; /* On Surface / On Background */
+            --primary-color: rgb(var(--primary-rgb)); /* #346EF8 */
+            --on-primary: #ffffff;
+            --primary-container: #d8e2ff;
+            --on-primary-container: #001a42;
+            --secondary-color: rgb(var(--secondary-rgb)); /* #585E71 */
+            --on-secondary: #ffffff;
+            --secondary-container: #dde2f9;
+            --on-secondary-container: #151b2c;
+            /* --tertiary-color: #745470; (Example, not mapped) */
+            /* --on-tertiary: #ffffff; */
+            /* --tertiary-container: #ffd7f6; */
+            /* --on-tertiary-container: #2b122a; */
             --user-msg-bg: var(--primary-container);
             --user-msg-text: var(--on-primary-container);
-            --assistant-msg-bg: #eef0f4; /* Surface variant */
-            --assistant-msg-text: #44474f; /* On surface variant */
-            --system-msg-bg: #f0f4f9; /* Lighter gray */
-            --system-msg-text: #6c757d;
-            --error-msg-bg: #f8d7da;
-            --error-msg-text: #842029;
-            --border-color: #dde1e7; /* Slightly lighter border */
-            --input-bg: #fefefe; /* Slightly off-white */
-            --input-border: #ced4da;
+            --assistant-msg-bg: #e1e2ec; /* Surface Variant */
+            --assistant-msg-text: #44474f; /* On Surface Variant */
+            --system-msg-bg: #f0f4f9; /* Light neutral gray */
+            --system-msg-text: #6c757d; /* Mid gray */
+            --error-color: #ba1a1a;
+            --on-error: #ffffff;
+            --error-container: #ffdad6;
+            --on-error-container: #410002;
+            --error-msg-bg: var(--error-container);
+            --error-msg-text: var(--on-error-container);
+            --border-color: #74777f; /* Outline */
+            --input-bg: var(--container-bg); /* Surface, like Material Text Field */
+            --input-border: var(--border-color); /* Outline */
             --input-focus-border: var(--primary-color);
-            --input-focus-shadow: 0 0 0 3px rgba(13, 110, 253, 0.15); /* Adjusted focus shadow */
+            --input-focus-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.1); /* Lighter focus */
             --button-bg: var(--primary-color);
-            --button-text: #ffffff;
-            --button-hover-bg: #0b5ed7;
-            --button-disabled-bg: #e0e0e0; /* Lighter disabled bg */
-            --button-disabled-text: #a0a0a0; /* Lighter disabled text */
-            --clear-button-bg: #6c757d;
-            --clear-button-text: #ffffff;
-            --clear-button-hover-bg: #5a6268;
-            --sidebar-bg: #f1f3f5; /* Lighter sidebar */
+            --button-text: var(--on-primary);
+            --button-hover-bg: #1A59E0; /* Darker primary */
+            --button-disabled-bg: rgba(var(--on-surface-rgb), 0.12);
+            --button-disabled-text: rgba(var(--on-surface-rgb), 0.38);
+            --clear-button-bg: var(--secondary-color);
+            --clear-button-text: var(--on-secondary);
+            --clear-button-hover-bg: #41475A; /* Darker secondary */
+            --sidebar-bg: #f0f3fa; /* Slightly darker than background */
             --sidebar-border: var(--border-color);
             --icon-button-bg: transparent;
-            --icon-button-hover-bg: rgba(0, 0, 0, 0.06);
-            --icon-button-color: #5f6368; /* Darker icon color */
-            --log-terminal-bg: #1e1e1e;
-            --log-terminal-text: #d4d4d4;
+            --icon-button-hover-bg: rgba(var(--primary-rgb), 0.08);
+            --icon-button-color: #44474f; /* On Surface variant */
+            --log-terminal-bg: #1e1e1e; /* Keep dark */
+            --log-terminal-text: #d4d4d4; /* Keep light */
 
-            --border-radius-sm: 6px; /* Increased */
-            --border-radius-md: 12px; /* Increased */
-            --border-radius-lg: 20px; /* Increased */
-            --border-radius-xl: 28px; /* Increased */
-            --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.07); /* Softer shadow */
-            --shadow-md: 0 4px 8px rgba(0, 0, 0, 0.1); /* Softer shadow */
-            --sidebar-width: 380px; /* Slightly wider */
-            --sidebar-transition: width 0.3s ease, padding 0.3s ease, border 0.3s ease;
-            --content-padding: 20px;
+            --theme-toggle-hover-bg: rgba(var(--secondary-rgb), 0.08);
+            --theme-toggle-color: var(--icon-button-color);
+            --theme-toggle-bg: transparent;
+
+            --card-bg: var(--container-bg);
+            --card-border: var(--border-color);
+            --card-shadow: var(--shadow-sm);
+
+            --border-radius-sm: 4px;  /* M3 Small */
+            --border-radius-md: 8px;  /* M3 Medium */
+            --border-radius-lg: 16px; /* M3 Large */
+            --border-radius-xl: 28px; /* M3 Extra Large / Pill */
+            --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.1), 0 1px 3px rgba(0, 0, 0, 0.08); /* M3 Elevation 1 */
+            --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.1), 0 4px 6px rgba(0, 0, 0, 0.08); /* M3 Elevation 2 approx */
+            --sidebar-width: 380px;
+            --sidebar-transition: width 0.3s ease, padding 0.3s ease, border 0.3s ease, transform 0.3s ease;
+            --content-padding: 24px;
         }
 
-        /* Dark Mode Palette (Refined M3 Inspired) */
-        @media (prefers-color-scheme: dark) {
-            :root {
-                --bg-color: #121212; /* Deep dark */
-                --container-bg: #1e1e1e;
-                --text-color: #e3e3e3; /* Slightly brighter */
-                --primary-color: #74b5ff; /* Lighter blue */
-                --primary-container: #00457e; /* Darker container */
-                --on-primary-container: #d0e3ff; /* Text on dark container */
-                --user-msg-bg: var(--primary-container);
-                --user-msg-text: var(--on-primary-container);
-                --assistant-msg-bg: #2c2f33; /* Dark surface variant */
-                --assistant-msg-text: #c7cace; /* Lighter text on dark surface */
-                --system-msg-bg: #2a2a2a; /* Darker system */
-                --system-msg-text: #a0a0a0; /* Lighter gray */
-                --error-msg-bg: #5a2a2e;
-                --error-msg-text: #f5c6cb;
-                --border-color: #3a3a3a; /* Darker border */
-                --input-bg: #2c2c2c;
-                --input-border: #454545; /* Slightly lighter dark border */
-                --input-focus-border: var(--primary-color);
-                --input-focus-shadow: 0 0 0 3px rgba(116, 181, 255, 0.2);
-                --button-bg: var(--primary-color);
-                --button-text: #001d36; /* Darker text on light blue button */
-                --button-hover-bg: #92c7ff; /* Even lighter hover */
-                --button-disabled-bg: #3f3f3f;
-                --button-disabled-text: #7a7a7a;
-                --clear-button-bg: #4a4a4a;
-                --clear-button-text: #e0e0e0;
-                --clear-button-hover-bg: #5a5a5a;
-                --sidebar-bg: #252526;
-                --sidebar-border: var(--border-color);
-                --icon-button-hover-bg: rgba(255, 255, 255, 0.1);
-                --icon-button-color: #bdbdbd; /* Lighter icon color */
-                --log-terminal-bg: #1e1e1e;
-                --log-terminal-text: #d4d4d4;
-            }
+        /* Dark Mode Palette - Applied via class on <html> */
+        html.dark-mode {
+             /* Define RGB for RGBA usage */
+            --primary-rgb: 173, 198, 255;
+            --secondary-rgb: 188, 194, 217;
+            --on-surface-rgb: 227, 226, 230;
+
+            --bg-color: #1a1c1e; /* On Surface / On Background */
+            --container-bg: #1a1c1e; /* Surface (often same as background in dark) */
+            --text-color: #e3e2e6; /* On Surface / On Background */
+            --primary-color: rgb(var(--primary-rgb)); /* #ADC6FF */
+            --on-primary: #002e68;
+            --primary-container: #1853b5; /* Adjusted primary container dark */
+            --on-primary-container: #d8e2ff;
+            --secondary-color: rgb(var(--secondary-rgb)); /* #BCC2D9 */
+            --on-secondary: #2a3042;
+            --secondary-container: #404659;
+            --on-secondary-container: #dde2f9;
+            /* --tertiary-color: #E2BBDB; */
+            /* --on-tertiary: #422740; */
+            /* --tertiary-container: #5B3D57; */
+            /* --on-tertiary-container: #FFD7F6; */
+            --user-msg-bg: var(--primary-container);
+            --user-msg-text: var(--on-primary-container);
+            --assistant-msg-bg: #44474f; /* On Surface Variant */
+            --assistant-msg-text: #c4c6cf; /* Outline */
+            --system-msg-bg: #2e3133; /* Darker neutral */
+            --system-msg-text: #b9bfc2; /* Mid-light gray */
+            --error-color: #ffb4ab;
+            --on-error: #690005;
+            --error-container: #93000a;
+            --on-error-container: #ffdad6;
+            --error-msg-bg: var(--error-container);
+            --error-msg-text: var(--on-error-container);
+            --border-color: #8e9099; /* Outline */
+            --input-bg: var(--container-bg); /* Surface */
+            --input-border: var(--border-color); /* Outline */
+            --input-focus-border: var(--primary-color);
+            --input-focus-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.15); /* Lighter focus */
+            --button-bg: var(--primary-color);
+            --button-text: var(--on-primary);
+            --button-hover-bg: #C7D8FF; /* Lighter primary */
+            --button-disabled-bg: rgba(var(--on-surface-rgb), 0.12);
+            --button-disabled-text: rgba(var(--on-surface-rgb), 0.38);
+            --clear-button-bg: var(--secondary-color);
+            --clear-button-text: var(--on-secondary);
+            --clear-button-hover-bg: #D5DAF1; /* Lighter secondary */
+            --sidebar-bg: #1e2023; /* Slightly darker */
+            --sidebar-border: var(--border-color);
+            --icon-button-hover-bg: rgba(var(--primary-rgb), 0.08);
+            --icon-button-color: #c4c6cf; /* Outline */
+            --log-terminal-bg: #1e1e1e; /* Consistent dark */
+            --log-terminal-text: #d4d4d4; /* Consistent light */
+
+            --theme-toggle-hover-bg: rgba(var(--secondary-rgb), 0.08);
+            --theme-toggle-color: var(--icon-button-color);
+            --theme-toggle-bg: transparent;
+
+            --card-bg: var(--container-bg);
+            --card-border: var(--border-color);
+            --card-shadow: 0 2px 6px rgba(0, 0, 0, 0.2), 0 4px 8px rgba(0, 0, 0, 0.15); /* M3 Elevation 2 dark approx */
         }
 
         *, *::before, *::after {
@@ -143,19 +193,21 @@
             padding: 0;
             border-left: none;
             overflow: hidden;
-            transform: translateX(100%);
+            /* transform: translateX(100%); REMOVED - Handled differently below */
+            /* visibility: hidden; */ /* Using width/border is sufficient */
         }
 
-        /* Sidebar Toggle Button */
+        /* Sidebar Toggle Button (Chevron Style) */
         #toggleSidebarButton {
-            position: absolute; /* Base position is absolute */
-            top: 15px; /* Align with title padding */
-            left: -16px; /* Default position relative to the panel's origin */
-            z-index: 10;
-            width: 32px; /* Slightly larger */
-            height: 32px;
+            position: absolute; /* Base position is absolute (for desktop) */
+            top: 12px; /* Align better with header padding */
+            /* left is calculated dynamically below - REMOVED */
+            /* left: -14px; /* Position centered on the left edge of the parent - REMOVED */
+            z-index: 10; /* Default z-index (increased for mobile below) */
+            width: 28px; /* Smaller */
+            height: 28px;
             border-radius: 50%;
-            border: 1px solid var(--sidebar-border);
+            border: 1px solid var(--border-color);
             background-color: var(--sidebar-bg);
             color: var(--icon-button-color);
             cursor: pointer;
@@ -163,26 +215,27 @@
             align-items: center;
             justify-content: center;
             padding: 0;
-            font-size: 1.3em; /* Slightly larger icon */
-            transition: background-color 0.2s, color 0.2s, transform 0.3s ease, left 0.3s ease;
+            font-size: 1em; /* Smaller icon */
+            transition: background-color 0.2s, color 0.2s, transform 0.3s ease, left 0.3s ease, border-color 0.2s;
             box-shadow: var(--shadow-sm);
         }
         #toggleSidebarButton:hover {
-            background-color: var(--icon-button-hover-bg);
+            /* background-color: var(--icon-button-hover-bg); REMOVED hover effect */
+            border-color: var(--primary-color);
+            color: var(--primary-color);
         }
-        /* Position button relative to the sidebar edge */
-        /* Base state (Desktop Expanded) - Handled by #toggleSidebarButton general rules */
+        /* Specific positioning and icon logic is in JS and @media */
 
         h1 {
             color: var(--text-color);
             text-align: center;
             margin: 0;
-            padding: 18px var(--content-padding);
-             border-bottom: 1px solid var(--border-color);
+            padding: 8px var(--content-padding); /* Toolbar padding */
+            gap: 8px; /* Gap between buttons */
+            background-color: var(--container-bg); /* Match chat panel */
             font-size: 1.2em; /* Slightly smaller title */
             font-weight: 600; /* Slightly bolder */
             flex-shrink: 0;
-            background-color: var(--container-bg);
         }
 
         a {
@@ -205,19 +258,21 @@
             padding: var(--content-padding);
             display: flex;
             flex-direction: column;
-            gap: 15px; /* Slightly more gap */
+            gap: 16px; /* M3 Spacing: Adjusted from 18px */
         }
 
         .message {
-            padding: 12px 18px;
-            border-radius: var(--border-radius-lg);
+            padding: 16px; /* M3 Padding: Adjusted from 12px 18px */
+            border-radius: var(--border-radius-lg); /* Default, overridden below */
             max-width: 85%;
             word-wrap: break-word;
             line-height: 1.6;
             box-shadow: var(--shadow-sm); /* Add subtle shadow */
             border: 1px solid transparent; /* Ensure border space for consistency */
             position: relative; /* For positioning edit/delete buttons */
-            transition: background-color 0.2s; /* Smooth transition for editing state */
+            transition: background-color 0.2s;
+            /* Remove inconsistent large radius - handled by specific messages */
+            /* border-radius: var(--border-radius-lg); */
         }
         .message:hover .message-actions {
             opacity: 1;
@@ -228,13 +283,11 @@
             color: var(--user-msg-text);
             align-self: flex-end;
             margin-left: auto;
-             /* Speech bubble effect */
+             /* M3 Speech bubble effect - Rounded corners away from pointer */
             border-radius: var(--border-radius-lg) var(--border-radius-sm) var(--border-radius-lg) var(--border-radius-lg);
-            border: 1px solid rgba(0,0,0,0.05);
+            border: 1px solid rgba(var(--on-surface-rgb), 0.1);
         }
-        @media (prefers-color-scheme: dark) {
-            .user-message { border-color: rgba(255,255,255,0.1); }
-        }
+        html.dark-mode .user-message { border-color: rgba(var(--on-surface-rgb), 0.15); }
 
         .assistant-message {
             background-color: var(--assistant-msg-bg);
@@ -242,13 +295,11 @@
             align-self: flex-start;
             margin-right: auto;
             white-space: pre-wrap;
-             /* Speech bubble effect */
+             /* M3 Speech bubble effect - Rounded corners away from pointer */
             border-radius: var(--border-radius-sm) var(--border-radius-lg) var(--border-radius-lg) var(--border-radius-lg);
-            border: 1px solid rgba(0,0,0,0.05);
+            border: 1px solid rgba(var(--on-surface-rgb), 0.1);
         }
-        @media (prefers-color-scheme: dark) {
-            .assistant-message { border-color: rgba(255,255,255,0.1); }
-        }
+        html.dark-mode .assistant-message { border-color: rgba(var(--on-surface-rgb), 0.15); }
 
 
         .system-message {
@@ -276,13 +327,14 @@
             margin: 10px 5%; /* Center with margin */
             box-shadow: none;
         }
+        html.dark-mode .error-message { border-color: #f5c6cb; }
 
         #input-area {
             display: flex;
-            padding: 15px var(--content-padding); /* Consistent padding */
+            padding: 16px var(--content-padding); /* M3 Padding: Adjusted from 15px */
             border-top: 1px solid var(--border-color);
             flex-shrink: 0;
-            gap: 10px; /* Increased gap */
+            gap: 16px; /* M3 Spacing: Adjusted from 12px */
             align-items: flex-end;
             background-color: var(--container-bg); /* Match chat panel */
             flex-wrap: wrap; /* Allow wrapping on small screens */
@@ -291,11 +343,11 @@
         #userInput {
             flex-grow: 1;
             flex-basis: 300px; /* Base width before growing */
-            padding: 12px 18px;
+            padding: 14px 18px; /* M3 Padding: Adjusted vertical from 12px */
             background-color: var(--input-bg);
             color: var(--text-color);
             border: 1px solid var(--input-border);
-            border-radius: var(--border-radius-xl); /* Use largest radius */
+            border-radius: var(--border-radius-xl); /* Use largest radius for pill shape */
             resize: none;
             font-family: inherit;
             font-size: 1em;
@@ -462,9 +514,7 @@
              margin: 8px 0;
              box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);
         }
-        @media (prefers-color-scheme: dark) {
-            #api-info-content pre { box-shadow: inset 0 1px 2px rgba(255,255,255,0.05); }
-        }
+        html.dark-mode #api-info-content pre { box-shadow: inset 0 1px 2px rgba(255,255,255,0.05); }
          #api-info-content strong { color: var(--primary-color); font-weight: 500; }
 
         /* --- Log Terminal Styles (Adjusted for Sidebar) --- */
@@ -538,11 +588,9 @@
             border-top: 1px dashed var(--border-color); /* Use dashed border */
             text-align: center; /* Center status */
         }
-        @media (prefers-color-scheme: dark) {
-             .log-status {
-                 border-top-color: #454545; /* Darker border in dark mode */
-                 color: #a0a0a0; /* Lighter status text */
-             }
+        html.dark-mode .log-status {
+            border-top-color: #454545; /* Darker border in dark mode */
+            color: #a0a0a0; /* Lighter status text */
         }
 
         /* Code Block Styling within Messages */
@@ -562,14 +610,12 @@
              border-radius: var(--border-radius-sm);
              font-size: 0.9em;
         }
-        @media (prefers-color-scheme: dark) {
-            .message pre {
-                background-color: rgba(255, 255, 255, 0.08);
-                border-color: #454545;
-            }
-             .message code:not(pre > code) {
-                 background-color: rgba(255, 255, 255, 0.1);
-             }
+        html.dark-mode .message pre {
+            background-color: rgba(255, 255, 255, 0.08);
+            border-color: #454545;
+        }
+        html.dark-mode .message code:not(pre > code) {
+            background-color: rgba(255, 255, 255, 0.1);
         }
         .message pre code {
              font-family: "Consolas", "Monaco", monospace;
@@ -623,23 +669,20 @@
              /* Adjust toggle button for fixed sidebar */
              #toggleSidebarButton {
                  position: fixed; /* Fix position relative to viewport */
-                 top: 15px;
-                 right: 15px; /* Place on right edge */
+                 top: 12px; /* Match desktop alignment */
+                 right: 12px; /* Consistent spacing */
                  left: auto;
                  z-index: 101; /* Above sidebar */
                  transform: none; /* Reset transform for fixed positioning */
-                  /* Style change when sidebar is open */
-                  background-color: var(--container-bg); /* Blend with chat panel */
-                  box-shadow: var(--shadow-sm);
-                 /* Ensure visibility */
-                 display: flex;
-             }
-             /* Mobile: Adjust rotation based on panel visibility (transform) */
-             .sidebar-panel.collapsed + #toggleSidebarButton {
-                 transform: rotate(180deg); /* Point left */
-             }
-             .sidebar-panel:not(.collapsed) + #toggleSidebarButton {
-                 transform: rotate(0deg); /* Point right */
+                  /* Mobile: Adjust rotation based on panel visibility (transform) */
+                  .sidebar-panel.collapsed + #toggleSidebarButton {
+                      /* Icon changes in JS, no rotation needed */
+                      transform: none;
+                  }
+                  .sidebar-panel:not(.collapsed) + #toggleSidebarButton {
+                      /* Icon changes in JS, no rotation needed */
+                      transform: none;
+                  }
              }
 
               /* Adjust chat panel to take full width */
@@ -697,6 +740,9 @@
             background-color: var(--container-bg);
             border-bottom: 1px solid var(--border-color);
             gap: 10px;
+            align-items: center; /* Vertically align nav items and toggle */
+            /* Add slight bottom padding to nav bar */
+            padding-bottom: 5px;
         }
         .nav-button {
             padding: 8px 16px;
@@ -704,18 +750,19 @@
             background-color: transparent;
             color: var(--text-color);
             cursor: pointer;
-            border-radius: var(--border-radius-sm) var(--border-radius-sm) 0 0;
+            border-radius: var(--border-radius-xl);
             font-weight: 500;
-            transition: background-color 0.2s, color 0.2s;
-            border-bottom: 3px solid transparent; /* Indicator space */
+            transition: background-color 0.2s, color 0.2s, box-shadow 0.2s;
+            line-height: 1.5;
         }
-        .nav-button:hover {
+        .nav-button:hover:not(.active) {
             background-color: var(--icon-button-hover-bg);
         }
         .nav-button.active {
-            color: var(--primary-color);
-            border-bottom: 3px solid var(--primary-color);
+            color: var(--on-primary-container);
             font-weight: 600;
+            background-color: var(--primary-container);
+            box-shadow: var(--shadow-sm);
         }
 
         /* --- View Container Styles --- */
@@ -758,14 +805,16 @@
             margin: 8px 0;
             box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);
         }
-        @media (prefers-color-scheme: dark) {
-             #health-status-area pre { box-shadow: inset 0 1px 2px rgba(255,255,255,0.05); }
-        }
+        html.dark-mode #health-status-area pre { box-shadow: inset 0 1px 2px rgba(255,255,255,0.05); }
 
         /* Adjust chatbox to grow within chat-view */
         #chatbox {
              flex-grow: 1;
-             /* Remove existing flex-grow from body */
+             box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);
+             white-space: pre-wrap; /* Match pre style */
+             word-wrap: break-word; /* Match pre style */
+             overflow-x: auto; /* Allow horizontal scroll if needed */
+             margin-bottom: 8px; /* Add margin below the block */
         }
 
         /* Adjust API Info Area styles (no longer foldable) */
@@ -797,6 +846,8 @@
             overflow-x: auto; /* Allow horizontal scroll if needed */
             margin-bottom: 8px; /* Add margin below the block */
         }
+        html.dark-mode #health-status-area ul { box-shadow: inset 0 1px 2px rgba(255,255,255,0.05); }
+
         #health-status-area li {
             margin-bottom: 5px;
             word-wrap: break-word;
@@ -806,9 +857,6 @@
             display: inline-block;
             min-width: 140px; /* Align values */
             margin-right: 10px;
-        }
-        @media (prefers-color-scheme: dark) {
-             #health-status-area ul { box-shadow: inset 0 1px 2px rgba(255,255,255,0.05); }
         }
 
         /* Unify heading styles within server-info-view */
@@ -846,7 +894,7 @@
                 position: absolute; /* Absolute relative to chat-panel? No, workspace container? */
                 left: calc(100% - var(--sidebar-width) - 16px); /* Position relative to expanded sidebar */
                 right: auto;
-                top: 15px;
+                top: 12px; /* Match desktop alignment */
                 transform: rotate(0deg); /* Default rotation */
                  /* Reset fixed positioning from mobile */
                 position: absolute;
@@ -867,18 +915,77 @@
             }
         }
 
+        /* Theme Toggle Button Style (Text Version) */
+        #themeToggleButton {
+            background-color: var(--theme-toggle-bg);
+            border: 1px solid var(--border-color); /* Add subtle border */
+            color: var(--theme-toggle-color);
+            cursor: pointer;
+            font-size: 0.85em; /* Smaller font size for text */
+            font-weight: 500;
+            padding: 6px 12px; /* Adjust padding for text */
+            border-radius: var(--border-radius-xl); /* Pill shape */
+            /* line-height: 1; Removed */
+            transition: background-color 0.2s, color 0.2s, border-color 0.2s;
+            margin-left: auto; /* Push to the right */
+            align-self: center; /* Align vertically */
+            white-space: nowrap; /* Prevent text wrapping */
+        }
+        #themeToggleButton:hover {
+            background-color: var(--theme-toggle-hover-bg);
+        }
+        /* Removed ::before rule for icon */
+
+        /* NEW: Header for Server Info view */
+        .server-info-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px; /* Space below header */
+            padding-bottom: 10px; /* Space below title */
+            border-bottom: 1px solid var(--border-color);
+        }
+        .server-info-header h2 {
+            margin: 0; /* Remove default margins */
+            padding: 0;
+            border: none;
+            font-size: 1.1em;
+            font-weight: 600;
+        }
+        #refreshServerInfoButton {
+             /* Use icon button style but maybe slightly smaller */
+             padding: 6px 12px;
+             font-size: 0.9em;
+             height: auto;
+             line-height: 1.4;
+             border-radius: var(--border-radius-md);
+             margin-left: 16px; /* Space from title */
+             flex-shrink: 0;
+        }
+
+        #server-info-view h2 {
+             /* Moved styles to .server-info-header h2 */
+             /* margin-top: 0; */
+             margin-bottom: 20px;
+             padding-bottom: 10px;
+             border-bottom: 1px solid var(--border-color);
+             font-size: 1.1em;
+             font-weight: 600;
+        }
+
     </style>
 </head>
 <body>
     <div class="workspace-container">
         <!-- Chat Panel on the Left -->
         <div class="chat-panel">
-            <h1>AI Studio Proxy Chat</h1>
+            <h1>AI Studio - Neko酱</h1>
 
             <!-- Navigation -->
             <div class="main-nav">
                 <button id="nav-chat" class="nav-button active">聊天</button>
                 <button id="nav-server-info" class="nav-button">服务器信息</button>
+                <button id="themeToggleButton" title="切换主题">浅色</button>
             </div>
 
             <!-- View Container -->
@@ -897,22 +1004,26 @@
 
                 <!-- Server Info View (hidden by default) -->
                 <div id="server-info-view">
-                     <h2>服务器状态与 API 信息</h2>
-
-                     <!-- Health Status Area -->
-                     <div id="health-status-area">
-                         <h3>服务健康检查 (/health)</h3>
-                         <!-- Changed pre to div for easier styling of list -->
-                         <div id="health-status-display">正在加载健康状态...</div>
+                     <!-- NEW: Header Container -->
+                     <div class="server-info-header">
+                         <h3>服务器状态与 API 信息</h3>
+                         <button id="refreshServerInfoButton" class="action-button" title="刷新状态">刷新</button> <!-- Use action-button style -->
                      </div>
 
                      <!-- Moved API Info Area (Removed Details/Summary) -->
-                     <div id="api-info-area">
+                     <div id="api-info-area" class="info-card">
                          <h3>API 调用信息</h3>
                          <div id="api-info-content">
                              <!-- API 信息将加载到这里 -->
                              正在加载 API 信息...
                          </div>
+                     </div>
+
+                     <!-- Health Status Area -->
+                     <div id="health-status-area" class="info-card">
+                         <h3>服务健康检查 (/health)</h3>
+                         <!-- Changed pre to div for easier styling of list -->
+                         <div id="health-status-display">正在加载健康状态...</div>
                      </div>
                 </div>
             </div>
@@ -921,25 +1032,22 @@
 
         <!-- Sidebar Panel on the Right (Now only for Logs) -->
         <div class="sidebar-panel collapsed" id="sidebarPanel">
-            <!-- REMOVED API Info Area from here -->
-
-             <div id="log-area">
-                  <div id="log-area-header">
-                      <span>系统运行日志</span>
-                      <button id="clearLogButton" class="action-button icon-button" title="清空日志">&#x1F5D1;</button> <!-- Trash can icon -->
-                  </div>
-                  <div id="log-terminal-wrapper">
-                     <div id="log-terminal">
-                        <!-- Log entries will be appended here -->
-                     </div>
+            <div id="log-area">
+                 <div id="log-area-header">
+                     <span>系统终端输出日志</span>
+                     <button id="clearLogButton" class="action-button icon-button" title="清空日志">清理</button> <!-- Trash can icon -->
                  </div>
-                 <div id="log-status" class="log-status">[Log Status] 等待连接...</div>
-             </div>
+                 <div id="log-terminal-wrapper">
+                    <div id="log-terminal">
+                       <!-- Log entries will be appended here -->
+                    </div>
+                </div>
+                <div id="log-status" class="log-status">[Log Status] 等待连接...</div>
+            </div>
         </div>
 
-        <!-- Sidebar Panel on the Right (Now only for Logs) -->
-        <!-- Toggle button is now OUTSIDE the panel -->
-        <button id="toggleSidebarButton" title="显示侧边栏">&#x21E4;</button>
+        <!-- Toggle button MOVED OUTSIDE the panel again -->
+        <button id="toggleSidebarButton" title="展开侧边栏">&gt;</button>
 
     </div>
 
@@ -962,6 +1070,11 @@
         const navServerInfoButton = document.getElementById('nav-server-info');
         // Update selector for health status display area
         const healthStatusDisplay = document.getElementById('health-status-display');
+        // Add selector for theme toggle button and html root
+        const themeToggleButton = document.getElementById('themeToggleButton');
+        const htmlRoot = document.getElementById('html-root') || document.documentElement; // Get <html> element
+        // Add selector for refresh button (NEW)
+        const refreshServerInfoButton = document.getElementById('refreshServerInfoButton');
 
         const API_URL = '/v1/chat/completions';
         const MODEL_NAME = 'AI-Studio_Camoufox-Proxy';
@@ -975,6 +1088,67 @@
         // --- Local Storage Keys ---
         const CHAT_HISTORY_KEY = 'chatHistory';
         const LOG_HISTORY_KEY = 'logHistory';
+        const THEME_KEY = 'themePreference'; // Key for theme preference
+
+        // --- Theme Switching ---
+        function applyTheme(theme) {
+            if (theme === 'dark') {
+                htmlRoot.classList.add('dark-mode');
+                themeToggleButton.textContent = '浅色'; // Set text
+                 themeToggleButton.title = '切换到亮色模式';
+            } else {
+                htmlRoot.classList.remove('dark-mode');
+                themeToggleButton.textContent = '深色'; // Set text
+                 themeToggleButton.title = '切换到暗色模式';
+            }
+            // Update the icon via CSS variables now - REMOVED
+        }
+
+        function toggleTheme() {
+            const currentTheme = htmlRoot.classList.contains('dark-mode') ? 'dark' : 'light';
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            applyTheme(newTheme);
+            try {
+                localStorage.setItem(THEME_KEY, newTheme);
+                console.log(`Theme changed to ${newTheme} and saved.`);
+            } catch (e) {
+                console.error("Error saving theme preference:", e);
+                addLogEntry("[错误] 保存主题偏好设置失败。");
+            }
+        }
+
+        function loadThemePreference() {
+             let preferredTheme = 'light'; // Default to light
+             try {
+                 const storedTheme = localStorage.getItem(THEME_KEY);
+                 // Check if stored theme is valid
+                 if (storedTheme === 'dark') {
+                     preferredTheme = 'dark';
+                 } else if (storedTheme === 'light') {
+                     preferredTheme = 'light';
+                 } else {
+                    // If no preference, check system preference
+                    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                         preferredTheme = 'dark';
+                         console.log("No stored theme, using system preference: dark");
+                     } else {
+                         console.log("No stored theme, using default or system preference: light");
+                     }
+                 }
+             } catch (e) {
+                 console.error("Error loading theme preference:", e);
+                 addLogEntry("[错误] 加载主题偏好设置失败。");
+                 // Fallback to system preference on error
+                 if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                     preferredTheme = 'dark';
+                 }
+             }
+             applyTheme(preferredTheme);
+             console.log(`Initial theme set to: ${preferredTheme}`);
+         }
+
+         // Add listener for theme toggle button
+         themeToggleButton.addEventListener('click', toggleTheme);
 
         // --- Sidebar Toggle ---
         toggleSidebarButton.addEventListener('click', () => {
@@ -994,43 +1168,65 @@
         });
 
         function updateToggleButton(isCollapsed) {
-             const isMobile = window.innerWidth <= 768;
-             if (isMobile) {
-                  // On mobile, button always shows/hides sidebar from right
-                  if (isCollapsed) {
-                       toggleSidebarButton.innerHTML = '&#x21E4;'; // Left arrow (Show)
-                       toggleSidebarButton.title = '显示侧边栏';
-                  } else {
-                       toggleSidebarButton.innerHTML = '&#x21E5;'; // Right arrow (Hide)
-                       toggleSidebarButton.title = '隐藏侧边栏';
-                  }
-              } else {
-                  // On desktop, button toggles fixed-width sidebar
-                  if (isCollapsed) {
-                       toggleSidebarButton.innerHTML = '&#x21E4;'; // Left arrow (Show)
-                       toggleSidebarButton.title = '显示侧边栏';
-                  } else {
-                       toggleSidebarButton.innerHTML = '&#x21E5;'; // Right arrow (Hide)
-                       toggleSidebarButton.title = '隐藏侧边栏';
-                  }
-              }
-          }
+             // Use Chevron icons
+             if (isCollapsed) {
+                 toggleSidebarButton.innerHTML = '&gt;'; 
+                 toggleSidebarButton.title = '展开侧边栏';
+             } else {
+                 toggleSidebarButton.innerHTML = '&gt;'; // 按钮旋转180度统一使用同一个'&gt;'
+                 toggleSidebarButton.title = '收起侧边栏';
+             }
+             // Update position for desktop view - REMOVED
+             // Call position function AFTER updating class/icon
+             positionToggleButton();
+        }
+
+        // Function to handle desktop positioning of the toggle button - REMOVED
+        // REINTRODUCED Positioning Logic
+        function positionToggleButton() {
+            const isMobile = window.innerWidth <= 768;
+            const isCollapsed = sidebarPanel.classList.contains('collapsed');
+            const buttonWidth = 28; // Hardcoded button width for simplicity
+            const sidebarWidthString = getComputedStyle(document.documentElement).getPropertyValue('--sidebar-width');
+            const sidebarWidth = parseInt(sidebarWidthString, 10) || 380; // Parse sidebar width
+            const offset = 10; // Desired space from edge
+
+            if (isMobile) {
+                 // Mobile: Fixed position relative to viewport
+                 toggleSidebarButton.style.position = 'fixed';
+                 toggleSidebarButton.style.left = 'auto'; // Ensure left is not set
+                if (isCollapsed) {
+                     // Position near the right edge when collapsed
+                     toggleSidebarButton.style.right = `${offset}px`;
+                 } else {
+                     // Position relative to the expanded sidebar's left edge (from viewport right)
+                     toggleSidebarButton.style.right = `${sidebarWidth + offset}px`;
+                 }
+             } else {
+                 // Desktop: Absolute position relative to workspace-container
+                 toggleSidebarButton.style.position = 'absolute';
+                 toggleSidebarButton.style.right = 'auto'; // Ensure right is not set
+                if (isCollapsed) {
+                     // Position near the right edge when collapsed
+                     toggleSidebarButton.style.left = `calc(100% - ${buttonWidth}px - ${offset}px)`;
+                 } else {
+                     // Position relative to the expanded sidebar's left edge
+                     toggleSidebarButton.style.left = `calc(100% - ${sidebarWidth}px - ${buttonWidth / 2}px)`; // Center on edge
+                 }
+             }
+        }
 
         // --- Check initial sidebar state based on screen width ---
         function checkInitialSidebarState() {
             if (window.innerWidth <= 768) {
                 sidebarPanel.classList.add('collapsed'); // Start collapsed on mobile
-                 toggleSidebarButton.innerHTML = '&#x21E4;'; // Left arrow (Show)
-                 toggleSidebarButton.title = '显示侧边栏';
             } else {
                  sidebarPanel.classList.remove('collapsed'); // Start open on desktop
-                 toggleSidebarButton.innerHTML = '&#x21E5;'; // Right arrow (Hide)
-                 toggleSidebarButton.title = '隐藏侧边栏';
             }
-             // Trigger initial positioning of the toggle button correctly based on collapsed state
-             void toggleSidebarButton.offsetWidth;
              // Update button icon based on initial state
-             updateToggleButton(sidebarPanel.classList.contains('collapsed'));
+              updateToggleButton(sidebarPanel.classList.contains('collapsed'));
+             // Initial position calculation
+             positionToggleButton();
         }
 
         // --- Log Handling ---
@@ -1169,9 +1365,9 @@
             }
         }
 
-        // --- Load API Info ---
+        // --- Load API Info --- (Modified to use displayInfoList)
         async function loadApiInfo() {
-            apiInfoContent.innerHTML = '正在加载 API 信息...'; // Show loading state
+            apiInfoContent.innerHTML = '<div class="info-list"><div><strong>状态:</strong> <span>正在加载 API 信息...</span></div></div>'; // Loading state
             try {
                 const response = await fetch('/api/info');
                 if (!response.ok) {
@@ -1179,15 +1375,18 @@
                 }
                 const data = await response.json();
 
-                apiInfoContent.innerHTML = `
-                    <strong>API Base URL:</strong> <pre><code>${data.api_base_url || '未知'}</code></pre>
-                    <strong>Model Name:</strong> <pre><code>${data.model_name || '未知'}</code></pre>
-                    <strong>API Key Required:</strong> <pre><code>${data.api_key_required ? '是 (请在后端配置)' : '否'}</code></pre>
-                `;
+                // Format data for displayInfoList
+                const formattedData = {
+                    'API Base URL': data.api_base_url ? `<code>${data.api_base_url}</code>` : '未知',
+                    'Model Name': data.model_name ? `<code>${data.model_name}</code>` : '未知',
+                    'API Key Required': data.api_key_required ? '<span style="color: orange;">⚠️ 是 (请在后端配置)</span>' : '<span style="color: green;">✅ 否</span>'
+                };
+
+                displayInfoList(apiInfoContent, formattedData);
 
             } catch (error) {
                 console.error("获取 API 信息失败:", error);
-                apiInfoContent.innerHTML = `<span style="color: var(--error-msg-text);">加载 API 信息失败: ${error.message}</span>`;
+                apiInfoContent.innerHTML = `<div class="info-list"><div><strong style="color: var(--error-msg-text);">错误:</strong> <span style="color: var(--error-msg-text);">加载 API 信息失败: ${error.message}</span></div></div>`;
             }
         }
 
@@ -1201,39 +1400,33 @@
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
                 const data = await response.json();
-                displayHealthStatus(data);
+                displayInfoList(healthStatusDisplay, data); // Use new function
             } catch (error) {
                 console.error("获取健康状态失败:", error);
                 // Update error display
                 if (healthStatusDisplay) {
-                     healthStatusDisplay.innerHTML = `<span style="color: var(--error-msg-text);">加载健康状态失败: ${error.message}</span>`;
+                     healthStatusDisplay.innerHTML = `<div class="info-list"><div><strong style="color: var(--error-msg-text);">错误:</strong> <span style="color: var(--error-msg-text);">加载健康状态失败: ${error.message}</span></div></div>`;
                 }
                  // Also log this error to the main log panel
                  addLogEntry(`[错误] 获取 /health 状态失败: ${error.message}`);
             }
         }
 
-        function displayHealthStatus(data) {
-            if (!healthStatusDisplay) return;
+        // Generic function to display key-value data in a styled list
+        function displayInfoList(targetElement, data) {
+            if (!targetElement) return;
 
-            let html = '<ul>';
+            let html = '<div class="info-list">'; // Use div wrapper with class
             for (const key in data) {
                 if (Object.hasOwnProperty.call(data, key)) {
                     const value = data[key];
-                    // Simple formatting for boolean values
-                    let displayValue = value;
-                    if (typeof value === 'boolean') {
-                         displayValue = value ? '✅ True' : '❌ False';
-                    } else {
-                        // Escape potentially unsafe values (though likely safe from /health)
-                        displayValue = String(value).replace(/</g, "&lt;").replace(/>/g, "&gt;");
-                    }
-                    html += `<li><strong>${key}:</strong> ${displayValue}</li>`;
+                    // Use div for each row, strong for key, span for value
+                    html += `<div><strong>${key}:</strong> <span>${value}</span></div>`;
                 }
             }
-            html += '</ul>';
+            html += '</div>';
 
-            healthStatusDisplay.innerHTML = html;
+            targetElement.innerHTML = html;
         }
 
         // --- Navigation --- (NEW)
@@ -1243,7 +1436,10 @@
                 serverInfoView.style.display = 'none';
                 navChatButton.classList.add('active');
                 navServerInfoButton.classList.remove('active');
-                userInput.focus(); // Focus input when switching to chat
+                // Check if userInput exists before focusing
+                 if (userInput) {
+                    userInput.focus(); // Focus input when switching to chat
+                 }
             } else if (viewId === 'server-info') {
                 chatView.style.display = 'none';
                 serverInfoView.style.display = 'block'; // Simple block display is fine here
@@ -1258,7 +1454,40 @@
         navChatButton.addEventListener('click', () => switchView('chat'));
         navServerInfoButton.addEventListener('click', () => switchView('server-info'));
 
+        // --- Manual Refresh for Server Info --- (NEW)
+        refreshServerInfoButton.addEventListener('click', async () => {
+            refreshServerInfoButton.disabled = true;
+            refreshServerInfoButton.textContent = '刷新中...'; // Indicate loading
+            console.log("Manually refreshing server info...");
+            addLogEntry("[信息] 手动刷新服务器状态...");
+
+            // Clear existing content to show refresh is happening
+            if (apiInfoContent) apiInfoContent.innerHTML = '<div class="info-list"><div><strong>状态:</strong> <span>正在加载 API 信息...</span></div></div>';
+            if (healthStatusDisplay) healthStatusDisplay.innerHTML = '<div class="info-list"><div><strong>状态:</strong> <span>正在加载健康状态...</span></div></div>';
+
+            try {
+                // Fetch both pieces of data concurrently
+                await Promise.all([loadApiInfo(), fetchHealthStatus()]);
+                addLogEntry("[成功] 服务器状态已刷新。");
+            } catch (error) {
+                // Errors should be handled within loadApiInfo/fetchHealthStatus
+                // but log a general failure message here too.
+                console.error("Error during manual refresh:", error);
+                addLogEntry("[错误] 手动刷新服务器状态失败。");
+                // Display a generic error in the UI if needed, although specific functions might already do that.
+                if (apiInfoContent) apiInfoContent.innerHTML = '<div class="info-list"><div><strong style="color: var(--error-msg-text);">错误:</strong> <span style="color: var(--error-msg-text);">刷新失败</span></div></div>';
+                if (healthStatusDisplay) healthStatusDisplay.innerHTML = '<div class="info-list"><div><strong style="color: var(--error-msg-text);">错误:</strong> <span style="color: var(--error-msg-text);">刷新失败</span></div></div>';
+            } finally {
+                // Restore button state after a short delay
+                setTimeout(() => {
+                    refreshServerInfoButton.disabled = false;
+                    refreshServerInfoButton.textContent = '刷新'; // Restore original text
+                }, 300); // 300ms delay
+            }
+        });
+
         // --- Initial Setup ---
+        loadThemePreference(); // Load theme preference first
         initializeChat(); // Initialize chat on load
         // Load API info and Health Status into the correct view
         loadApiInfo();
@@ -1481,6 +1710,11 @@
 
         // --- Render Message Content (Handles Markdown/HTML, Improved) ---
         function renderMessageContent(element, text) {
+             // Only try to render if text is not null or undefined
+             if (text == null) {
+                 element.innerHTML = ''; // Clear if text is null/undefined
+                 return;
+             }
              // Escape HTML to prevent XSS before applying markdown
              const escapeHtml = (unsafe) => {
                  return unsafe
@@ -1491,40 +1725,40 @@
                      .replace(/'/g, "&#039;");
              };
 
-             // Process markdown after escaping HTML
-             let safeText = escapeHtml(text);
+             // Ensure text is a string before processing
+             let safeText = escapeHtml(String(text));
 
              // Code Blocks (```lang\ncode``` or ```\ncode```)
              const blockRegex = /```(?:[\w-]*\n)?([\s\S]+?)\n?```/g;
-             let htmlContent = safeText.replace(blockRegex, (match, code) => {
+             safeText = safeText.replace(blockRegex, (match, code) => {
                   // No need to escape again, already done by escapeHtml
                  return `<pre><code>${code.trim()}</code></pre>`; // Keep escaped code
              });
 
              // Inline Code (`code`)
              const inlineCodeRegex = /`([^`]+)`/g;
-             htmlContent = htmlContent.replace(inlineCodeRegex, '<code>$1</code>'); // Keep escaped content
+             safeText = safeText.replace(inlineCodeRegex, '<code>$1</code>'); // Keep escaped content
 
              // Links ([text](url)) - Need to be careful here not to double-escape
              const linkRegex = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g;
              // Temporarily use placeholders for links before applying other markdown
              const links = [];
-             htmlContent = htmlContent.replace(linkRegex, (match, linkText, url) => {
+             safeText = safeText.replace(linkRegex, (match, linkText, url) => {
                  links.push({ text: linkText, url: url }); // Store original (already escaped) text and raw URL
                  return `__LINK_${links.length - 1}__`;
              });
 
              // Basic Bold (**text** or __text__)
              const boldRegex = /(\*\*|__)(?=\S)([\s\S]*?\S)\1/g;
-             htmlContent = htmlContent.replace(boldRegex, '<strong>$2</strong>');
+             safeText = safeText.replace(boldRegex, '<strong>$2</strong>');
 
              // Basic Italic (*text* or _text_)
              const italicRegex = /(\*|_)(?=\S)([\s\S]*?\S)\1/g;
-             htmlContent = htmlContent.replace(italicRegex, '<em>$2</em>');
+             safeText = safeText.replace(italicRegex, '<em>$2</em>');
 
 
              // Restore links, ensuring URL is safe (already checked for http/https)
-             htmlContent = htmlContent.replace(/__LINK_(\d+)__/g, (match, index) => {
+             safeText = safeText.replace(/__LINK_(\d+)__/g, (match, index) => {
                  const link = links[parseInt(index)];
                  // Re-escape URL just in case, though regex limits it.
                  const safeUrl = escapeHtml(link.url);
@@ -1537,7 +1771,7 @@
              // For now, rely on `white-space: pre-wrap;` in CSS for assistant messages.
              // If more complex markdown parsing is needed, a library is recommended.
 
-             element.innerHTML = htmlContent;
+             element.innerHTML = safeText;
 
              // Add syntax highlighting to code blocks if available
              if (typeof hljs !== 'undefined' && element.querySelectorAll('pre code').length > 0) {
