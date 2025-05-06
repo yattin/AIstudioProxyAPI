@@ -60,7 +60,28 @@ SAVED_AUTH_DIR = os.path.join(AUTH_PROFILES_DIR, 'saved')
 LOG_DIR = os.path.join(os.path.dirname(__file__), 'logs')
 LOG_FILE_PATH = os.path.join(LOG_DIR, 'app.log')
 # -----------------------
+# --- 全局代理设置 ---
+# 在脚本的早期读取代理环境变量
+# Playwright 的 proxy.server 期望一个单独的代理服务器用于 HTTP 和 HTTPS。
+# 通常，如果 HTTPS_PROXY 设置了，我们就用它，否则回退到 HTTP_PROXY。
+# NO_PROXY 环境变量用于指定哪些主机不应通过代理访问。
+PROXY_SERVER_ENV = os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
+NO_PROXY_ENV = os.environ.get('NO_PROXY')
 
+# Playwright 的 proxy bypass 列表使用分号分隔
+PLAYWRIGHT_PROXY_SETTINGS: Optional[Dict[str, str]] = None
+if PROXY_SERVER_ENV:
+    PLAYWRIGHT_PROXY_SETTINGS = {'server': PROXY_SERVER_ENV}
+    if NO_PROXY_ENV:
+        # 将 NO_PROXY_ENV (通常是逗号分隔) 转换为 Playwright 的 bypass 格式 (分号分隔)
+        PLAYWRIGHT_PROXY_SETTINGS['bypass'] = NO_PROXY_ENV.replace(',', ';')
+    print(f"--- 代理配置检测到 ---")
+    print(f"   将使用代理服务器: {PLAYWRIGHT_PROXY_SETTINGS['server']}")
+    if 'bypass' in PLAYWRIGHT_PROXY_SETTINGS:
+        print(f"   绕过代理的主机: {PLAYWRIGHT_PROXY_SETTINGS['bypass']}")
+    print(f"-----------------------")
+else:
+    print("--- 未检测到 HTTP_PROXY 或 HTTPS_PROXY 环境变量，不使用代理 ---")
 # --- Constants ---
 MODEL_NAME = 'AI-Studio_Camoufox-Proxy'
 CHAT_COMPLETION_ID_PREFIX = 'chatcmpl-'
@@ -586,6 +607,13 @@ async def _initialize_page_logic(browser: AsyncBrowser):
             context_options['storage_state'] = storage_state_path_to_use
             print(f"   (使用 storage_state='{os.path.basename(storage_state_path_to_use)}')")
         else: print("   (不使用 storage_state)")
+
+        if PLAYWRIGHT_PROXY_SETTINGS:
+            context_options['proxy'] = PLAYWRIGHT_PROXY_SETTINGS
+            print(f"   (浏览器上下文将使用代理: {PLAYWRIGHT_PROXY_SETTINGS['server']})")
+        else:
+            print("   (浏览器上下文不使用显式代理配置)")
+            
         temp_context = await browser.new_context(**context_options)
 
         found_page = None
