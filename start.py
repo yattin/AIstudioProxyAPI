@@ -269,6 +269,8 @@ def main():
     # 3. 为子进程准备环境
     print("\n--- 步骤 2: 准备环境 ---")
     child_env = copy.deepcopy(os.environ)
+    # 确保 PYTHONIOENCODING 环境变量设置为 utf-8, 确保输出不乱码
+    child_env['PYTHONIOENCODING'] = 'utf-8'
     if proxy_address:
         child_env["HTTP_PROXY"] = proxy_address
         child_env["HTTPS_PROXY"] = proxy_address
