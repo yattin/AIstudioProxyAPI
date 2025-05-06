@@ -557,9 +557,8 @@ python launch_camoufox.py --debug --server-port 2048
 
 以下是一些计划中的改进方向：
 
-*   **Docker 支持**: 提供官方的 `Dockerfile` 以及 Docker Compose 配置，简化容器化部署流程。
-*   **云服务器部署指南**: 提供更详细的在主流云平台（如 AWS, GCP, Azure）上部署和管理服务的指南。
-*   **参数自动化 (探索性)**: 研究通过 Playwright 自动化操作 AI Studio 页面的参数设置区域的可行性。
+*   **Docker支持**: 提供官方的 `Dockerfile` 以及 Docker Compose 配置，简化容器化部署流程。
+*   **参数自动化**: 研究通过 Playwright 自动化操作 AI Studio 页面的参数设置区域的可行性。
 *   **认证更新流程优化**: 探索更便捷的认证文件更新机制，减少手动操作。
 *   **MCP兼容性支持**: 增加健壮性提高对MCP的兼容性。
 
@@ -571,4 +570,4 @@ python launch_camoufox.py --debug --server-port 2048
 
 ## License
 
-[MIT](LICENSE)
+[AGPLv3](LICENSE)
