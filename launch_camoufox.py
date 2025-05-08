@@ -97,7 +97,7 @@ def setup_launcher_logging(log_level=logging.INFO):
 
     # 1. Rotating File Handler (使用详细格式)
     file_handler = logging.handlers.RotatingFileHandler(
-        LOG_FILE_PATH, maxBytes=2*1024*1024, backupCount=3, encoding='utf-8' # 文件小一点
+        LOG_FILE_PATH, maxBytes=2*1024*1024, backupCount=3, encoding='utf-8', mode='w' # 文件小一点
     )
     file_handler.setFormatter(file_log_formatter) # <-- 使用详细格式
     launcher_logger.addHandler(file_handler)

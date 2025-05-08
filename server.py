@@ -241,7 +241,7 @@ def setup_logging(log_level=logging.INFO, redirect_print=False): # <-- 默认改
 
     # 1. Rotating File Handler (使用详细格式)
     file_handler = logging.handlers.RotatingFileHandler(
-        LOG_FILE_PATH, maxBytes=5*1024*1024, backupCount=5, encoding='utf-8'
+        LOG_FILE_PATH, maxBytes=5*1024*1024, backupCount=5, encoding='utf-8', mode='w'
     )
     file_handler.setFormatter(file_log_formatter)
     root_logger.addHandler(file_handler)
@@ -716,6 +716,7 @@ async def _initialize_page_logic(browser: AsyncBrowser):
             # 获取模型名称
             model_name = await model_wrapper_locator.inner_text()
             print(f"-> 🤖 当前模型: {model_name}")
+            logger.info(f"(🤖 当前模型) {model_name}")
             result_page = found_page
             result_ready = True
             print(f"✅ 页面逻辑初始化成功。")
