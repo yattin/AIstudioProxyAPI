@@ -287,6 +287,16 @@ def main():
     print("\n--- 步骤 3: 启动主程序 (无头模式) ---")
     script_filename = "launch_camoufox.py"
     python_executable = sys.executable # 使用运行此脚本的同一个 Python 解释器
+    if sys.platform == "win32":
+        # 尝试找到 pythonw.exe。pythonw.exe 是一个不打开控制台窗口的 python 版本。
+        _pythonw_candidate = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+        if os.path.exists(_pythonw_candidate):
+            print(f"  提示: 在 Windows 上，将尝试使用 '{_pythonw_candidate}' 启动子进程以确保无窗口。")
+            python_executable = _pythonw_candidate
+        else:
+            print(f"  警告: 未在 '{os.path.dirname(sys.executable)}' 目录下找到 pythonw.exe。")
+            print(f"        将继续使用默认的 '{sys.executable}'。如果子进程仍然显示窗口，这可能是原因之一。")
+            print(f"        确保 pythonw.exe 与 python.exe 在同一目录通常可以解决此问题。")
 
     # --- 构造 script_to_run 的绝对路径 ---
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -341,7 +351,9 @@ def main():
         print("--------------------------")
 
     # 可选：如果希望启动器窗口停留一会，可以取消下面这行的注释
-    input("按回车键退出此启动器脚本...")
+    # input("按回车键退出此启动器脚本...") # 注释掉此行，使启动器在启动子进程后自动退出
+    print("启动器任务完成，将在几秒后自动退出...")
+    time.sleep(3) # 短暂延迟，让用户有机会看到消息
 
 if __name__ == "__main__":
     main()

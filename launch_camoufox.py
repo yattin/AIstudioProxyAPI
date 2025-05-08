@@ -355,6 +355,7 @@ def start_main_server(ws_endpoint, launch_mode, server_port, active_auth_json=No
 
     env = os.environ.copy()
     env['CAMOUFOX_WS_ENDPOINT'] = ws_endpoint
+    env['PYTHONIOENCODING'] = 'utf-8' # 确保输出使用 UTF-8
     env['LAUNCH_MODE'] = launch_mode # 传递启动模式
     if active_auth_json:
         env['ACTIVE_AUTH_JSON_PATH'] = active_auth_json # 传递激活的JSON路径
@@ -628,12 +629,22 @@ if __name__ == "__main__":
             'encoding': 'utf-8', # 显式指定编码
             'errors': 'ignore' # 忽略解码错误
         }
+        # 为子进程准备环境，确保 UTF-8 输出
+        child_env_debug = os.environ.copy()
+        child_env_debug['PYTHONIOENCODING'] = 'utf-8'
+        popen_kwargs['env'] = child_env_debug
+
         if sys.platform != "win32":
             popen_kwargs['start_new_session'] = True
         else:
-            popen_kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
+            # 确保子进程在后台运行且无窗口
+            popen_kwargs['creationflags'] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
 
         camoufox_proc = subprocess.Popen(cmd, **popen_kwargs)
+
+
+
+
 
         print(f"   Camoufox 子进程已启动 (PID: {camoufox_proc.pid})。等待 WebSocket 端点输出 (最多 {ENDPOINT_CAPTURE_TIMEOUT} 秒)...", flush=True)
 
@@ -750,10 +761,16 @@ if __name__ == "__main__":
                 'encoding': 'utf-8',
                 'errors': 'ignore'
             }
+            # 为子进程准备环境，确保 UTF-8 输出
+            child_env_headless = os.environ.copy()
+            child_env_headless['PYTHONIOENCODING'] = 'utf-8'
+            popen_kwargs['env'] = child_env_headless
+
             if sys.platform != "win32":
                 popen_kwargs['start_new_session'] = True
             else:
-                popen_kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
+                # 确保子进程在后台运行且无窗口
+                popen_kwargs['creationflags'] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
 
             camoufox_proc = subprocess.Popen(cmd, **popen_kwargs)
             print(f"   Camoufox 子进程已启动 (PID: {camoufox_proc.pid})。等待 WebSocket 端点输出 (最多 {ENDPOINT_CAPTURE_TIMEOUT} 秒)...", flush=True)

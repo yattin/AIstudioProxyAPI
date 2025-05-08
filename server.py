@@ -710,6 +710,12 @@ async def _initialize_page_logic(browser: AsyncBrowser):
             await expect_async(input_wrapper_locator).to_be_visible(timeout=35000)
             await expect_async(found_page.locator(INPUT_SELECTOR)).to_be_visible(timeout=10000)
             print("-> ✅ 核心输入区域可见。")
+            # 使用更精确的选择器定位模型名称元素
+            # 添加first()确保只选择第一个匹配的元素，避免严格模式违规
+            model_wrapper_locator = found_page.locator('#mat-select-value-0 mat-select-trigger').first
+            # 获取模型名称
+            model_name = await model_wrapper_locator.inner_text()
+            print(f"-> 🤖 当前模型: {model_name}")
             result_page = found_page
             result_ready = True
             print(f"✅ 页面逻辑初始化成功。")
