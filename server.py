@@ -240,6 +240,15 @@ def setup_logging(log_level=logging.INFO, redirect_print=False): # <-- 默认改
     root_logger.setLevel(log_level) # <-- Revert back to INFO (or original log_level)
 
     # 1. Rotating File Handler (使用详细格式)
+    # 确保每次启动时 app.log 文件都是全新的
+    if os.path.exists(LOG_FILE_PATH):
+        try:
+            os.remove(LOG_FILE_PATH)
+            # 诊断信息输出到原始 stderr
+            print(f"INFO: 旧的日志文件 {LOG_FILE_PATH} 已在日志设置前被移除。", file=sys.__stderr__)
+        except OSError as e:
+            # 删除失败则依赖 mode='w'
+            print(f"警告: 尝试移除旧的日志文件 {LOG_FILE_PATH} 失败: {e}。将依赖 mode='w' 进行截断。", file=sys.__stderr__)
     file_handler = logging.handlers.RotatingFileHandler(
         LOG_FILE_PATH, maxBytes=5*1024*1024, backupCount=5, encoding='utf-8', mode='w'
     )

@@ -96,6 +96,18 @@ def setup_launcher_logging(log_level=logging.INFO):
     launcher_logger.propagate = False
 
     # 1. Rotating File Handler (使用详细格式)
+    # 确保每次启动时日志文件都是全新的。
+    # RotatingFileHandler 的 mode='w' 应该在初始化时截断文件，
+    # 但为了应对可能的句柄未释放或平台特定行为导致追加的问题，
+    # 我们在此显式尝试删除旧文件。
+    if os.path.exists(LOG_FILE_PATH):
+        try:
+            os.remove(LOG_FILE_PATH)
+            # 这条诊断信息会输出到 stderr，因为它在文件日志处理器设置之前。
+            print(f"INFO: 旧的日志文件 {LOG_FILE_PATH} 已在日志设置前被移除。", file=sys.stderr)
+        except OSError as e:
+            # 如果删除失败（例如，文件被锁定），则依赖 RotatingFileHandler 的 mode='w'。
+            print(f"警告: 尝试移除旧的日志文件 {LOG_FILE_PATH} 失败: {e}。将依赖 mode='w' 进行截断。", file=sys.stderr)
     file_handler = logging.handlers.RotatingFileHandler(
         LOG_FILE_PATH, maxBytes=2*1024*1024, backupCount=3, encoding='utf-8', mode='w' # 文件小一点
     )
