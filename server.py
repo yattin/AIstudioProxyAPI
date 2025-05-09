@@ -1,37 +1,42 @@
-# server.py
+# server.py (最终集成版 - 作为模块供 launch_camoufox.py 使用)
+
 import asyncio
 import random
 import time
 import json
-from typing import List, Optional, Dict, Any, Union, AsyncGenerator, Tuple, Callable # Add Tuple, Callable
+from typing import List, Optional, Dict, Any, Union, AsyncGenerator, Tuple, Callable
 import os
 import traceback
 from contextlib import asynccontextmanager
 import sys
 import platform
-# --- 新增: 日志相关导入 ---
 import logging
 import logging.handlers
-# -----------------------
-from asyncio import Queue, Lock, Future, Task, Event # Add Queue, Lock, Future, Task, Event
+import socket # 保留 socket 以便在 __main__ 中进行简单的直接运行提示
+from asyncio import Queue, Lock, Future, Task, Event
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
-# --- 新增: WebSocket 导入 ---
 from fastapi import WebSocket, WebSocketDisconnect
-# -------------------------
-from pydantic import BaseModel, Field
+from pydantic import BaseModel # Field 未使用，可以移除
 from playwright.async_api import Page as AsyncPage, Browser as AsyncBrowser, Playwright as AsyncPlaywright, Error as PlaywrightAsyncError, expect as expect_async, BrowserContext as AsyncBrowserContext, Locator
 from playwright.async_api import async_playwright
-from urllib.parse import urljoin, urlparse # << Add urlparse
+from urllib.parse import urljoin, urlparse
 import uuid
 import datetime
 
-# --- 全局日志控制配置 ---
+# --- 全局添加标记常量 ---
+# 这些标记主要用于 server.py 内部 print 和 input 的协调。
+# 如果 print 输出到控制台 (SERVER_REDIRECT_PRINT='false')，launch_camoufox.py 不需要关心它们。
+# 如果 print 被重定向到日志，这些标记也会进入日志。
+USER_INPUT_START_MARKER_SERVER = "__USER_INPUT_START__"
+USER_INPUT_END_MARKER_SERVER = "__USER_INPUT_END__"
+
+# --- 全局日志控制配置 (这些主要影响 lifespan 中的行为) ---
 DEBUG_LOGS_ENABLED = os.environ.get('DEBUG_LOGS_ENABLED', 'false').lower() in ('true', '1', 'yes')
 TRACE_LOGS_ENABLED = os.environ.get('TRACE_LOGS_ENABLED', 'false').lower() in ('true', '1', 'yes')
-LOG_INTERVAL = int(os.environ.get('LOG_INTERVAL', '20'))
-LOG_TIME_INTERVAL = float(os.environ.get('LOG_TIME_INTERVAL', '3.0'))
+# LOG_INTERVAL = int(os.environ.get('LOG_INTERVAL', '20')) # 这些似乎未在 server.py 中使用
+# LOG_TIME_INTERVAL = float(os.environ.get('LOG_TIME_INTERVAL', '3.0'))
 
 # --- Configuration ---
 AI_STUDIO_URL_PATTERN = 'aistudio.google.com/'
@@ -47,41 +52,31 @@ CLEAR_CHAT_VERIFY_TIMEOUT_MS = 5000
 CLEAR_CHAT_VERIFY_INTERVAL_MS = 400
 CLICK_TIMEOUT_MS = 5000
 CLIPBOARD_READ_TIMEOUT_MS = 5000
-PSEUDO_STREAM_DELAY = 0.001
+PSEUDO_STREAM_DELAY = 0.001 # 可以根据需要调整这个值
 EDIT_MESSAGE_BUTTON_SELECTOR = 'ms-chat-turn:last-child .actions-container button.toggle-edit-button'
 MESSAGE_TEXTAREA_SELECTOR = 'ms-chat-turn:last-child ms-text-chunk ms-autosize-textarea'
 FINISH_EDIT_BUTTON_SELECTOR = 'ms-chat-turn:last-child .actions-container button.toggle-edit-button[aria-label="Stop editing"]'
 
-# --- Configuration ---
 AUTH_PROFILES_DIR = os.path.join(os.path.dirname(__file__), 'auth_profiles')
 ACTIVE_AUTH_DIR = os.path.join(AUTH_PROFILES_DIR, 'active')
 SAVED_AUTH_DIR = os.path.join(AUTH_PROFILES_DIR, 'saved')
-# --- 新增: 日志文件路径 ---
 LOG_DIR = os.path.join(os.path.dirname(__file__), 'logs')
-LOG_FILE_PATH = os.path.join(LOG_DIR, 'app.log')
-# -----------------------
-# --- 全局代理设置 ---
-# 在脚本的早期读取代理环境变量
-# Playwright 的 proxy.server 期望一个单独的代理服务器用于 HTTP 和 HTTPS。
-# 通常，如果 HTTPS_PROXY 设置了，我们就用它，否则回退到 HTTP_PROXY。
-# NO_PROXY 环境变量用于指定哪些主机不应通过代理访问。
+APP_LOG_FILE_PATH = os.path.join(LOG_DIR, 'app.log') # server.py 的日志文件
+
+# --- 全局代理设置 (将在 lifespan 中通过 logger 输出) ---
 PROXY_SERVER_ENV = os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
 NO_PROXY_ENV = os.environ.get('NO_PROXY')
+# --- 新增: 环境变量控制是否自动保存认证 ---
+AUTO_SAVE_AUTH = os.environ.get('AUTO_SAVE_AUTH', '').lower() in ('1', 'true', 'yes')
+AUTH_SAVE_TIMEOUT = int(os.environ.get('AUTH_SAVE_TIMEOUT', '30'))  # 默认30秒超时
 
-# Playwright 的 proxy bypass 列表使用分号分隔
 PLAYWRIGHT_PROXY_SETTINGS: Optional[Dict[str, str]] = None
 if PROXY_SERVER_ENV:
     PLAYWRIGHT_PROXY_SETTINGS = {'server': PROXY_SERVER_ENV}
     if NO_PROXY_ENV:
-        # 将 NO_PROXY_ENV (通常是逗号分隔) 转换为 Playwright 的 bypass 格式 (分号分隔)
         PLAYWRIGHT_PROXY_SETTINGS['bypass'] = NO_PROXY_ENV.replace(',', ';')
-    print(f"--- 代理配置检测到 ---")
-    print(f"   将使用代理服务器: {PLAYWRIGHT_PROXY_SETTINGS['server']}")
-    if 'bypass' in PLAYWRIGHT_PROXY_SETTINGS:
-        print(f"   绕过代理的主机: {PLAYWRIGHT_PROXY_SETTINGS['bypass']}")
-    print(f"-----------------------")
-else:
-    print("--- 未检测到 HTTP_PROXY 或 HTTPS_PROXY 环境变量，不使用代理 ---")
+# 移除这里的 print 语句
+
 # --- Constants ---
 MODEL_NAME = 'AI-Studio_Camoufox-Proxy'
 CHAT_COMPLETION_ID_PREFIX = 'chatcmpl-'
@@ -99,66 +94,24 @@ MORE_OPTIONS_BUTTON_SELECTOR = 'div.actions-container div ms-chat-turn-options d
 COPY_MARKDOWN_BUTTON_SELECTOR = 'div[class*="mat-menu"] div > button:nth-child(4)'
 COPY_MARKDOWN_BUTTON_SELECTOR_ALT = 'div[role="menu"] button:has-text("Copy Markdown")'
 
-# --- Global State ---
+
+# --- Global State (由 lifespan 管理初始化和清理) ---
 playwright_manager: Optional[AsyncPlaywright] = None
 browser_instance: Optional[AsyncBrowser] = None
 page_instance: Optional[AsyncPage] = None
 is_playwright_ready = False
 is_browser_connected = False
 is_page_ready = False
-is_initializing = False
+is_initializing = False # 这个状态由 lifespan 控制
 
 request_queue: Queue = Queue()
 processing_lock: Lock = Lock()
 worker_task: Optional[Task] = None
-# --- 新增: WebSocket 连接管理器 ---
-class WebSocketConnectionManager:
-    def __init__(self):
-        self.active_connections = {}  # 使用字典，client_id 作为键，WebSocket 作为值
 
-    async def connect(self, client_id, websocket):
-        self.active_connections[client_id] = websocket
-        logger.info(f"WebSocket 客户端已连接: {client_id}")
+logger = logging.getLogger("AIStudioProxyServer") # server.py 使用的 logger
+log_ws_manager = None # 将在 lifespan 中初始化
 
-    def disconnect(self, client_id):
-        if client_id in self.active_connections:
-            del self.active_connections[client_id]
-            logger.info(f"WebSocket 客户端已断开: {client_id}")
-
-    async def broadcast(self, message):
-        # 使用字典的 items() 创建副本进行迭代，防止在迭代过程中修改字典
-        disconnected_clients = []
-        active_conns_copy = list(self.active_connections.items())
-        # logger.debug(f"[WS Broadcast] Preparing to broadcast to {len(active_conns_copy)} client(s). Message starts with: {message[:80]}...") # Debug log (Removed)
-
-        for client_id, connection in active_conns_copy:
-            # logger.debug(f"[WS Broadcast] Attempting to send to client {client_id}...") # Debug log (Removed)
-            try:
-                await connection.send_text(message)
-                # logger.debug(f"[WS Broadcast] Sent successfully to client {client_id}.") # Debug log (Removed)
-            except WebSocketDisconnect:
-                logger.info(f"[WS Broadcast] Client {client_id} disconnected during broadcast.") # Info log
-                disconnected_clients.append(client_id)
-            except RuntimeError as e: # 处理连接已关闭的错误
-                 if "Connection is closed" in str(e):
-                     logger.info(f"[WS Broadcast] Client {client_id} connection already closed.") # Info log
-                     disconnected_clients.append(client_id)
-                 else:
-                     logger.error(f"广播到 WebSocket {client_id} 时出错 (RuntimeError): {e}")
-                     disconnected_clients.append(client_id) # Also disconnect on other RuntimeErrors
-            except Exception as e:
-                logger.error(f"广播到 WebSocket {client_id} 时出错 (Exception): {e}")
-                disconnected_clients.append(client_id)
-        # 清理已断开的连接
-        if disconnected_clients:
-             logger.info(f"[WS Broadcast] Cleaning up disconnected clients: {disconnected_clients}") # Info log
-             for client_id in disconnected_clients:
-                 self.disconnect(client_id)
-
-log_ws_manager = WebSocketConnectionManager()
-# ------------------------------------
-
-# --- 新增: StreamToLogger 类，用于重定向 print ---
+# --- StreamToLogger, WebSocketConnectionManager, WebSocketLogHandler ---
 class StreamToLogger:
     """
     伪文件流对象，将写入重定向到日志实例。
@@ -173,7 +126,7 @@ class StreamToLogger:
             temp_linebuf = self.linebuf + buf
             self.linebuf = ''
             for line in temp_linebuf.splitlines(True):
-                if line.endswith(('\\n', '\\r')):
+                if line.endswith(('\n', '\r')): # 兼容不同系统的换行符
                     self.logger.log(self.log_level, line.rstrip())
                 else:
                     self.linebuf += line # 保留不完整行
@@ -193,117 +146,192 @@ class StreamToLogger:
         # 一些库检查这个，返回 False 避免问题
         return False
 
-# --- 新增: WebSocketLogHandler 类 ---
+class WebSocketConnectionManager:
+    """管理所有活动的 WebSocket 日志连接。"""
+    def __init__(self):
+        self.active_connections: Dict[str, WebSocket] = {}
+
+    async def connect(self, client_id: str, websocket: WebSocket):
+        """接受并注册一个新的 WebSocket 连接。"""
+        await websocket.accept() # 首先接受连接
+        self.active_connections[client_id] = websocket
+        logger.info(f"WebSocket 日志客户端已连接: {client_id}")
+        # 发送欢迎/连接成功消息
+        try:
+            await websocket.send_text(json.dumps({
+                "type": "connection_status",
+                "status": "connected",
+                "message": "已连接到实时日志流。",
+                "timestamp": datetime.datetime.now().isoformat()
+            }))
+        except Exception as e: # 处理发送欢迎消息时可能发生的错误
+            logger.warning(f"向 WebSocket 客户端 {client_id} 发送欢迎消息失败: {e}")
+            # 即使发送欢迎消息失败，连接仍然被认为是建立的
+
+    def disconnect(self, client_id: str):
+        """注销一个 WebSocket 连接。"""
+        if client_id in self.active_connections:
+            del self.active_connections[client_id]
+            logger.info(f"WebSocket 日志客户端已断开: {client_id}")
+
+    async def broadcast(self, message: str):
+        """向所有活动的 WebSocket 连接广播消息。"""
+        if not self.active_connections:
+            return
+
+        disconnected_clients = []
+        # 创建连接字典的副本进行迭代，以允许在迭代过程中安全地修改原始字典
+        active_conns_copy = list(self.active_connections.items())
+
+        for client_id, connection in active_conns_copy:
+            try:
+                await connection.send_text(message)
+            except WebSocketDisconnect:
+                logger.info(f"[WS Broadcast] 客户端 {client_id} 在广播期间断开连接。")
+                disconnected_clients.append(client_id)
+            except RuntimeError as e: # 例如 "Connection is closed"
+                 if "Connection is closed" in str(e):
+                     logger.info(f"[WS Broadcast] 客户端 {client_id} 的连接已关闭。")
+                     disconnected_clients.append(client_id)
+                 else:
+                     logger.error(f"广播到 WebSocket {client_id} 时发生运行时错误: {e}")
+                     disconnected_clients.append(client_id) # 也将此类错误视为断开连接
+            except Exception as e:
+                logger.error(f"广播到 WebSocket {client_id} 时发生未知错误: {e}")
+                disconnected_clients.append(client_id) # 也将此类错误视为断开连接
+
+        # 清理在广播过程中发现已断开的连接
+        if disconnected_clients:
+             # logger.info(f"[WS Broadcast] 正在清理已断开的客户端: {disconnected_clients}") # disconnect 方法会记录
+             for client_id_to_remove in disconnected_clients:
+                 self.disconnect(client_id_to_remove) # 使用自身的 disconnect 方法
+
 class WebSocketLogHandler(logging.Handler):
     """
-    将日志记录广播到 WebSocket 客户端的处理程序。
+    一个 logging.Handler 子类，用于将日志记录广播到所有通过 WebSocket 连接的客户端。
     """
     def __init__(self, manager: WebSocketConnectionManager):
         super().__init__()
         self.manager = manager
-        self.formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s') # WebSocket 使用简单格式
+        # 为 WebSocket 日志条目定义一个简单的格式
+        self.formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 
     def emit(self, record: logging.LogRecord):
-        # 仅当有连接时才尝试广播
-        if self.manager.active_connections:
+        """格式化日志记录并通过 WebSocket 管理器广播它。"""
+        # 仅当 manager 有效且有活动连接时才尝试广播
+        if self.manager and self.manager.active_connections:
             try:
-                log_entry = self.format(record)
-                # 使用 asyncio.create_task 在事件循环中异步发送
+                log_entry_str = self.format(record)
+                # 使用 asyncio.create_task 在事件循环中异步发送，避免阻塞日志记录器
                 try:
-                     loop = asyncio.get_running_loop()
-                     loop.create_task(self.manager.broadcast(log_entry))
-                except RuntimeError:
-                     # 如果没有运行的事件循环（例如在关闭期间），则忽略
+                     current_loop = asyncio.get_running_loop()
+                     current_loop.create_task(self.manager.broadcast(log_entry_str))
+                except RuntimeError: # 如果没有正在运行的事件循环 (例如在关闭期间)
+                     # 可以选择在此处记录一个普通 print 错误，或静默失败
+                     # print(f"WebSocketLogHandler: 没有正在运行的事件循环来广播日志。", file=sys.__stderr__)
                      pass
             except Exception as e:
-                # 这里打印错误到原始 stderr，以防日志系统本身出问题
+                # 如果格式化或广播任务创建失败，打印错误到原始 stderr
                 print(f"WebSocketLogHandler 错误: 广播日志失败 - {e}", file=sys.__stderr__)
 
-# --- 新增: 日志设置函数 ---
-def setup_logging(log_level=logging.INFO, redirect_print=False): # <-- 默认改为 False
-    """配置全局日志记录"""
-    # ... (目录创建不变) ...
+# --- 日志设置函数 (将在 lifespan 中调用) ---
+def setup_server_logging(log_level_name: str = "INFO", redirect_print_str: str = "false"):
+    """配置 AIStudioProxyServer 的日志记录。由 lifespan 调用。"""
+    global logger, log_ws_manager # 确保引用全局变量
+
+    log_level = getattr(logging, log_level_name.upper(), logging.INFO)
+    redirect_print = redirect_print_str.lower() in ('true', '1', 'yes')
+
+    # 确保日志相关目录存在
     os.makedirs(LOG_DIR, exist_ok=True)
-    os.makedirs(ACTIVE_AUTH_DIR, exist_ok=True)
+    os.makedirs(ACTIVE_AUTH_DIR, exist_ok=True) # 认证目录也在此确保
     os.makedirs(SAVED_AUTH_DIR, exist_ok=True)
 
-    # --- 文件日志格式 (详细) ---
-    file_log_formatter = logging.Formatter(
-        '%(asctime)s - %(levelname)s - [%(name)s:%(funcName)s:%(lineno)d] - %(message)s'
-    )
-    # --- 控制台日志格式 (简洁) ---
-    console_log_formatter = logging.Formatter('%(message)s')
+    file_log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(name)s:%(funcName)s:%(lineno)d] - %(message)s')
 
-    root_logger = logging.getLogger()
-    if root_logger.hasHandlers():
-        root_logger.handlers.clear()
-    root_logger.setLevel(log_level) # <-- Revert back to INFO (or original log_level)
+    # logger 已在全局定义: logger = logging.getLogger("AIStudioProxyServer")
+    if logger.hasHandlers(): # 清理旧的处理器，以防重复配置
+        logger.handlers.clear()
+    logger.setLevel(log_level)
+    logger.propagate = False # 通常不希望此 logger 的消息向上传播到根 logger，以避免重复处理
 
-    # 1. Rotating File Handler (使用详细格式)
-    # 确保每次启动时 app.log 文件都是全新的
-    if os.path.exists(LOG_FILE_PATH):
+    # 1. 文件处理器 (RotatingFileHandler)
+    if os.path.exists(APP_LOG_FILE_PATH):
         try:
-            os.remove(LOG_FILE_PATH)
-            # 诊断信息输出到原始 stderr
-            print(f"INFO: 旧的日志文件 {LOG_FILE_PATH} 已在日志设置前被移除。", file=sys.__stderr__)
+            os.remove(APP_LOG_FILE_PATH)
         except OSError as e:
-            # 删除失败则依赖 mode='w'
-            print(f"警告: 尝试移除旧的日志文件 {LOG_FILE_PATH} 失败: {e}。将依赖 mode='w' 进行截断。", file=sys.__stderr__)
+            print(f"警告 (setup_server_logging): 尝试移除旧的 app.log 文件 '{APP_LOG_FILE_PATH}' 失败: {e}。将依赖 mode='w' 进行截断。", file=sys.__stderr__)
     file_handler = logging.handlers.RotatingFileHandler(
-        LOG_FILE_PATH, maxBytes=5*1024*1024, backupCount=5, encoding='utf-8', mode='w'
+        APP_LOG_FILE_PATH, maxBytes=5*1024*1024, backupCount=5, encoding='utf-8', mode='w'
     )
     file_handler.setFormatter(file_log_formatter)
-    root_logger.addHandler(file_handler)
+    logger.addHandler(file_handler)
 
-    # 2. Stream Handler (to stderr, 使用简洁格式)
-    stream_handler = logging.StreamHandler(sys.__stderr__) # 直接输出到原始 stderr
-    stream_handler.setFormatter(console_log_formatter) # <-- 使用简洁格式
-    root_logger.addHandler(stream_handler)
+    # 2. WebSocket 处理器
+    if log_ws_manager is None: # log_ws_manager 应在 lifespan 中初始化并传递到这里，或通过全局变量访问
+        # 如果在此阶段 log_ws_manager 仍为 None，说明初始化流程有问题
+        print("严重警告 (setup_server_logging): log_ws_manager 未初始化！WebSocket 日志功能将不可用。", file=sys.__stderr__)
+    else:
+        ws_handler = WebSocketLogHandler(log_ws_manager)
+        ws_handler.setLevel(logging.INFO) # WebSocket 日志可以有自己的级别，例如只发送 INFO 及以上
+        logger.addHandler(ws_handler)
 
-    # 3. WebSocket Handler (格式保持不变或根据需要调整)
-    ws_handler = WebSocketLogHandler(log_ws_manager)
-    ws_handler.setLevel(logging.INFO) # 可以为 WS Handler 设置不同的级别
-    root_logger.addHandler(ws_handler)
+    # 新增: 3. 控制台处理器 (StreamHandler) - 将 server.py 的 logger 输出到控制台
+    # 这样 logger.info 等调用也会显示在终端。
+    # 为了与 launch_camoufox.py 的日志有所区分，格式中添加 [SERVER] 标记。
+    console_server_log_formatter = logging.Formatter('%(asctime)s - %(levelname)s [SERVER] - %(message)s')
+    console_handler = logging.StreamHandler(sys.stderr) # 输出到标准错误流
+    console_handler.setFormatter(console_server_log_formatter)
+    console_handler.setLevel(log_level) # 使用与 logger 相同的日志级别
+    logger.addHandler(console_handler)
 
-    # --- 按需重定向 print ---
+    # 4. 按需重定向 print 输出 (原为第3点)
+    original_stdout = sys.stdout # 保存原始流，以便后续恢复
+    original_stderr = sys.stderr
+
     if redirect_print:
-        print("--- 注意：正在重定向 print 输出到日志系统 ---", file=sys.__stderr__) # 加个提示
-        # 标准输出重定向 (可选，如果希望 print 也进日志文件)
-        stdout_logger = logging.getLogger('stdout')
-        stdout_logger.propagate = False # 通常不希望 print 的内容重复出现在根 logger 的控制台输出
-        stdout_logger.addHandler(file_handler) # print 内容进文件
-        # 如果需要 print 也进 WS，取消下一行注释
-        # stdout_logger.addHandler(ws_handler)
-        stdout_logger.setLevel(logging.INFO)
-        sys.stdout = StreamToLogger(stdout_logger, logging.INFO)
+        # 使用原始 stderr 打印此提示，确保用户能看到，即使 logger 可能也配置了 StreamHandler 到 stderr
+        print("--- 注意：server.py 正在将其 print 输出重定向到日志系统 (文件、WebSocket 和控制台记录器) ---", file=original_stderr)
+        
+        # 创建特定的 logger 实例来处理重定向的 stdout 和 stderr
+        # 这些 logger 将继承 AIStudioProxyServer logger 的处理器
+        stdout_redirect_logger = logging.getLogger("AIStudioProxyServer.stdout")
+        stdout_redirect_logger.setLevel(logging.INFO) # stdout 内容通常是 INFO 级别
+        stdout_redirect_logger.propagate = True # 允许传播到 AIStudioProxyServer logger
+        sys.stdout = StreamToLogger(stdout_redirect_logger, logging.INFO)
 
-        # 标准错误重定向 (同上)
-        stderr_logger = logging.getLogger('stderr')
-        stderr_logger.propagate = False
-        stderr_logger.addHandler(file_handler) # stderr 内容进文件
-        # 如果需要 stderr 也进 WS，取消下一行注释
-        # stderr_logger.addHandler(ws_handler)
-        stderr_logger.setLevel(logging.ERROR)
-        sys.stderr = StreamToLogger(stderr_logger, logging.ERROR)
-    # else: 不重定向，print 直接输出到终端
-
-    # --- 设置库日志级别 (保持不变) ---
-    # ... (设置 uvicorn, websockets, playwright 日志级别) ...
-    logging.getLogger("uvicorn").setLevel(logging.INFO)
-    logging.getLogger("uvicorn.error").setLevel(logging.INFO) # uvicorn 错误仍然显示
-    logging.getLogger("uvicorn.access").setLevel(logging.INFO) # <-- 修改回 INFO
-    logging.getLogger("websockets").setLevel(logging.INFO)
-    logging.getLogger("playwright").setLevel(logging.INFO) # playwright 日志也减少一些
+        stderr_redirect_logger = logging.getLogger("AIStudioProxyServer.stderr")
+        stderr_redirect_logger.setLevel(logging.ERROR) # stderr 内容通常是 ERROR 级别
+        stderr_redirect_logger.propagate = True
+        sys.stderr = StreamToLogger(stderr_redirect_logger, logging.ERROR)
+    else:
+        # 即使不重定向，也通过原始 stderr 记录这个状态，以明确告知用户
+        print("--- server.py 的 print 输出未被重定向到日志系统 (将使用原始 stdout/stderr) ---", file=original_stderr)
 
 
-    root_logger.info("=" * 30 + " 日志系统已初始化 " + "=" * 30)
-    root_logger.info(f"日志级别: {logging.getLevelName(log_level)}")
-    root_logger.info(f"日志文件: {LOG_FILE_PATH}")
-    root_logger.info(f"重定向 print: {'启用' if redirect_print else '禁用'}")
+    # 设置其他相关库的日志级别，以减少不必要的日志干扰
+    logging.getLogger("uvicorn").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.error").setLevel(logging.INFO) # 保留 Uvicorn 的错误信息
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING) # Access 日志通常很冗余
+    logging.getLogger("websockets").setLevel(logging.WARNING)
+    logging.getLogger("playwright").setLevel(logging.WARNING) # Playwright 日志也非常多
 
-# --- 新增: 日志实例 ---
-logger = logging.getLogger("AIStudioProxyServer") # 获取指定名称的 logger
-# ----------------------
+    # 通过配置好的 logger 记录初始化完成信息
+    logger.info("=" * 30 + " AIStudioProxyServer 日志系统已在 lifespan 中初始化 " + "=" * 30)
+    logger.info(f"日志级别设置为: {logging.getLevelName(log_level)}")
+    logger.info(f"日志文件路径: {APP_LOG_FILE_PATH}")
+    logger.info(f"控制台日志处理器已添加。") # 新增提示
+    logger.info(f"Print 重定向 (由 SERVER_REDIRECT_PRINT 环境变量控制): {'启用' if redirect_print else '禁用'}")
+    
+    return original_stdout, original_stderr # 返回原始流，以便在 lifespan 结束时恢复
+
+def restore_original_streams(original_stdout, original_stderr):
+    """恢复原始的 stdout 和 stderr 流。"""
+    sys.stdout = original_stdout
+    sys.stderr = original_stderr
+    # 此时 logger 可能已关闭或其处理器已移除，所以使用原始 stderr 打印
+    print("已恢复 server.py 的原始 stdout 和 stderr 流。", file=sys.__stderr__)
+
 
 # --- Pydantic Models ---
 class MessageContentItem(BaseModel):
@@ -324,20 +352,17 @@ class ClientDisconnectedError(Exception):
     pass
 
 # --- Helper Functions ---
-# V4: Combined prompt preparation logic - REPLACED with logic from server未重构.py to include history
 def prepare_combined_prompt(messages: List[Message], req_id: str) -> str:
-    """
-    Takes the complete message list and formats it into a single string
-    suitable for pasting into AI Studio, including history.
-    Handles the first system message separately and formats user/assistant turns.
-    (Logic adapted from server未重构.py)
-    """
-    print(f"[{req_id}] (Prepare Prompt) Preparing combined prompt from {len(messages)} messages (including history).") # Log updated
+    # logger.info(f"[{req_id}] (准备提示) 正在从 {len(messages)} 条消息准备组合提示 (包括历史)。")
+    # 使用 print 是因为这个函数可能在日志系统完全配置好之前被调用，或者 print 重定向状态未知
+    # 如果 SERVER_REDIRECT_PRINT 为 true, print 会进入日志；否则进入控制台。
+    # 这是一个设计权衡。如果严格要求所有输出都通过 logger，则此函数内部的 print 也应改为 logger.info。
+    # 但考虑到它在请求处理流程中，且其输出对调试重要，保留 print 并依赖 SERVER_REDIRECT_PRINT 控制其去向。
+    print(f"[{req_id}] (准备提示) 正在从 {len(messages)} 条消息准备组合提示 (包括历史)。", flush=True)
     combined_parts = []
     system_prompt_content = None
-    processed_indices = set() # Keep track of processed messages
+    processed_indices = set()
 
-    # 1. Extract the first system message if it exists
     first_system_msg_index = -1
     for i, msg in enumerate(messages):
         if msg.role == 'system':
@@ -345,112 +370,78 @@ def prepare_combined_prompt(messages: List[Message], req_id: str) -> str:
                 system_prompt_content = msg.content.strip()
                 processed_indices.add(i)
                 first_system_msg_index = i
-                # print(f"[{req_id}] (Prepare Prompt) Found system prompt at index {i}: '{system_prompt_content[:80]}...'")
-                logger.info(f"[{req_id}] (Prepare Prompt) Found system prompt at index {i}: '{system_prompt_content[:80]}...'") # logger
+                print(f"[{req_id}] (准备提示) 在索引 {i} 找到系统提示: '{system_prompt_content[:80]}...'")
             else:
-                 # print(f"[{req_id}] (Prepare Prompt) Ignoring non-string or empty system message at index {i}.")
-                 logger.warning(f"[{req_id}] (Prepare Prompt) Ignoring non-string or empty system message at index {i}.") # logger warning
-                 processed_indices.add(i) # Mark as processed even if ignored
-            break # Only process the first system message found
+                 print(f"[{req_id}] (准备提示) 在索引 {i} 忽略非字符串或空的系统消息。")
+                 processed_indices.add(i)
+            break
 
-    # 2. Add system prompt preamble if found
     if system_prompt_content:
-        # Add a separator only if there will be other messages following
         separator = "\\n\\n" if any(idx not in processed_indices for idx in range(len(messages))) else ""
-        # 预构建带换行符的字符串，避免在f-string中使用反斜杠
-        system_instr_prefix = "System Instructions:\\n"
+        system_instr_prefix = "系统指令:\\n" # 中文
         combined_parts.append(f"{system_instr_prefix}{system_prompt_content}{separator}")
     else:
-        # print(f"[{req_id}] (Prepare Prompt) 未找到有效的系统提示，继续处理其他消息。")
-        logger.info(f"[{req_id}] (Prepare Prompt) 未找到有效的系统提示，继续处理其他消息。") # logger
+        print(f"[{req_id}] (准备提示) 未找到有效的系统提示，继续处理其他消息。")
 
-
-    # 3. Iterate through remaining messages (user and assistant roles primarily)
-    turn_separator = "\\n---\\n" # Separator between turns
-    is_first_turn_after_system = True # Track if it's the first message after potential system prompt
+    turn_separator = "\\n---\\n"
+    is_first_turn_after_system = True
     for i, msg in enumerate(messages):
         if i in processed_indices:
-            continue # Skip already processed (e.g., the system prompt)
-
-        role = msg.role.capitalize()
-        # Skip 'System' role here as we handled the first one already
-        if role == 'System':
-            # print(f"[{req_id}] (Prepare Prompt) Skipping subsequent system message at index {i}.")
-            logger.info(f"[{req_id}] (Prepare Prompt) Skipping subsequent system message at index {i}.") # logger
             continue
-
-        content = ""
-
-        # Extract content, handling string or list[dict] format
+        role = msg.role.capitalize()
+        if role == 'System': # 后续的 System 消息被忽略
+            print(f"[{req_id}] (准备提示) 跳过在索引 {i} 的后续系统消息。")
+            continue
+        content_str = ""
         if isinstance(msg.content, str):
-            content = msg.content
+            content_str = msg.content
         elif isinstance(msg.content, list):
             text_parts = []
-            # Convert MessageContentItem models to text
             for item_model in msg.content:
-                 # Ensure item_model is the Pydantic model, not already a dict
                  if isinstance(item_model, MessageContentItem):
                      if item_model.type == 'text' and isinstance(item_model.text, str):
                           text_parts.append(item_model.text)
                      else:
-                          # Handle non-text parts if necessary, e.g., log a warning
-                           # print(f"[{req_id}] (Prepare Prompt) Warning: Ignoring non-text part in message at index {i}: type={item_model.type}")
-                           logger.warning(f"[{req_id}] (Prepare Prompt) Ignoring non-text part in message at index {i}: type={item_model.type}") # logger
-                 else:
-                      # If it's somehow already a dict (less likely with Pydantic)
-                      item_dict = dict(item_model) # Try converting
+                           print(f"[{req_id}] (准备提示) 警告: 在索引 {i} 的消息中忽略非文本部分: 类型={item_model.type}")
+                 else: # Pydantic 应该已经转换了，但作为后备
+                      item_dict = dict(item_model)
                       if item_dict.get('type') == 'text' and isinstance(item_dict.get('text'), str):
                            text_parts.append(item_dict['text'])
                       else:
-                           # print(f"[{req_id}] (Prepare Prompt) Warning: Unexpected item format in message list at index {i}. Item: {item_model}")
-                           logger.warning(f"[{req_id}] (Prepare Prompt) Unexpected item format in message list at index {i}. Item: {item_model}") # logger
-
-            content = "\\n".join(text_parts)
+                           print(f"[{req_id}] (准备提示) 警告: 在索引 {i} 的消息列表中遇到意外的项目格式。项目: {item_model}")
+            content_str = "\\n".join(text_parts)
         else:
-            # print(f"[{req_id}] (Prepare Prompt) Warning: Unexpected content type ({type(msg.content)}) for role {role} at index {i}. Converting to string.")
-            logger.warning(f"[{req_id}] (Prepare Prompt) Unexpected content type ({type(msg.content)}) for role {role} at index {i}. Converting to string.") # logger
-            content = str(msg.content)
+            print(f"[{req_id}] (准备提示) 警告: 角色 {role} 在索引 {i} 的内容类型意外 ({type(msg.content)})。将转换为字符串。")
+            content_str = str(msg.content)
 
-        content = content.strip() # Trim whitespace
-
-        if content: # Only add non-empty messages
-            # Add separator *before* the next role, unless it's the very first turn being added
+        content_str = content_str.strip()
+        if content_str:
             if not is_first_turn_after_system:
                  combined_parts.append(turn_separator)
-
-            # 预构建带换行符的字符串，避免在f-string中使用反斜杠
-            role_prefix = f"{role}:\\n"
-            combined_parts.append(f"{role_prefix}{content}")
-            is_first_turn_after_system = False # No longer the first turn
+            # 根据角色添加中文前缀
+            role_map = {"User": "用户", "Assistant": "助手", "System": "系统"} # System 理论上不会到这里
+            role_prefix_zh = f"{role_map.get(role, role)}:\\n"
+            combined_parts.append(f"{role_prefix_zh}{content_str}")
+            is_first_turn_after_system = False
         else:
-            # print(f"[{req_id}] (Prepare Prompt) Skipping empty message for role {role} at index {i}.")
-            logger.info(f"[{req_id}] (Prepare Prompt) Skipping empty message for role {role} at index {i}.") # logger
+            print(f"[{req_id}] (准备提示) 跳过角色 {role} 在索引 {i} 的空消息。")
 
     final_prompt = "".join(combined_parts)
-    # Pre-calculate the preview string with escaped newlines
     preview_text = final_prompt[:200].replace('\\n', '\\\\n')
-    # print(f"[{req_id}] (Prepare Prompt) Combined prompt length: {len(final_prompt)}. Preview: '{preview_text}...'") # Log preview with escaped newlines
-    logger.info(f"[{req_id}] (Prepare Prompt) Combined prompt length: {len(final_prompt)}. Preview: '{preview_text}...'") # logger
-    # Add a final newline if not empty, helps UI sometimes
+    print(f"[{req_id}] (准备提示) 组合提示长度: {len(final_prompt)}。预览: '{preview_text}...'")
     final_newline = "\\n"
     return final_prompt + final_newline if final_prompt else ""
 
-# --- END V4 Combined Prompt Logic ---
-
 def validate_chat_request(messages: List[Message], req_id: str) -> Dict[str, Optional[str]]:
-    # This function now ONLY validates, prompt prep is done by prepare_combined_prompt
     if not messages:
-        raise ValueError(f"[{req_id}] Invalid request: 'messages' array is missing or empty.")
-    # Check if there's at least one non-system message
+        raise ValueError(f"[{req_id}] 无效请求: 'messages' 数组缺失或为空。")
     if not any(msg.role != 'system' for msg in messages):
-        raise ValueError(f"[{req_id}] Invalid request: No user or assistant messages found.")
-    # Optional: Check for alternating user/assistant roles if needed for AI Studio
-    # ... (validation logic can be added here if necessary) ...
-    logger.info(f"[{req_id}] (Validation) Basic validation passed for {len(messages)} messages.")
-    return {} # Return empty dict as it no longer extracts prompts
+        raise ValueError(f"[{req_id}] 无效请求: 未找到用户或助手消息。")
+    logger.info(f"[{req_id}] (校验) 对 {len(messages)} 条消息的基本校验通过。")
+    return {}
 
 async def get_raw_text_content(response_element: Locator, previous_text: str, req_id: str) -> str:
-    # ... (Existing implementation - may become less critical) ...
+    # (此函数实现与之前版本相同，其内部的 logger 调用会按新配置工作)
     raw_text = previous_text
     try:
         await response_element.wait_for(state='attached', timeout=1000)
@@ -467,25 +458,22 @@ async def get_raw_text_content(response_element: Locator, previous_text: str, re
             except PlaywrightAsyncError as pre_err:
                 if DEBUG_LOGS_ENABLED:
                     error_message_first_line = pre_err.message.split('\n')[0]
-                    # print(f"[{req_id}] (Warn) Failed to get innerText from visible <pre>: {error_message_first_line}", flush=True)
-                    logger.warning(f"[{req_id}] Failed to get innerText from visible <pre>: {error_message_first_line}") # logger
+                    logger.warning(f"[{req_id}] 从可见的 <pre> 获取 innerText 失败: {error_message_first_line}")
                 try:
                      raw_text = await response_element.inner_text(timeout=1000)
                 except PlaywrightAsyncError as e_parent:
                      if DEBUG_LOGS_ENABLED:
-                         # print(f"[{req_id}] (Warn) getRawTextContent (inner_text) failed on parent after <pre> fail: {e_parent}. Returning previous.", flush=True)
-                         logger.warning(f"[{req_id}] getRawTextContent (inner_text) failed on parent after <pre> fail: {e_parent}. Returning previous.") # logger
-                     raw_text = previous_text
-        else:
+                         logger.warning(f"[{req_id}] 在 <pre> 获取失败后，从父元素获取 inner_text 失败: {e_parent}。返回先前文本。")
+                     raw_text = previous_text # 保留之前的值
+        else: # pre 元素不可见或不存在
             try:
                  raw_text = await response_element.inner_text(timeout=1500)
             except PlaywrightAsyncError as e_parent:
                  if DEBUG_LOGS_ENABLED:
-                     # print(f"[{req_id}] (Warn) getRawTextContent (inner_text) failed on parent (no pre): {e_parent}. Returning previous.", flush=True)
-                     logger.warning(f"[{req_id}] getRawTextContent (inner_text) failed on parent (no pre): {e_parent}. Returning previous.") # logger
-                 raw_text = previous_text
+                     logger.warning(f"[{req_id}] 从父元素获取 inner_text 失败 (无 pre 元素): {e_parent}。返回先前文本。")
+                 raw_text = previous_text # 保留之前的值
 
-        if raw_text and isinstance(raw_text, str):
+        if raw_text and isinstance(raw_text, str): # 确保 raw_text 是字符串
             replacements = {
                 "IGNORE_WHEN_COPYING_START": "", "content_copy": "", "download": "",
                 "Use code with caution.": "", "IGNORE_WHEN_COPYING_END": ""
@@ -497,19 +485,20 @@ async def get_raw_text_content(response_element: Locator, previous_text: str, re
                     cleaned_text = cleaned_text.replace(junk, replacement)
                     found_junk = True
             if found_junk:
+                # 清理多余的空行
                 cleaned_text = "\n".join([line.strip() for line in cleaned_text.splitlines() if line.strip()])
                 if DEBUG_LOGS_ENABLED:
-                     # print(f"[{req_id}] (清理) 已移除响应文本中的已知UI元素。", flush=True)
-                     logger.debug(f"[{req_id}] (清理) 已移除响应文本中的已知UI元素。") # logger debug
+                     logger.debug(f"[{req_id}] (清理) 已移除响应文本中的已知UI元素。")
                 raw_text = cleaned_text
         return raw_text
-    except PlaywrightAsyncError: return previous_text
+    except PlaywrightAsyncError: # 如果 response_element.wait_for 失败等
+        return previous_text
     except Exception as e_general:
-         # print(f"[{req_id}] (Warn) getRawTextContent unexpected error: {e_general}. Returning previous.", flush=True)
-         logger.warning(f"[{req_id}] getRawTextContent unexpected error: {e_general}. Returning previous.") # logger
+         logger.warning(f"[{req_id}] getRawTextContent 中发生意外错误: {e_general}。返回先前文本。")
          return previous_text
 
 def generate_sse_chunk(delta: str, req_id: str, model: str) -> str:
+    # (代码不变)
     chunk = {
         "id": f"{CHAT_COMPLETION_ID_PREFIX}{req_id}-{int(time.time())}-{random.randint(100, 999)}",
         "object": "chat.completion.chunk", "created": int(time.time()), "model": model,
@@ -518,6 +507,7 @@ def generate_sse_chunk(delta: str, req_id: str, model: str) -> str:
     return f"data: {json.dumps(chunk)}\n\n"
 
 def generate_sse_stop_chunk(req_id: str, model: str, reason: str = "stop") -> str:
+    # (代码不变)
     chunk = {
         "id": f"{CHAT_COMPLETION_ID_PREFIX}{req_id}-{int(time.time())}-{random.randint(100, 999)}",
         "object": "chat.completion.chunk", "created": int(time.time()), "model": model,
@@ -526,311 +516,392 @@ def generate_sse_stop_chunk(req_id: str, model: str, reason: str = "stop") -> st
     return f"data: {json.dumps(chunk)}\n\n"
 
 def generate_sse_error_chunk(message: str, req_id: str, error_type: str = "server_error") -> str:
+    # (代码不变)
     error_payload = {"error": {"message": f"[{req_id}] {message}", "type": error_type}}
     return f"data: {json.dumps(error_payload)}\n\n"
 
-# --- Dependency Check ---
-def check_dependencies():
-    # ... (Existing implementation) ...
-    print("--- 步骤 1: 检查服务器依赖项 ---")
-    required = {"fastapi": "fastapi", "uvicorn": "uvicorn[standard]", "playwright": "playwright"}
-    missing = []
-    modules_ok = True
-    for mod_name, install_name in required.items():
-        print(f"   - 检查 {mod_name}... ", end="")
-        try: __import__(mod_name); print("✓ 已找到")
-        except ImportError: print("❌ 未找到"); missing.append(install_name); modules_ok = False
-    if not modules_ok:
-        print("\n❌ 错误: 缺少必要的 Python 库!")
-        print(f"   请运行以下命令安装:\n   pip install {' '.join(missing)}")
-        sys.exit(1)
-    else: print("✅ 服务器依赖检查通过.")
-    print("---\n")
-
-# --- Page Initialization --- (Simplified)
 async def _initialize_page_logic(browser: AsyncBrowser):
-    """初始化页面逻辑，连接到已有浏览器
+    # (此函数实现与之前版本相同，其内部的 print 和 input 会受 SERVER_REDIRECT_PRINT 影响)
+    # 注意：此函数中的 print 语句，如果 SERVER_REDIRECT_PRINT 为 false，会直接输出到运行
+    # launch_camoufox.py 的控制台。如果为 true，会进入日志。
+    # input() 调用会直接作用于 launch_camoufox.py 的控制台。
+    # USER_INPUT_START/END_MARKER_SERVER 标记仍然有用，以便在 print 未重定向时，
+    # 如果 launch_camoufox.py 仍需某种方式识别输入段（尽管在此集成模型中它不再直接解析这些标记）。
+    logger.info("--- 初始化页面逻辑 (连接到现有浏览器) ---") # 使用 logger
+    temp_context: Optional[AsyncBrowserContext] = None # 类型提示
+    storage_state_path_to_use: Optional[str] = None
+    # 从环境变量获取配置
+    launch_mode = os.environ.get('LAUNCH_MODE', 'debug') # 默认为 debug
+    # active_auth_json_path = os.environ.get('ACTIVE_AUTH_JSON_PATH') # 在 headless 模式下使用
+    # AUTO_SAVE_AUTH 和 AUTH_SAVE_TIMEOUT 已在全局定义
 
-    Args:
-        browser: 已连接的浏览器实例
-
-    Returns:
-        tuple: (page_instance, is_page_ready) - 页面实例和就绪状态
-    """
-    print("--- 初始化页面逻辑 (连接到现有浏览器) ---")
-    temp_context = None
-    storage_state_path_to_use = None
-    launch_mode = os.environ.get('LAUNCH_MODE', 'debug')
-    active_auth_json_path = os.environ.get('ACTIVE_AUTH_JSON_PATH')
-    print(f"   检测到启动模式: {launch_mode}")
+    logger.info(f"   检测到启动模式: {launch_mode}")
     loop = asyncio.get_running_loop()
 
-    # Determine storage state path based on launch_mode (simplified logic shown)
     if launch_mode == 'headless':
         auth_filename = os.environ.get('ACTIVE_AUTH_JSON_PATH')
-        if auth_filename:
+        if auth_filename: # 确保 auth_filename 不是 None 或空字符串
             constructed_path = os.path.join(ACTIVE_AUTH_DIR, auth_filename)
             if os.path.exists(constructed_path):
                 storage_state_path_to_use = constructed_path
-                print(f"   无头模式将使用的认证文件: {constructed_path}")
+                logger.info(f"   无头模式将使用的认证文件: {constructed_path}")
             else:
+                logger.error(f"无头模式认证文件无效或不存在: '{constructed_path}'")
                 raise RuntimeError(f"无头模式认证文件无效: '{constructed_path}'")
         else:
+            logger.error("无头模式需要 ACTIVE_AUTH_JSON_PATH 环境变量，但未设置。")
             raise RuntimeError("无头模式需要设置 ACTIVE_AUTH_JSON_PATH 环境变量。")
     elif launch_mode == 'debug':
-        # ... (Logic for selecting profile in debug mode) ...
-        print(f"   调试模式: 检查可用的认证文件...")
+        logger.info(f"   调试模式: 检查可用的认证文件...")
         available_profiles = []
-        for profile_dir in [ACTIVE_AUTH_DIR, SAVED_AUTH_DIR]:
-            if os.path.exists(profile_dir):
+        for profile_dir_path in [ACTIVE_AUTH_DIR, SAVED_AUTH_DIR]: # 使用更明确的变量名
+            if os.path.exists(profile_dir_path):
                 try:
-                    for filename in os.listdir(profile_dir):
-                        if filename.endswith(".json"):
-                            full_path = os.path.join(profile_dir, filename)
-                            relative_dir = os.path.basename(profile_dir)
-                            available_profiles.append({"name": f"{relative_dir}/{filename}", "path": full_path})
-                except OSError as e: print(f"   ⚠️ 警告: 无法读取目录 '{profile_dir}': {e}")
+                    for filename in os.listdir(profile_dir_path):
+                        if filename.lower().endswith(".json"): # 不区分大小写
+                            full_path = os.path.join(profile_dir_path, filename)
+                            relative_dir_name = os.path.basename(profile_dir_path)
+                            available_profiles.append({"name": f"{relative_dir_name}/{filename}", "path": full_path})
+                except OSError as e:
+                    logger.warning(f"   ⚠️ 警告: 无法读取目录 '{profile_dir_path}': {e}")
+
         if available_profiles:
-            print('-'*60 + "\n   找到以下可用的认证文件:")
-            for i, profile in enumerate(available_profiles): print(f"     {i+1}: {profile['name']}")
-            print("     N: 不加载任何文件 (使用浏览器当前状态)\n" + '-'*60)
-            choice = await loop.run_in_executor(None, input, "   请选择要加载的认证文件编号 (输入 N 或直接回车则不加载): ")
-            if choice.lower() != 'n' and choice:
+            # 这里的 print 会根据 SERVER_REDIRECT_PRINT 决定去向
+            print('-'*60 + "\n   找到以下可用的认证文件:", flush=True)
+            for i, profile in enumerate(available_profiles):
+                print(f"     {i+1}: {profile['name']}", flush=True)
+            print("     N: 不加载任何文件 (使用浏览器当前状态)\n" + '-'*60, flush=True)
+
+            print(USER_INPUT_START_MARKER_SERVER, flush=True) # 标记开始
+            choice_prompt = "   请选择要加载的认证文件编号 (输入 N 或直接回车则不加载): "
+            # input() 的提示会直接显示在 launch_camoufox.py 的控制台
+            choice = await loop.run_in_executor(None, input, choice_prompt)
+            print(USER_INPUT_END_MARKER_SERVER, flush=True)   # 标记结束
+
+            if choice.strip().lower() not in ['n', '']:
                 try:
-                    choice_index = int(choice) - 1
+                    choice_index = int(choice.strip()) - 1
                     if 0 <= choice_index < len(available_profiles):
                         selected_profile = available_profiles[choice_index]
                         storage_state_path_to_use = selected_profile["path"]
-                        print(f"   已选择加载: {selected_profile['name']}")
-                    else: print("   无效的选择编号。将不加载认证文件。")
-                except ValueError: print("   无效的输入。将不加载认证文件。")
-            else: print("   好的，不加载认证文件。")
-            print('-'*60)
-        else: print("   未找到认证文件。将使用浏览器当前状态。")
-    else: print(f"   ⚠️ 警告: 未知的启动模式 '{launch_mode}'。不加载 storage_state。")
+                        print(f"   已选择加载: {selected_profile['name']}", flush=True)
+                    else:
+                        print("   无效的选择编号。将不加载认证文件。", flush=True)
+                except ValueError:
+                    print("   无效的输入。将不加载认证文件。", flush=True)
+            else:
+                print("   好的，不加载认证文件。", flush=True)
+            print('-'*60, flush=True)
+        else:
+            print("   未找到认证文件。将使用浏览器当前状态。", flush=True)
+    elif launch_mode == "direct_debug_no_browser":
+        logger.info("   direct_debug_no_browser 模式：不加载 storage_state，不进行浏览器操作。")
+    else: # 未知模式
+        logger.warning(f"   ⚠️ 警告: 未知的启动模式 '{launch_mode}'。不加载 storage_state。")
 
     try:
-        print("创建新的浏览器上下文...")
-        context_options = {'viewport': {'width': 460, 'height': 800}}
+        logger.info("创建新的浏览器上下文...")
+        context_options: Dict[str, Any] = {'viewport': {'width': 460, 'height': 800}}
         if storage_state_path_to_use:
             context_options['storage_state'] = storage_state_path_to_use
-            print(f"   (使用 storage_state='{os.path.basename(storage_state_path_to_use)}')")
-        else: print("   (不使用 storage_state)")
+            logger.info(f"   (使用 storage_state='{os.path.basename(storage_state_path_to_use)}')")
+        else:
+            logger.info("   (不使用 storage_state)")
 
         if PLAYWRIGHT_PROXY_SETTINGS:
             context_options['proxy'] = PLAYWRIGHT_PROXY_SETTINGS
-            print(f"   (浏览器上下文将使用代理: {PLAYWRIGHT_PROXY_SETTINGS['server']})")
+            logger.info(f"   (浏览器上下文将使用代理: {PLAYWRIGHT_PROXY_SETTINGS['server']})")
         else:
-            print("   (浏览器上下文不使用显式代理配置)")
-            
+            logger.info("   (浏览器上下文不使用显式代理配置)")
+
         temp_context = await browser.new_context(**context_options)
 
-        found_page = None
+        found_page: Optional[AsyncPage] = None
         pages = temp_context.pages
         target_url_base = f"https://{AI_STUDIO_URL_PATTERN}"
-        target_full_url = f"{target_url_base}prompts/new_chat"
-        login_url_pattern = 'accounts.google.com'
+        target_full_url = f"{target_url_base}prompts/new_chat" # 目标是新聊天页面
+        login_url_pattern = 'accounts.google.com' # Google 登录页面的 URL 特征
         current_url = ""
 
-        # Find or create AI Studio page (simplified logic shown)
-        for p in pages:
+        # 查找已打开的符合条件的 AI Studio 页面
+        for p_iter in pages: # 使用不同变量名
             try:
-                page_url_check = p.url
-                if not p.is_closed() and target_url_base in page_url_check and "/prompts/" in page_url_check:
-                    found_page = p; current_url = page_url_check; break
-                # Add logic to navigate existing non-chat pages if needed
-            except PlaywrightAsyncError as pw_err:
-                print(f"   警告: 检查页面 URL 时出现Playwright错误: {pw_err}")
-            except AttributeError as attr_err:
-                print(f"   警告: 检查页面 URL 时出现属性错误: {attr_err}")
-            except Exception as e:
-                print(f"   警告: 检查页面 URL 时出现其他未预期错误: {e}")
-                print(f"   错误类型: {type(e).__name__}")
+                page_url_to_check = p_iter.url # 获取页面 URL
+                # 检查页面是否未关闭，且 URL 包含 AI Studio 的基础路径和 /prompts/ 路径段
+                if not p_iter.is_closed() and target_url_base in page_url_to_check and "/prompts/" in page_url_to_check:
+                    found_page = p_iter
+                    current_url = page_url_to_check
+                    logger.info(f"   找到已打开的 AI Studio 页面: {current_url}")
+                    break
+            except PlaywrightAsyncError as pw_err_url: # Playwright 操作可能引发的错误
+                logger.warning(f"   检查页面 URL 时出现 Playwright 错误: {pw_err_url}")
+            except AttributeError as attr_err_url: # 例如页面对象状态异常
+                logger.warning(f"   检查页面 URL 时出现属性错误: {attr_err_url}")
+            except Exception as e_url_check: # 其他未知错误
+                logger.warning(f"   检查页面 URL 时出现其他未预期错误: {e_url_check} (类型: {type(e_url_check).__name__})")
 
-        if not found_page:
-            print(f"-> 未找到合适的现有页面，正在打开新页面并导航到 {target_full_url}...")
+
+        if not found_page: # 如果没有找到合适的已打开页面
+            logger.info(f"-> 未找到合适的现有页面，正在打开新页面并导航到 {target_full_url}...")
             found_page = await temp_context.new_page()
             try:
+                # 等待 DOM 内容加载完成，设置较长超时时间
                 await found_page.goto(target_full_url, wait_until="domcontentloaded", timeout=90000)
                 current_url = found_page.url
-                print(f"-> 新页面导航尝试完成。当前 URL: {current_url}")
+                logger.info(f"-> 新页面导航尝试完成。当前 URL: {current_url}")
             except Exception as new_page_nav_err:
-                await save_error_snapshot(f"init_new_page_nav_fail")
-                # --- 新增: 检查特定网络错误并提供用户提示 ---
+                await save_error_snapshot("init_new_page_nav_fail") # 保存错误快照
                 error_str = str(new_page_nav_err)
-                if "NS_ERROR_NET_INTERRUPT" in error_str:
-                    print("\n" + "="*30 + " 网络导航错误提示 " + "="*30)
-                    print(f"❌ 导航到 '{target_full_url}' 失败，出现网络中断错误 (NS_ERROR_NET_INTERRUPT)。")
-                    print("   这通常表示浏览器在尝试加载页面时连接被意外断开。")
-                    print("   可能的原因及排查建议:")
-                    print("     1. 网络连接: 请检查你的本地网络连接是否稳定，并尝试在普通浏览器中访问目标网址。")
-                    print("     2. AI Studio 服务: 确认 aistudio.google.com 服务本身是否可用。")
-                    print("     3. 防火墙/代理/VPN: 检查本地防火墙、杀毒软件、代理或 VPN 设置，确保它们没有阻止 Python 或浏览器的网络访问。")
-                    print("     4. Camoufox 服务: 确认 launch_camoufox.py 脚本是否正常运行，并且没有相关错误。")
-                    print("     5. 资源问题: 确保系统有足够的内存和 CPU 资源。")
-                    print("   请根据上述建议排查后重试。")
-                    print("="*74 + "\n")
-                # --- 结束新增部分 ---
+                # 针对特定网络错误给出更友好的提示
+                if "NS_ERROR_NET_INTERRUPT" in error_str: # Firefox 特有的网络中断错误
+                    logger.error("\n" + "="*30 + " 网络导航错误提示 " + "="*30)
+                    logger.error(f"❌ 导航到 '{target_full_url}' 失败，出现网络中断错误 (NS_ERROR_NET_INTERRUPT)。")
+                    logger.error("   这通常表示浏览器在尝试加载页面时连接被意外断开。")
+                    logger.error("   可能的原因及排查建议:")
+                    logger.error("     1. 网络连接: 请检查你的本地网络连接是否稳定，并尝试在普通浏览器中访问目标网址。")
+                    logger.error("     2. AI Studio 服务: 确认 aistudio.google.com 服务本身是否可用。")
+                    logger.error("     3. 防火墙/代理/VPN: 检查本地防火墙、杀毒软件、代理或 VPN 设置。")
+                    logger.error("     4. Camoufox 服务: 确认 launch_camoufox.py 脚本是否正常运行。")
+                    logger.error("     5. 系统资源问题: 确保系统有足够的内存和 CPU 资源。")
+                    logger.error("="*74 + "\n")
                 raise RuntimeError(f"导航新页面失败: {new_page_nav_err}") from new_page_nav_err
 
-        # Handle login redirect (simplified logic shown)
+        # 处理登录重定向
         if login_url_pattern in current_url:
             if launch_mode == 'headless':
+                logger.error("无头模式下检测到重定向至登录页面，认证可能已失效。请更新认证文件。")
                 raise RuntimeError("无头模式认证失败，需要更新认证文件。")
-            else: # Debug mode
-                print(f"\n{'='*20} 需要操作 {'='*20}")
-                print(f"   请在浏览器窗口中完成 Google 登录，然后按 Enter 键继续...")
-                await loop.run_in_executor(None, input)
-                print("   感谢操作！正在检查登录状态...")
+            else: # 调试模式，提示用户手动登录
+                print(f"\n{'='*20} 需要操作 {'='*20}", flush=True)
+                print(USER_INPUT_START_MARKER_SERVER, flush=True)
+                login_prompt = "   请在浏览器窗口中完成 Google 登录，然后在此处按 Enter 键继续..."
+                await loop.run_in_executor(None, input, login_prompt)
+                print(USER_INPUT_END_MARKER_SERVER, flush=True)
+                logger.info("   用户已操作，正在检查登录状态...")
                 try:
+                    # 等待 URL 变为 AI Studio 的 URL，超时时间设为3分钟
                     await found_page.wait_for_url(f"**/{AI_STUDIO_URL_PATTERN}**", timeout=180000)
-                    current_url = found_page.url
-                    if login_url_pattern in current_url:
-                         raise RuntimeError("手动登录尝试后仍在登录页面。")
-                    print("   ✅ 登录成功！请不要操作窗口，等待保存认证状态选择器启动。")
-                    # Ask to save state (simplified)
-                    save_prompt = "   是否要将当前的浏览器认证状态保存到文件？ (y/N): "
-                    should_save = await loop.run_in_executor(None, input, save_prompt)
-                    if should_save.lower() == 'y':
-                        # ... (Logic to get filename and save state) ...
-                        os.makedirs(SAVED_AUTH_DIR, exist_ok=True)
-                        default_filename = f"auth_state_{int(time.time())}.json"
-                        filename_prompt = f"   请输入保存的文件名 (默认为: {default_filename}): "
-                        save_filename = await loop.run_in_executor(None, input, filename_prompt) or default_filename
-                        if not save_filename.endswith(".json"): save_filename += ".json"
-                        save_path = os.path.join(SAVED_AUTH_DIR, save_filename)
-                        try:
-                            await temp_context.storage_state(path=save_path)
-                            print(f"   ✅ 认证状态已成功保存到: {save_path}")
-                        except Exception as save_err: print(f"   ❌ 保存认证状态失败: {save_err}")
-                    else: print("   好的，不保存认证状态。")
-                except Exception as wait_err:
-                    await save_error_snapshot(f"init_login_wait_fail")
-                    raise RuntimeError(f"登录提示后未能检测到 AI Studio URL: {wait_err}")
+                    current_url = found_page.url # 更新当前 URL
+                    if login_url_pattern in current_url: # 如果仍在登录页
+                        logger.error("手动登录尝试后，页面似乎仍停留在登录页面。")
+                        raise RuntimeError("手动登录尝试后仍在登录页面。")
+                    logger.info("   ✅ 登录成功！请不要操作浏览器窗口，等待后续提示。")
 
-        elif target_url_base not in current_url or "/prompts/" not in current_url:
-            await save_error_snapshot(f"init_unexpected_page")
+                    # 询问是否保存认证状态
+                    print("\n" + "="*50, flush=True)
+                    print("   【用户交互】需要您的输入!", flush=True)
+                    
+                    save_auth_prompt = "   是否要将当前的浏览器认证状态保存到文件？ (y/N): "
+                    should_save_auth_choice = ''
+                    if AUTO_SAVE_AUTH and launch_mode == 'debug': # 自动保存仅在调试模式下有意义
+                        logger.info("   自动保存认证模式已启用，将自动保存认证状态...")
+                        should_save_auth_choice = 'y'
+                    else:
+                        print(USER_INPUT_START_MARKER_SERVER, flush=True)
+                        try:
+                            auth_save_input_future = loop.run_in_executor(None, input, save_auth_prompt)
+                            should_save_auth_choice = await asyncio.wait_for(auth_save_input_future, timeout=AUTH_SAVE_TIMEOUT)
+                        except asyncio.TimeoutError:
+                            print(f"   输入等待超时({AUTH_SAVE_TIMEOUT}秒)。默认不保存认证状态。", flush=True)
+                            should_save_auth_choice = 'n' # 或 ''，下面会处理
+                        finally: # 确保结束标记被打印
+                            print(USER_INPUT_END_MARKER_SERVER, flush=True)
+                    
+                    if should_save_auth_choice.strip().lower() == 'y':
+                        os.makedirs(SAVED_AUTH_DIR, exist_ok=True) # 确保保存目录存在
+                        default_auth_filename = f"auth_state_{int(time.time())}.json"
+                        
+                        print(USER_INPUT_START_MARKER_SERVER, flush=True)
+                        filename_prompt_str = f"   请输入保存的文件名 (默认为: {default_auth_filename}): "
+                        chosen_auth_filename = ''
+                        try:
+                            filename_input_future = loop.run_in_executor(None, input, filename_prompt_str)
+                            chosen_auth_filename = await asyncio.wait_for(filename_input_future, timeout=AUTH_SAVE_TIMEOUT)
+                        except asyncio.TimeoutError:
+                            print(f"   输入文件名等待超时({AUTH_SAVE_TIMEOUT}秒)。将使用默认文件名: {default_auth_filename}", flush=True)
+                        finally:
+                            print(USER_INPUT_END_MARKER_SERVER, flush=True)
+
+                        final_auth_filename = chosen_auth_filename.strip() or default_auth_filename
+                        if not final_auth_filename.endswith(".json"):
+                            final_auth_filename += ".json"
+                        
+                        auth_save_path = os.path.join(SAVED_AUTH_DIR, final_auth_filename)
+                        try:
+                            await temp_context.storage_state(path=auth_save_path)
+                            print(f"   ✅ 认证状态已成功保存到: {auth_save_path}", flush=True)
+                        except Exception as save_state_err:
+                            logger.error(f"   ❌ 保存认证状态失败: {save_state_err}", exc_info=True)
+                            print(f"   ❌ 保存认证状态失败: {save_state_err}", flush=True)
+                    else:
+                        print("   好的，不保存认证状态。", flush=True)
+                    print("="*50 + "\n", flush=True)
+
+                except Exception as wait_login_err:
+                    await save_error_snapshot("init_login_wait_fail")
+                    logger.error(f"登录提示后未能检测到 AI Studio URL 或保存状态时出错: {wait_login_err}", exc_info=True)
+                    raise RuntimeError(f"登录提示后未能检测到 AI Studio URL: {wait_login_err}") from wait_login_err
+
+        elif target_url_base not in current_url or "/prompts/" not in current_url: # 不在登录页，但也不在目标页
+            await save_error_snapshot("init_unexpected_page")
+            logger.error(f"初始导航后页面 URL 意外: {current_url}。期望包含 '{target_url_base}' 和 '/prompts/'。")
             raise RuntimeError(f"初始导航后出现意外页面: {current_url}。")
 
-        print(f"-> 确认当前位于 AI Studio 对话页面: {current_url}")
-        await found_page.bring_to_front()
+        logger.info(f"-> 确认当前位于 AI Studio 对话页面: {current_url}")
+        await found_page.bring_to_front() # 将页面带到最前
         try:
+            # 等待核心 UI 元素加载完成
             input_wrapper_locator = found_page.locator('ms-prompt-input-wrapper')
             await expect_async(input_wrapper_locator).to_be_visible(timeout=35000)
             await expect_async(found_page.locator(INPUT_SELECTOR)).to_be_visible(timeout=10000)
-            print("-> ✅ 核心输入区域可见。")
-            # 使用更精确的选择器定位模型名称元素
-            # 添加first()确保只选择第一个匹配的元素，避免严格模式违规
+            logger.info("-> ✅ 核心输入区域可见。")
+
             model_wrapper_locator = found_page.locator('#mat-select-value-0 mat-select-trigger').first
-            # 获取模型名称
-            model_name = await model_wrapper_locator.inner_text()
-            print(f"-> 🤖 当前模型: {model_name}")
-            logger.info(f"(🤖 当前模型) {model_name}")
-            result_page = found_page
-            result_ready = True
-            print(f"✅ 页面逻辑初始化成功。")
-            return result_page, result_ready
+            model_name_on_page = await model_wrapper_locator.inner_text(timeout=5000) # 增加超时
+            logger.info(f"-> 🤖 页面检测到的当前模型: {model_name_on_page}")
+            
+            result_page_instance = found_page
+            result_page_ready = True
+            logger.info(f"✅ 页面逻辑初始化成功。")
+            return result_page_instance, result_page_ready
         except Exception as input_visible_err:
-             await save_error_snapshot(f"init_fail_input_timeout")
+             await save_error_snapshot("init_fail_input_timeout")
+             logger.error(f"页面初始化失败：核心输入区域未在预期时间内变为可见。最后的 URL 是 {found_page.url}", exc_info=True)
              raise RuntimeError(f"页面初始化失败：核心输入区域未在预期时间内变为可见。最后的 URL 是 {found_page.url}") from input_visible_err
 
-    except Exception as e:
-        print(f"❌ 页面逻辑初始化期间发生意外错误: {e}")
-        if temp_context:
+    except Exception as e_init_page: # 捕获 _initialize_page_logic 内部所有未处理的异常
+        logger.critical(f"❌ 页面逻辑初始化期间发生严重意外错误: {e_init_page}", exc_info=True)
+        if temp_context and not temp_context.is_closed(): # 确保上下文存在且未关闭
             try: await temp_context.close()
-            except: pass
-        await save_error_snapshot(f"init_unexpected_error")
-        raise RuntimeError(f"页面初始化意外错误: {e}") from e
-    # Note: temp_context is intentionally not closed on success, result_page belongs to it.
-    # The context will be closed when the browser connection closes during shutdown.
+            except Exception: pass # 忽略关闭时的错误
+        await save_error_snapshot("init_unexpected_error") # 尝试保存快照
+        raise RuntimeError(f"页面初始化意外错误: {e_init_page}") from e_init_page
+    # temp_context 在成功时不关闭，因为 result_page_instance 属于它。
+    # 它将在浏览器连接关闭时（在 lifespan 的 finally 块中）被关闭。
 
-# --- Page Shutdown --- (Simplified)
 async def _close_page_logic():
-    """关闭页面并重置状态
-
-    Returns:
-        tuple: (page, is_ready) - 更新后的页面实例(None)和就绪状态(False)
-    """
+    # (代码与之前版本相同)
     global page_instance, is_page_ready
-    print("--- 运行页面逻辑关闭 --- ")
+    logger.info("--- 运行页面逻辑关闭 --- ") # 使用 logger
     if page_instance and not page_instance.is_closed():
         try:
             await page_instance.close()
-            print("   ✅ 页面已关闭")
+            logger.info("   ✅ 页面已关闭")
         except PlaywrightAsyncError as pw_err:
-            print(f"   ⚠️ 关闭页面时出现Playwright错误: {pw_err}")
-        except asyncio.TimeoutError as timeout_err:
-            print(f"   ⚠️ 关闭页面时超时: {timeout_err}")
+            logger.warning(f"   ⚠️ 关闭页面时出现Playwright错误: {pw_err}")
+        except asyncio.TimeoutError as timeout_err: # asyncio.TimeoutError
+            logger.warning(f"   ⚠️ 关闭页面时超时: {timeout_err}")
         except Exception as other_err:
-            print(f"   ⚠️ 关闭页面时出现意外错误: {other_err}")
-            print(f"   错误类型: {type(other_err).__name__}")
+            logger.error(f"   ⚠️ 关闭页面时出现意外错误: {other_err} (类型: {type(other_err).__name__})", exc_info=True)
     page_instance = None
     is_page_ready = False
-    print("页面逻辑状态已重置。")
+    logger.info("页面逻辑状态已重置。")
     return None, False
 
-# --- Camoufox Shutdown Signal --- (Simplified)
 async def signal_camoufox_shutdown():
-    # ... (Existing implementation) ...
+    # (此函数在 server.py 中可能不再需要，应由 launch_camoufox.py 控制 Camoufox 进程)
+    # 但如果 Camoufox 是一个独立的外部服务，则此逻辑可能仍然相关。
+    # 当前假设 Camoufox 是由 launch_camoufox.py 管理的内部进程。
+    logger.info("   尝试发送关闭信号到 Camoufox 服务器 (此功能可能已由父进程处理)...")
+    ws_endpoint = os.environ.get('CAMOUFOX_WS_ENDPOINT')
+    if not ws_endpoint:
+        logger.warning("   ⚠️ 无法发送关闭信号：未找到 CAMOUFOX_WS_ENDPOINT 环境变量。")
+        return
+    if not browser_instance or not browser_instance.is_connected():
+        logger.warning("   ⚠️ 浏览器实例已断开或未初始化，跳过关闭信号发送。")
+        return
+    # 实际的关闭信号发送逻辑取决于 Camoufox 如何接收关闭指令。
+    # 这里只是一个占位符。
     try:
-        print("   尝试发送关闭信号到 Camoufox 服务器...")
-        ws_endpoint = os.environ.get('CAMOUFOX_WS_ENDPOINT')
-        if not ws_endpoint: print("   ⚠️ 无法发送关闭信号：未找到 CAMOUFOX_WS_ENDPOINT"); return
-        if not browser_instance or not browser_instance.is_connected(): print("   ⚠️ 浏览器实例已断开，跳过关闭信号发送"); return
-        # Simulate signaling if direct API not available
-        await asyncio.sleep(0.2)
-        print("   ✅ 关闭信号已处理")
-    except Exception as e: print(f"   ⚠️ 发送关闭信号过程中捕获异常: {e}")
+        # 例如，如果 Camoufox 有一个特殊的 WebSocket 消息或 HTTP 端点用于关闭：
+        # await send_shutdown_command_to_camoufox(ws_endpoint)
+        await asyncio.sleep(0.2) # 模拟操作
+        logger.info("   ✅ (模拟) 关闭信号已处理。")
+    except Exception as e:
+        logger.error(f"   ⚠️ 发送关闭信号过程中捕获异常: {e}", exc_info=True)
 
-# --- Lifespan Context Manager --- (Simplified)
+
+# --- Lifespan Context Manager (负责初始化和清理) ---
 @asynccontextmanager
-async def lifespan(app_param: FastAPI):
-    # ... (Existing implementation, ensure it calls _initialize_page_logic and starts queue_worker) ...
+async def lifespan(app_param: FastAPI): # app_param 未使用
     global playwright_manager, browser_instance, page_instance, worker_task
     global is_playwright_ready, is_browser_connected, is_page_ready, is_initializing
+    global logger, log_ws_manager
+
+    true_original_stdout, true_original_stderr = sys.stdout, sys.stderr
+    initial_stdout_before_redirect, initial_stderr_before_redirect = sys.stdout, sys.stderr
+
+    if log_ws_manager is None:
+        log_ws_manager = WebSocketConnectionManager()
+
+    log_level_env = os.environ.get('SERVER_LOG_LEVEL', 'INFO')
+    redirect_print_env = os.environ.get('SERVER_REDIRECT_PRINT', 'false')
+    
+    initial_stdout_before_redirect, initial_stderr_before_redirect = setup_server_logging(
+        log_level_name=log_level_env,
+        redirect_print_str=redirect_print_env
+    )
+
+    if PLAYWRIGHT_PROXY_SETTINGS:
+        logger.info(f"--- 代理配置检测到 (由 server.py 的 lifespan 记录) ---")
+        logger.info(f"   将使用代理服务器: {PLAYWRIGHT_PROXY_SETTINGS['server']}")
+        if 'bypass' in PLAYWRIGHT_PROXY_SETTINGS:
+            logger.info(f"   绕过代理的主机: {PLAYWRIGHT_PROXY_SETTINGS['bypass']}")
+        logger.info(f"-----------------------")
+    else:
+        logger.info("--- 未检测到 HTTP_PROXY 或 HTTPS_PROXY 环境变量，不使用代理 (由 server.py 的 lifespan 记录) ---")
 
     is_initializing = True
-    print("\n" + "="*60 + "\n          🚀 AI Studio Proxy Server (Python/FastAPI - Refactored) 🚀\n" + "="*60)
-    print(f"FastAPI 生命周期: 启动中...")
+    logger.info("\n" + "="*60 + "\n          🚀 AI Studio Proxy Server (FastAPI App Lifespan) 🚀\n" + "="*60)
+    logger.info(f"FastAPI 应用生命周期: 启动中...")
     try:
-        os.makedirs(ACTIVE_AUTH_DIR, exist_ok=True); os.makedirs(SAVED_AUTH_DIR, exist_ok=True)
-        print(f"   确保认证目录存在: Active: {ACTIVE_AUTH_DIR}, Saved: {SAVED_AUTH_DIR}")
-
-        print(f"   启动 Playwright...")
+        logger.info(f"   启动 Playwright...")
         playwright_manager = await async_playwright().start()
         is_playwright_ready = True
-        print(f"   ✅ Playwright 已启动。")
+        logger.info(f"   ✅ Playwright 已启动。")
 
         ws_endpoint = os.environ.get('CAMOUFOX_WS_ENDPOINT')
-        if not ws_endpoint: raise ValueError("未找到 CAMOUFOX_WS_ENDPOINT 环境变量。")
+        launch_mode = os.environ.get('LAUNCH_MODE', 'unknown')
 
-        print(f"   连接到 Camoufox 服务器于: {ws_endpoint}")
-        try:
-            browser_instance = await playwright_manager.firefox.connect(ws_endpoint, timeout=30000)
-            is_browser_connected = True
-            print(f"   ✅ 已连接到浏览器实例: 版本 {browser_instance.version}")
-        except Exception as connect_err:
-            raise RuntimeError(f"未能连接到 Camoufox 服务器: {connect_err}") from connect_err
-
-        # 从初始化函数获取返回值，而不是依赖函数直接修改全局变量
-        global page_instance, is_page_ready
-        page_instance, is_page_ready = await _initialize_page_logic(browser_instance)
+        if not ws_endpoint:
+            if launch_mode == "direct_debug_no_browser":
+                logger.warning("CAMOUFOX_WS_ENDPOINT 未设置，但 LAUNCH_MODE 表明不需要浏览器。跳过浏览器连接。")
+                is_browser_connected = False
+                is_page_ready = False
+            else:
+                logger.error("未找到 CAMOUFOX_WS_ENDPOINT 环境变量。Playwright 将无法连接到浏览器。")
+                raise ValueError("CAMOUFOX_WS_ENDPOINT 环境变量缺失。")
+        else:
+            logger.info(f"   连接到 Camoufox 服务器 (浏览器 WebSocket 端点) 于: {ws_endpoint}")
+            try:
+                browser_instance = await playwright_manager.firefox.connect(ws_endpoint, timeout=30000)
+                is_browser_connected = True
+                logger.info(f"   ✅ 已连接到浏览器实例: 版本 {browser_instance.version}")
+                page_instance, is_page_ready = await _initialize_page_logic(browser_instance)
+            except Exception as connect_err:
+                logger.error(f"未能连接到 Camoufox 服务器 (浏览器) 或初始化页面失败: {connect_err}", exc_info=True)
+                if launch_mode != "direct_debug_no_browser":
+                    raise RuntimeError(f"未能连接到 Camoufox 或初始化页面: {connect_err}") from connect_err
+                else:
+                    is_browser_connected = False
+                    is_page_ready = False
 
         if is_page_ready and is_browser_connected:
-             print(f"   启动请求队列 Worker...")
+             logger.info(f"   启动请求处理 Worker...")
              worker_task = asyncio.create_task(queue_worker())
-             print(f"   ✅ 请求队列 Worker 已启动。")
+             logger.info(f"   ✅ 请求处理 Worker 已启动。")
+        elif launch_mode == "direct_debug_no_browser":
+            logger.warning("浏览器和页面未就绪 (direct_debug_no_browser 模式)，请求处理 Worker 未启动。API 可能功能受限。")
         else:
+             logger.error("页面或浏览器初始化失败，无法启动 Worker。")
              raise RuntimeError("页面或浏览器初始化失败，无法启动 Worker。")
 
-        print(f"✅ FastAPI 生命周期: 启动完成。")
+        logger.info(f"✅ FastAPI 应用生命周期: 启动完成。服务已就绪。")
         is_initializing = False
-        yield # Application runs here
+        yield
 
     except Exception as startup_err:
-        print(f"❌ FastAPI 生命周期: 启动期间出错: {startup_err}")
-        traceback.print_exc()
-        # Ensure cleanup happens
+        logger.critical(f"❌ FastAPI 应用生命周期: 启动期间发生严重错误: {startup_err}", exc_info=True)
         if worker_task and not worker_task.done(): worker_task.cancel()
         if browser_instance and browser_instance.is_connected():
             try: await browser_instance.close()
@@ -841,56 +912,71 @@ async def lifespan(app_param: FastAPI):
         raise RuntimeError(f"应用程序启动失败: {startup_err}") from startup_err
     finally:
         is_initializing = False
-        print(f"\nFastAPI 生命周期: 关闭中...")
-        # ... (Existing shutdown logic: cancel worker, close page, signal camoufox, close browser, stop playwright) ...
+        logger.info(f"\nFastAPI 应用生命周期: 关闭中...")
         if worker_task and not worker_task.done():
-             print(f"   正在取消请求队列 Worker...")
+             logger.info(f"   正在取消请求处理 Worker...")
              worker_task.cancel()
-             try: await asyncio.wait_for(worker_task, timeout=5.0); print(f"   ✅ 请求队列 Worker 已停止/取消。")
-             except asyncio.TimeoutError: print(f"   ⚠️ Worker 等待超时。")
-             except asyncio.CancelledError: print(f"   ✅ 请求队列 Worker 已确认取消。")
-             except Exception as wt_err: print(f"   ❌ 等待 Worker 停止时出错: {wt_err}")
+             try:
+                 await asyncio.wait_for(worker_task, timeout=5.0)
+                 logger.info(f"   ✅ 请求处理 Worker 已停止/取消。")
+             except asyncio.TimeoutError: logger.warning(f"   ⚠️ Worker 等待超时。")
+             except asyncio.CancelledError: logger.info(f"   ✅ 请求处理 Worker 已确认取消。")
+             except Exception as wt_err: logger.error(f"   ❌ 等待 Worker 停止时出错: {wt_err}", exc_info=True)
 
-        # 获取_close_page_logic返回的更新状态并设置全局变量
-        page_instance, is_page_ready = await _close_page_logic()
-
-        browser_ready_for_shutdown = bool(browser_instance and browser_instance.is_connected())
-        if browser_ready_for_shutdown: await signal_camoufox_shutdown()
+        if page_instance: # 确保在关闭浏览器前关闭页面
+            await _close_page_logic()
 
         if browser_instance:
-            print(f"   正在关闭与浏览器实例的连接...")
+            logger.info(f"   正在关闭与浏览器实例的连接...")
             try:
-                if browser_instance.is_connected(): await browser_instance.close(); print(f"   ✅ 浏览器连接已关闭。")
-                else: print(f"   ℹ️ 浏览器已断开连接。")
-            except Exception as close_err: print(f"   ❌ 关闭浏览器连接时出错: {close_err}")
-            finally: browser_instance = None; is_browser_connected = False
+                if browser_instance.is_connected():
+                    await browser_instance.close()
+                    logger.info(f"   ✅ 浏览器连接已关闭。")
+                else: logger.info(f"   ℹ️ 浏览器先前已断开连接。")
+            except Exception as close_err: logger.error(f"   ❌ 关闭浏览器连接时出错: {close_err}", exc_info=True)
+            finally: browser_instance = None; is_browser_connected = False; is_page_ready = False
 
         if playwright_manager:
-            print(f"   停止 Playwright...")
-            try: await playwright_manager.stop(); print(f"   ✅ Playwright 已停止。")
-            except Exception as stop_err: print(f"   ❌ 停止 Playwright 时出错: {stop_err}")
+            logger.info(f"   停止 Playwright...")
+            try:
+                await playwright_manager.stop()
+                logger.info(f"   ✅ Playwright 已停止。")
+            except Exception as stop_err: logger.error(f"   ❌ 停止 Playwright 时出错: {stop_err}", exc_info=True)
             finally: playwright_manager = None; is_playwright_ready = False
+        
+        restore_original_streams(initial_stdout_before_redirect, initial_stderr_before_redirect)
+        restore_original_streams(true_original_stdout, true_original_stderr) # 再次确保恢复到最原始的
+        logger.info(f"✅ FastAPI 应用生命周期: 关闭完成。")
 
-        print(f"✅ FastAPI 生命周期: 关闭完成。")
 
-# --- FastAPI App ---
+# --- FastAPI App 定义 ---
 app = FastAPI(
-    title="AI Studio Proxy Server (Python/FastAPI/Camoufox - Refactored)",
-    description="Refactored proxy server with unified request processing.",
-    version="0.4.0-py-refactored",
+    title="AI Studio Proxy Server (集成模式)",
+    description="通过 Playwright与 AI Studio 交互的代理服务器。",
+    version="0.6.0-integrated",
     lifespan=lifespan
 )
 
-# --- Static Files & API Info ---
+# --- API Endpoints ---
 @app.get("/", response_class=FileResponse)
 async def read_index():
     index_html_path = os.path.join(os.path.dirname(__file__), "index.html")
-    if not os.path.exists(index_html_path): raise HTTPException(status_code=404, detail="index.html not found")
+    if not os.path.exists(index_html_path):
+        logger.error(f"index.html not found at {index_html_path}")
+        raise HTTPException(status_code=404, detail="index.html not found")
     return FileResponse(index_html_path)
 
 @app.get("/api/info")
 async def get_api_info(request: Request):
-    host = request.headers.get('host') or f"127.0.0.1:8000" # Provide a default if headers missing
+    server_port = request.url.port
+    if not server_port and hasattr(request.app.state, 'server_port'):
+        server_port = request.app.state.server_port
+    if not server_port: # 最终后备
+        # 尝试从环境变量获取，如果 launch_camoufox.py 设置了它
+        server_port = os.environ.get('SERVER_PORT_INFO', '8000')
+
+
+    host = request.headers.get('host') or f"127.0.0.1:{server_port}"
     scheme = request.headers.get('x-forwarded-proto', 'http')
     base_url = f"{scheme}://{host}"
     api_base = f"{base_url}/v1"
@@ -899,34 +985,52 @@ async def get_api_info(request: Request):
         "api_key_required": False, "message": "API Key is not required."
     })
 
-# --- API Endpoints ---
 @app.get("/health")
 async def health_check():
     is_worker_running = bool(worker_task and not worker_task.done())
-    is_core_ready = is_playwright_ready and is_browser_connected and is_page_ready
+    launch_mode = os.environ.get('LAUNCH_MODE', 'unknown')
+    browser_page_critical = launch_mode != "direct_debug_no_browser"
+
+    core_ready_conditions = [not is_initializing, is_playwright_ready]
+    if browser_page_critical:
+        core_ready_conditions.extend([is_browser_connected, is_page_ready])
+    
+    is_core_ready = all(core_ready_conditions)
     status_val = "OK" if is_core_ready and is_worker_running else "Error"
     q_size = request_queue.qsize() if request_queue else -1
+    
+    status_message_parts = []
+    if is_initializing: status_message_parts.append("初始化进行中")
+    if not is_playwright_ready: status_message_parts.append("Playwright 未就绪")
+    if browser_page_critical:
+        if not is_browser_connected: status_message_parts.append("浏览器未连接")
+        if not is_page_ready: status_message_parts.append("页面未就绪")
+    if not is_worker_running: status_message_parts.append("Worker 未运行")
+
     status = {
-        "status": status_val, "message": "", "playwrightReady": is_playwright_ready,
-        "browserConnected": is_browser_connected, "pageReady": is_page_ready,
-        "initializing": is_initializing, "workerRunning": is_worker_running, "queueLength": q_size
+        "status": status_val,
+        "message": "",
+        "details": {
+            "playwrightReady": is_playwright_ready,
+            "browserConnected": is_browser_connected,
+            "pageReady": is_page_ready,
+            "initializing": is_initializing,
+            "workerRunning": is_worker_running,
+            "queueLength": q_size,
+            "launchMode": launch_mode,
+            "browserAndPageCritical": browser_page_critical
+        }
     }
     if status_val == "OK":
-        status["message"] = f"服务运行中。队列长度: {q_size}。"
+        status["message"] = f"服务运行中;队列长度: {q_size}。"
         return JSONResponse(content=status, status_code=200)
     else:
-        reasons = []
-        if not is_playwright_ready: reasons.append("Playwright 未初始化")
-        if not is_browser_connected: reasons.append("浏览器断开")
-        if not is_page_ready: reasons.append("页面未就绪")
-        if not is_worker_running: reasons.append("Worker 未运行")
-        if is_initializing: reasons.append("初始化进行中")
-        status["message"] = f"服务不可用。问题: {(', '.join(reasons) if reasons else '未知')}. 队列长度: {q_size}."
+        status["message"] = f"服务不可用;问题: {(', '.join(status_message_parts) if status_message_parts else '未知原因')}. 队列长度: {q_size}."
         return JSONResponse(content=status, status_code=503)
 
 @app.get("/v1/models")
 async def list_models():
-    print("[API] 收到 /v1/models 请求。")
+    logger.info("[API] 收到 /v1/models 请求。")
     return {"object": "list", "data": [{"id": MODEL_NAME, "object": "model", "created": int(time.time()), "owned_by": "camoufox-proxy"}]}
 
 # --- Helper: Detect Error ---
@@ -1986,57 +2090,61 @@ async def _process_request_refactored(
 @app.post("/v1/chat/completions")
 async def chat_completions(request: ChatCompletionRequest, http_request: Request):
     req_id = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=7))
-    # print(f"[{req_id}] 收到 /v1/chat/completions 请求 (Stream={request.stream})")
-    logger.info(f"[{req_id}] 收到 /v1/chat/completions 请求 (Stream={request.stream})") # logger
+    logger.info(f"[{req_id}] 收到 /v1/chat/completions 请求 (Stream={request.stream})")
 
-    if is_initializing or not is_page_ready or not is_browser_connected or not worker_task or worker_task.done():
+    launch_mode = os.environ.get('LAUNCH_MODE', 'unknown')
+    browser_page_critical = launch_mode != "direct_debug_no_browser"
+    
+    # 检查核心服务是否就绪
+    service_unavailable = is_initializing or \
+                          not is_playwright_ready or \
+                          (browser_page_critical and (not is_page_ready or not is_browser_connected)) or \
+                          not worker_task or worker_task.done()
+
+    if service_unavailable:
         status_code = 503
-        detail = f"[{req_id}] 服务当前不可用 (初始化中、页面/浏览器未就绪或 Worker 未运行)。请稍后重试。"
-        # print(f"[{req_id}] 错误: {detail}")
-        logger.error(f"[{req_id}] 错误: {detail}") # logger
+        # 构建更详细的错误信息
+        error_details = []
+        if is_initializing: error_details.append("初始化进行中")
+        if not is_playwright_ready: error_details.append("Playwright 未就绪")
+        if browser_page_critical:
+            if not is_browser_connected: error_details.append("浏览器未连接")
+            if not is_page_ready: error_details.append("页面未就绪")
+        if not worker_task or worker_task.done(): error_details.append("Worker 未运行")
+        
+        detail = f"[{req_id}] 服务当前不可用 ({', '.join(error_details)}). 请稍后重试."
+        logger.error(f"[{req_id}] 服务不可用详情: {detail}")
         raise HTTPException(status_code=status_code, detail=detail, headers={"Retry-After": "30"})
 
     result_future = Future()
     request_item = {
-        "req_id": req_id,
-        "request_data": request,
-        "http_request": http_request,
-        "result_future": result_future,
-        "enqueue_time": time.time(),
-        "cancelled": False # Add cancelled flag
+        "req_id": req_id, "request_data": request, "http_request": http_request,
+        "result_future": result_future, "enqueue_time": time.time(), "cancelled": False
     }
-
     await request_queue.put(request_item)
-    # print(f"[{req_id}] 请求已加入队列 (当前队列长度: {request_queue.qsize()})")
-    logger.info(f"[{req_id}] 请求已加入队列 (当前队列长度: {request_queue.qsize()})") # logger
-
+    logger.info(f"[{req_id}] 请求已加入队列 (当前队列长度: {request_queue.qsize()})")
     try:
-        # Wait for the result from the worker
-        # Add timeout to prevent indefinite hanging if worker fails unexpectedly
-        timeout_seconds = RESPONSE_COMPLETION_TIMEOUT / 1000 + 120 # Base timeout + buffer
+        timeout_seconds = RESPONSE_COMPLETION_TIMEOUT / 1000 + 120
         result = await asyncio.wait_for(result_future, timeout=timeout_seconds)
-        # print(f"[{req_id}] Worker 处理完成，返回结果。")
-        logger.info(f"[{req_id}] Worker 处理完成，返回结果。") # logger
+        logger.info(f"[{req_id}] Worker 处理完成，返回结果。")
         return result
     except asyncio.TimeoutError:
-        # print(f"[{req_id}] ❌ 等待 Worker 响应超时 ({timeout_seconds}s)。")
-        logger.error(f"[{req_id}] ❌ 等待 Worker 响应超时 ({timeout_seconds}s)。") # logger
-        # Mark the item in queue as cancelled (if possible, might be complex)
-        # Best effort: Raise 504
+        logger.error(f"[{req_id}] ❌ 等待 Worker 响应超时 ({timeout_seconds}s)。")
         raise HTTPException(status_code=504, detail=f"[{req_id}] Request processing timed out waiting for worker response.")
-    except asyncio.CancelledError:
-        # print(f"[{req_id}] 请求 Future 被取消 (可能由客户端断开触发)。")
-        logger.info(f"[{req_id}] 请求 Future 被取消 (可能由客户端断开触发)。") # logger
-        # Worker should have handled setting the 499, but raise defensively
-        raise HTTPException(status_code=499, detail=f"[{req_id}] Request cancelled (likely client disconnect).")
-    except HTTPException as http_err: # Re-raise exceptions set by worker
-        # print(f"[{req_id}] Worker 抛出 HTTP 异常 {http_err.status_code}，重新抛出。")
-        logger.warning(f"[{req_id}] Worker 抛出 HTTP 异常 {http_err.status_code}，重新抛出。") # logger
+    except asyncio.CancelledError: # 通常由客户端断开连接触发
+        logger.info(f"[{req_id}] 请求 Future 被取消 (可能由客户端断开连接触发)。")
+        # Worker 内部的 check_disconnect_periodically 应该已经设置了 499 异常
+        # 但这里作为后备，如果 Future 被直接取消
+        if not result_future.done() or result_future.exception() is None:
+             # 如果 future 没有被 worker 设置异常，我们在这里设置一个
+             raise HTTPException(status_code=499, detail=f"[{req_id}] Request cancelled by client or server.")
+        else: # 如果 future 已经被 worker 设置了异常 (例如 HTTPException)，重新抛出它
+             raise result_future.exception()
+    except HTTPException as http_err: # 由 worker 明确抛出的 HTTP 异常
+        # logger.warning(f"[{req_id}] Worker 抛出 HTTP 异常 {http_err.status_code}，重新抛出。") # Worker 内部已记录
         raise http_err
-    except Exception as e:
-        # print(f"[{req_id}] ❌ 等待 Worker 响应时发生意外错误: {e}")
-        logger.exception(f"[{req_id}] ❌ 等待 Worker 响应时发生意外错误") # logger
-        # traceback.print_exc()
+    except Exception as e: # 其他意外错误
+        logger.exception(f"[{req_id}] ❌ 等待 Worker 响应时发生意外错误")
         raise HTTPException(status_code=500, detail=f"[{req_id}] Unexpected error waiting for worker response: {e}")
 
 # --- 新增：辅助函数，搜索队列中的请求并标记为取消 --- (Helper from server未重构.py)
@@ -2078,114 +2186,81 @@ async def cancel_queued_request(req_id: str) -> bool:
 # --- 新增：添加取消请求的API端点 --- (Endpoint from server未重构.py)
 @app.post("/v1/cancel/{req_id}")
 async def cancel_request(req_id: str):
-    """取消指定ID的请求，如果它还在队列中等待处理"""
-    # print(f"[{req_id}] 收到取消请求。", flush=True)
-    logger.info(f"[{req_id}] 收到取消请求。") # logger
+    # (代码不变)
+    logger.info(f"[{req_id}] 收到取消请求。")
     cancelled = await cancel_queued_request(req_id)
     if cancelled:
-        return JSONResponse(content={"success": True, "message": f"Request {req_id} marked as cancelled in queue."}) # Updated message
+        return JSONResponse(content={"success": True, "message": f"Request {req_id} marked as cancelled in queue."})
     else:
-        # 未找到请求或请求可能已经在处理中
         return JSONResponse(
-            content={"success": False, "message": f"Request {req_id} not found in queue (it might be processing or already finished)."}, # Updated message
+            content={"success": False, "message": f"Request {req_id} not found in queue (it might be processing or already finished)."},
             status_code=404
         )
 
-# --- 新增：添加队列状态查询的API端点 --- (Endpoint from server未重构.py)
 @app.get("/v1/queue")
 async def get_queue_status():
-    """返回当前队列状态的信息"""
+    # (代码不变)
     queue_items = []
     items_to_requeue = []
     try:
         while True:
             item = request_queue.get_nowait()
-            items_to_requeue.append(item) # Temporarily store item
+            items_to_requeue.append(item)
             req_id = item.get("req_id", "unknown")
-            timestamp = item.get("enqueue_time", 0) # Use enqueue_time if available
+            timestamp = item.get("enqueue_time", 0)
             is_streaming = item.get("request_data").stream if hasattr(item.get("request_data", {}), "stream") else False
             cancelled = item.get("cancelled", False)
             queue_items.append({
-                "req_id": req_id,
-                "enqueue_time": timestamp,
+                "req_id": req_id, "enqueue_time": timestamp,
                 "wait_time_seconds": round(time.time() - timestamp, 2) if timestamp else None,
-                "is_streaming": is_streaming,
-                "cancelled": cancelled
+                "is_streaming": is_streaming, "cancelled": cancelled
             })
     except asyncio.QueueEmpty:
-        pass # Finished reading queue
+        pass
     finally:
-        # Put items back into the queue
         for item in items_to_requeue:
             await request_queue.put(item)
-
     return JSONResponse(content={
-        "queue_length": len(queue_items), # Use length of extracted items
-        "is_processing_locked": processing_lock.locked(), # Check if lock is held
-        "items": sorted(queue_items, key=lambda x: x.get("enqueue_time", 0)) # Sort by enqueue time
+        "queue_length": len(queue_items),
+        "is_processing_locked": processing_lock.locked(),
+        "items": sorted(queue_items, key=lambda x: x.get("enqueue_time", 0))
     })
 
-# --- 新增: WebSocket 日志端点 ---
 @app.websocket("/ws/logs")
 async def websocket_log_endpoint(websocket: WebSocket):
-    """WebSocket 端点，用于实时日志流"""
+    if not log_ws_manager:
+        try:
+            await websocket.accept()
+            await websocket.send_text(json.dumps({
+                "type": "error", "status": "disconnected",
+                "message": "日志服务内部错误 (管理器未初始化)。",
+                "timestamp": datetime.datetime.now().isoformat()}))
+            await websocket.close(code=1011)
+        except Exception: pass
+        return
+
     client_id = str(uuid.uuid4())
     try:
-        # 接受 WebSocket 连接
-        await websocket.accept()
-
-        # 将连接添加到管理器
-        await log_ws_manager.connect(client_id, websocket) # <<-- 使用 await
-
-        # 发送欢迎消息
-        await websocket.send_text(json.dumps({
-            "type": "connection_status",
-            "status": "connected",
-            "message": "已连接到日志流。",
-            "timestamp": datetime.datetime.now().isoformat()
-        }))
-
-        # 保持连接打开，直到客户端断开连接
+        await log_ws_manager.connect(client_id, websocket)
         while True:
-            # 为防止超时，使用简单的心跳机制
-            await websocket.receive_text() # 等待客户端消息
-            # 可以选择性地回复一个 pong 消息，如果需要严格的心跳
-            # await websocket.send_text(json.dumps({"type": "pong"}))
-
+            data = await websocket.receive_text()
+            if data.lower() == "ping":
+                 await websocket.send_text(json.dumps({"type": "pong", "timestamp": datetime.datetime.now().isoformat()}))
     except WebSocketDisconnect:
-        # 客户端断开连接时，从管理器中移除
-        log_ws_manager.disconnect(client_id)
-        logger.info(f"日志客户端已断开连接: {client_id}")
+        # logger.info(f"日志客户端 {client_id} 已断开。") # disconnect 方法会记录
+        pass # disconnect 方法会处理日志记录
     except Exception as e:
-        # 发生其他异常时，同样从管理器中移除
-        logger.error(f"日志 WebSocket 异常 ({client_id}): {str(e)}") # 添加 client_id
-        log_ws_manager.disconnect(client_id)
+        logger.error(f"日志 WebSocket (客户端 {client_id}) 发生异常: {e}", exc_info=True)
+    finally:
+        if log_ws_manager: # 确保 manager 仍然存在
+            log_ws_manager.disconnect(client_id)
 
-
-# --- Main Execution --- (if running directly)
+# --- 移除独立的 __main__ Uvicorn 启动逻辑 ---
 if __name__ == "__main__":
-    import uvicorn
-    import argparse
-
-    parser = argparse.ArgumentParser(description="运行 AI Studio Proxy Server")
-    parser.add_argument("--host", type=str, default="127.0.0.1", help="服务器主机地址")
-    parser.add_argument(
-        "--port",
-        type=int,
-        default=2048, # <-- 修改默认值为 2048
-        help="服务器端口"
-    )
-    # --- 新增参数 ---
-    parser.add_argument(
-        "--disable-print-redirect",
-        action="store_true", # 设置为 store_true，存在即为 True
-        help="禁用将 print 输出重定向到日志系统的功能，使终端输出更干净。"
-    )
-    args = parser.parse_args()
-
-    # --- 修改调用 ---
-    # 如果提供了 --disable-print-redirect，则 redirect_print 为 False
-    setup_logging(log_level=logging.INFO, redirect_print=not args.disable_print_redirect)
-
-    uvicorn.run(app, host=args.host, port=args.port)
-
+    print("错误: server.py 不应直接作为主脚本运行。", file=sys.stderr)
+    print("请使用 launch_camoufox.py (用于调试) 或 start.py (用于后台服务) 来启动。", file=sys.stderr)
+    print("\n如果确实需要直接运行 server.py 进行底层测试 (不推荐):", file=sys.stderr)
+    print("  1. 确保已设置必要的环境变量，如 CAMOUFOX_WS_ENDPOINT, LAUNCH_MODE, SERVER_REDIRECT_PRINT, SERVER_LOG_LEVEL。", file=sys.stderr)
+    print("  2. 然后可以尝试: python -m uvicorn server:app --host 0.0.0.0 --port <端口号>", file=sys.stderr)
+    print("     例如: LAUNCH_MODE=direct_debug_no_browser SERVER_REDIRECT_PRINT=false python -m uvicorn server:app --port 8000", file=sys.stderr)
+    sys.exit(1)
