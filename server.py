@@ -240,8 +240,17 @@ def setup_logging(log_level=logging.INFO, redirect_print=False): # <-- 默认改
     root_logger.setLevel(log_level) # <-- Revert back to INFO (or original log_level)
 
     # 1. Rotating File Handler (使用详细格式)
+    # 确保每次启动时 app.log 文件都是全新的
+    if os.path.exists(LOG_FILE_PATH):
+        try:
+            os.remove(LOG_FILE_PATH)
+            # 诊断信息输出到原始 stderr
+            print(f"INFO: 旧的日志文件 {LOG_FILE_PATH} 已在日志设置前被移除。", file=sys.__stderr__)
+        except OSError as e:
+            # 删除失败则依赖 mode='w'
+            print(f"警告: 尝试移除旧的日志文件 {LOG_FILE_PATH} 失败: {e}。将依赖 mode='w' 进行截断。", file=sys.__stderr__)
     file_handler = logging.handlers.RotatingFileHandler(
-        LOG_FILE_PATH, maxBytes=5*1024*1024, backupCount=5, encoding='utf-8'
+        LOG_FILE_PATH, maxBytes=5*1024*1024, backupCount=5, encoding='utf-8', mode='w'
     )
     file_handler.setFormatter(file_log_formatter)
     root_logger.addHandler(file_handler)
@@ -710,6 +719,13 @@ async def _initialize_page_logic(browser: AsyncBrowser):
             await expect_async(input_wrapper_locator).to_be_visible(timeout=35000)
             await expect_async(found_page.locator(INPUT_SELECTOR)).to_be_visible(timeout=10000)
             print("-> ✅ 核心输入区域可见。")
+            # 使用更精确的选择器定位模型名称元素
+            # 添加first()确保只选择第一个匹配的元素，避免严格模式违规
+            model_wrapper_locator = found_page.locator('#mat-select-value-0 mat-select-trigger').first
+            # 获取模型名称
+            model_name = await model_wrapper_locator.inner_text()
+            print(f"-> 🤖 当前模型: {model_name}")
+            logger.info(f"(🤖 当前模型) {model_name}")
             result_page = found_page
             result_ready = True
             print(f"✅ 页面逻辑初始化成功。")
