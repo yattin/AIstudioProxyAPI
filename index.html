@@ -3,189 +3,231 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Studio Proxy - Chat UI</title>
+    <title>AI Studio Proxy Chat</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
         /* --- Modernized M3-Inspired Styles --- */
         :root {
-            /* Light Mode Palette (M3 Baseline Blue - More Standard) */
-            /* Define RGB for RGBA usage */
-            --primary-rgb: 52, 110, 248;
-            --secondary-rgb: 88, 94, 113;
-            --on-surface-rgb: 26, 28, 30;
-
-            --bg-color: #f7f9fc; /* Neutral Light Background */
-            --container-bg: #fefbff; /* Surface */
-            --text-color: #1a1c1e; /* On Surface / On Background */
-            --primary-color: rgb(var(--primary-rgb)); /* #346EF8 */
-            --on-primary: #ffffff;
-            --primary-container: #d8e2ff;
-            --on-primary-container: #001a42;
-            --secondary-color: rgb(var(--secondary-rgb)); /* #585E71 */
-            --on-secondary: #ffffff;
-            --secondary-container: #dde2f9;
-            --on-secondary-container: #151b2c;
-            /* --tertiary-color: #745470; (Example, not mapped) */
-            /* --on-tertiary: #ffffff; */
-            /* --tertiary-container: #ffd7f6; */
-            /* --on-tertiary-container: #2b122a; */
-            --user-msg-bg: var(--primary-container);
-            --user-msg-text: var(--on-primary-container);
-            --assistant-msg-bg: #e1e2ec; /* Surface Variant */
-            --assistant-msg-text: #44474f; /* On Surface Variant */
-            --system-msg-bg: #f0f4f9; /* Light neutral gray */
-            --system-msg-text: #6c757d; /* Mid gray */
-            --error-color: #ba1a1a;
-            --on-error: #ffffff;
-            --error-container: #ffdad6;
-            --on-error-container: #410002;
+            /* Material 3 基础调色板 */
+            --primary-rgb: 52, 110, 248;  /* #346EF8 - 主色调 */
+            --on-primary-rgb: 255, 255, 255;  /* 在主色上的文本 */
+            --primary-container-rgb: 216, 226, 255;  /* #D8E2FF - 主色容器 */
+            --on-primary-container-rgb: 0, 26, 66;  /* #001A42 - 主色容器上的文本 */
+            
+            --secondary-rgb: 88, 94, 113;  /* #585E71 - 次要色 */
+            --on-secondary-rgb: 255, 255, 255;  /* 次色上的文本 */
+            --secondary-container-rgb: 221, 226, 249;  /* #DDE2F9 - 次色容器 */
+            --on-secondary-container-rgb: 21, 27, 44;  /* #151B2C - 次色容器上的文本 */
+            
+            --surface-rgb: 254, 251, 255;  /* #FEFBFF - 表面 */
+            --on-surface-rgb: 26, 28, 30;  /* #1A1C1E - 表面上的文本 */
+            --surface-variant-rgb: 225, 226, 236;  /* #E1E2EC - 表面变体 */
+            --on-surface-variant-rgb: 68, 71, 79;  /* #44474F - 表面变体上的文本 */
+            
+            --error-rgb: 186, 26, 26;  /* #BA1A1A - 错误色 */
+            --on-error-rgb: 255, 255, 255;  /* 错误色上的文本 */
+            --error-container-rgb: 255, 218, 214;  /* #FFDAD6 - 错误容器 */
+            --on-error-container-rgb: 65, 0, 2;  /* #410002 - 错误容器上的文本 */
+            
+            --outline-rgb: 116, 119, 127;  /* #74777F - 轮廓线 */
+            
+            /* 亮色主题变量 */
+            --bg-color: #f7f9fc;  /* 中性浅色背景 */
+            --container-bg: rgb(var(--surface-rgb));  /* 表面 */
+            --text-color: rgb(var(--on-surface-rgb));  /* 文本颜色 */
+            
+            --primary-color: rgb(var(--primary-rgb));  /* 主色 */
+            --on-primary: rgb(var(--on-primary-rgb));  /* 主色上的文本 */
+            --primary-container: rgb(var(--primary-container-rgb));  /* 主色容器 */
+            --on-primary-container: rgb(var(--on-primary-container-rgb));  /* 主色容器上的文本 */
+            
+            --secondary-color: rgb(var(--secondary-rgb));  /* 次色 */
+            --on-secondary: rgb(var(--on-secondary-rgb));  /* 次色上的文本 */
+            --secondary-container: rgb(var(--secondary-container-rgb));  /* 次色容器 */
+            --on-secondary-container: rgb(var(--on-secondary-container-rgb));  /* 次色容器上的文本 */
+            
+            --user-msg-bg: var(--primary-container);  /* 用户消息背景 */
+            --user-msg-text: var(--on-primary-container);  /* 用户消息文本 */
+            --assistant-msg-bg: rgb(var(--surface-variant-rgb));  /* 助手消息背景 */
+            --assistant-msg-text: rgb(var(--on-surface-variant-rgb));  /* 助手消息文本 */
+            --system-msg-bg: rgba(var(--on-surface-rgb), 0.05);  /* 系统消息背景 */
+            --system-msg-text: rgba(var(--on-surface-rgb), 0.7);  /* 系统消息文本 */
+            
+            --error-color: rgb(var(--error-rgb));  /* 错误颜色 */
+            --on-error: rgb(var(--on-error-rgb));  /* 错误颜色上的文本 */
+            --error-container: rgb(var(--error-container-rgb));  /* 错误容器 */
+            --on-error-container: rgb(var(--on-error-container-rgb));  /* 错误容器上的文本 */
             --error-msg-bg: var(--error-container);
             --error-msg-text: var(--on-error-container);
-            --border-color: #74777f; /* Outline */
-            --input-bg: var(--container-bg); /* Surface, like Material Text Field */
-            --input-border: var(--border-color); /* Outline */
-            --input-focus-border: var(--primary-color);
-            --input-focus-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.1); /* Lighter focus */
-            --button-bg: var(--primary-color);
-            --button-text: var(--on-primary);
-            --button-hover-bg: #1A59E0; /* Darker primary */
-            --button-disabled-bg: rgba(var(--on-surface-rgb), 0.12);
-            --button-disabled-text: rgba(var(--on-surface-rgb), 0.38);
-            --clear-button-bg: var(--secondary-color);
-            --clear-button-text: var(--on-secondary);
-            --clear-button-hover-bg: #41475A; /* Darker secondary */
-            --sidebar-bg: #f0f3fa; /* Slightly darker than background */
-            --sidebar-border: var(--border-color);
+            
+            --border-color: rgba(var(--outline-rgb), 0.8);  /* 边框颜色 */
+            --input-bg: var(--container-bg);  /* 输入框背景 */
+            --input-border: rgba(var(--outline-rgb), 0.5);  /* 输入框边框 */
+            --input-focus-border: var(--primary-color);  /* 输入框聚焦边框 */
+            --input-focus-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.1);  /* 聚焦阴影 */
+            
+            --button-bg: var(--primary-color);  /* 按钮背景 */
+            --button-text: var(--on-primary);  /* 按钮文本 */
+            --button-hover-bg: rgb(28, 85, 230);  /* 按钮悬停背景 */
+            --button-disabled-bg: rgba(var(--on-surface-rgb), 0.12);  /* 禁用按钮背景 */
+            --button-disabled-text: rgba(var(--on-surface-rgb), 0.38);  /* 禁用按钮文本 */
+            
+            --clear-button-bg: rgba(var(--secondary-rgb), 0.9);  /* 清除按钮背景 */
+            --clear-button-text: var(--on-secondary);  /* 清除按钮文本 */
+            --clear-button-hover-bg: rgb(70, 76, 95);  /* 清除按钮悬停背景 */
+            
+            --sidebar-bg: rgba(var(--surface-rgb), 0.95);  /* 侧边栏背景 */
+            --sidebar-border: rgba(var(--outline-rgb), 0.3);  /* 侧边栏边框 */
+            
             --icon-button-bg: transparent;
             --icon-button-hover-bg: rgba(var(--primary-rgb), 0.08);
-            --icon-button-color: #44474f; /* On Surface variant */
-            --log-terminal-bg: #1e1e1e; /* Keep dark */
-            --log-terminal-text: #d4d4d4; /* Keep light */
-
+            --icon-button-color: rgb(var(--on-surface-variant-rgb));
+            
+            --log-terminal-bg: #1e1e1e;  /* 日志终端背景 */
+            --log-terminal-text: #d4d4d4;  /* 日志终端文本 */
+            
             --theme-toggle-hover-bg: rgba(var(--secondary-rgb), 0.08);
             --theme-toggle-color: var(--icon-button-color);
             --theme-toggle-bg: transparent;
-
+            
             --card-bg: var(--container-bg);
-            --card-border: var(--border-color);
+            --card-border: rgba(var(--outline-rgb), 0.2);
             --card-shadow: var(--shadow-sm);
-
-            --border-radius-sm: 4px;  /* M3 Small */
-            --border-radius-md: 8px;  /* M3 Medium */
-            --border-radius-lg: 16px; /* M3 Large */
-            --border-radius-xl: 28px; /* M3 Extra Large / Pill */
-            --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.1), 0 1px 3px rgba(0, 0, 0, 0.08); /* M3 Elevation 1 */
-            --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.1), 0 4px 6px rgba(0, 0, 0, 0.08); /* M3 Elevation 2 approx */
+            
+            /* 边框半径 */
+            --border-radius-sm: 8px;
+            --border-radius-md: 12px;
+            --border-radius-lg: 16px;
+            --border-radius-xl: 28px;
+            
+            /* 阴影 */
+            --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+            --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.05), 0 2px 4px rgba(0, 0, 0, 0.08);
+            --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.03), 0 4px 6px rgba(0, 0, 0, 0.05);
+            
+            /* 尺寸变量 */
             --sidebar-width: 380px;
             --sidebar-transition: width 0.3s ease, padding 0.3s ease, border 0.3s ease, transform 0.3s ease;
             --content-padding: 24px;
+            
+            /* 动画速度 */
+            --transition-speed: 0.2s;
         }
 
-        /* Dark Mode Palette - Applied via class on <html> */
+        /* 深色模式调色板 */
         html.dark-mode {
-             /* Define RGB for RGBA usage */
+            /* 深色主题 Material 3 调色板 */
             --primary-rgb: 173, 198, 255;
+            --on-primary-rgb: 0, 46, 104;
+            --primary-container-rgb: 24, 83, 181;
+            --on-primary-container-rgb: 216, 226, 255;
+            
             --secondary-rgb: 188, 194, 217;
+            --on-secondary-rgb: 42, 48, 66;
+            --secondary-container-rgb: 64, 70, 89;
+            --on-secondary-container-rgb: 221, 226, 249;
+            
+            --surface-rgb: 28, 28, 30;
             --on-surface-rgb: 227, 226, 230;
-
-            --bg-color: #1a1c1e; /* On Surface / On Background */
-            --container-bg: #1a1c1e; /* Surface (often same as background in dark) */
-            --text-color: #e3e2e6; /* On Surface / On Background */
-            --primary-color: rgb(var(--primary-rgb)); /* #ADC6FF */
-            --on-primary: #002e68;
-            --primary-container: #1853b5; /* Adjusted primary container dark */
-            --on-primary-container: #d8e2ff;
-            --secondary-color: rgb(var(--secondary-rgb)); /* #BCC2D9 */
-            --on-secondary: #2a3042;
-            --secondary-container: #404659;
-            --on-secondary-container: #dde2f9;
-            /* --tertiary-color: #E2BBDB; */
-            /* --on-tertiary: #422740; */
-            /* --tertiary-container: #5B3D57; */
-            /* --on-tertiary-container: #FFD7F6; */
+            --surface-variant-rgb: 68, 71, 79;
+            --on-surface-variant-rgb: 196, 198, 207;
+            
+            --error-rgb: 255, 180, 171;
+            --on-error-rgb: 105, 0, 5;
+            --error-container-rgb: 147, 0, 10;
+            --on-error-container-rgb: 255, 218, 214;
+            
+            --outline-rgb: 142, 144, 153;
+            
+            /* 深色主题变量 */
+            --bg-color: #121212;  /* 深色背景 */
+            --container-bg: #1c1c1e;  /* 表面 */
+            --text-color: rgb(var(--on-surface-rgb));
+            
+            --primary-color: rgb(var(--primary-rgb));
+            --on-primary: rgb(var(--on-primary-rgb));
+            --primary-container: rgb(var(--primary-container-rgb));
+            --on-primary-container: rgb(var(--on-primary-container-rgb));
+            
+            --secondary-color: rgb(var(--secondary-rgb));
+            --on-secondary: rgb(var(--on-secondary-rgb));
+            --secondary-container: rgb(var(--secondary-container-rgb));
+            --on-secondary-container: rgb(var(--on-secondary-container-rgb));
+            
             --user-msg-bg: var(--primary-container);
             --user-msg-text: var(--on-primary-container);
-            --assistant-msg-bg: #44474f; /* On Surface Variant */
-            --assistant-msg-text: #c4c6cf; /* Outline */
-            --system-msg-bg: #2e3133; /* Darker neutral */
-            --system-msg-text: #b9bfc2; /* Mid-light gray */
-            --error-color: #ffb4ab;
-            --on-error: #690005;
-            --error-container: #93000a;
-            --on-error-container: #ffdad6;
-            --error-msg-bg: var(--error-container);
-            --error-msg-text: var(--on-error-container);
-            --border-color: #8e9099; /* Outline */
-            --input-bg: var(--container-bg); /* Surface */
-            --input-border: var(--border-color); /* Outline */
-            --input-focus-border: var(--primary-color);
-            --input-focus-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.15); /* Lighter focus */
-            --button-bg: var(--primary-color);
-            --button-text: var(--on-primary);
-            --button-hover-bg: #C7D8FF; /* Lighter primary */
-            --button-disabled-bg: rgba(var(--on-surface-rgb), 0.12);
-            --button-disabled-text: rgba(var(--on-surface-rgb), 0.38);
-            --clear-button-bg: var(--secondary-color);
-            --clear-button-text: var(--on-secondary);
-            --clear-button-hover-bg: #D5DAF1; /* Lighter secondary */
-            --sidebar-bg: #1e2023; /* Slightly darker */
-            --sidebar-border: var(--border-color);
-            --icon-button-hover-bg: rgba(var(--primary-rgb), 0.08);
-            --icon-button-color: #c4c6cf; /* Outline */
-            --log-terminal-bg: #1e1e1e; /* Consistent dark */
-            --log-terminal-text: #d4d4d4; /* Consistent light */
-
-            --theme-toggle-hover-bg: rgba(var(--secondary-rgb), 0.08);
-            --theme-toggle-color: var(--icon-button-color);
-            --theme-toggle-bg: transparent;
-
-            --card-bg: var(--container-bg);
-            --card-border: var(--border-color);
-            --card-shadow: 0 2px 6px rgba(0, 0, 0, 0.2), 0 4px 8px rgba(0, 0, 0, 0.15); /* M3 Elevation 2 dark approx */
+            --assistant-msg-bg: rgb(var(--surface-variant-rgb));
+            --assistant-msg-text: rgb(var(--on-surface-variant-rgb));
+            --system-msg-bg: rgba(var(--on-surface-rgb), 0.08);
+            --system-msg-text: rgba(var(--on-surface-rgb), 0.7);
+            
+            --error-color: rgb(var(--error-rgb));
+            --on-error: rgb(var(--on-error-rgb));
+            --error-container: rgb(var(--error-container-rgb));
+            --on-error-container: rgb(var(--on-error-container-rgb));
+            
+            --border-color: rgba(var(--outline-rgb), 0.6);
+            --input-bg: rgba(var(--surface-rgb), 0.8);
+            --input-border: rgba(var(--outline-rgb), 0.3);
+            
+            --button-hover-bg: rgb(190, 210, 255);
+            
+            --sidebar-bg: #1e1e1e;
+            
+            --card-shadow: 0 4px 6px rgba(0, 0, 0, 0.25), 0 5px 7px rgba(0, 0, 0, 0.22);
         }
 
         *, *::before, *::after {
-            box-sizing: border-box; /* Better box model */
+            box-sizing: border-box;
         }
 
         body {
             background-color: var(--bg-color);
             color: var(--text-color);
-            font-family: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol"; /* Modern font stack */
+            font-family: 'Noto Sans SC', 'Roboto', sans-serif;
             margin: 0;
             padding: 0;
             display: flex;
             height: 100vh;
             overflow: hidden;
-            font-size: 16px; /* Base font size */
+            font-size: 16px;
+            line-height: 1.6;
+            transition: background-color var(--transition-speed), color var(--transition-speed);
         }
 
-        /* --- Workspace Layout (Chat Left, Sidebar Right) --- */
+        /* --- 工作区布局 --- */
         .workspace-container {
             display: flex;
             width: 100%;
             height: 100%;
+            position: relative; /* MODIFIED: For #toggleSidebarButton desktop positioning */
         }
 
         .chat-panel {
-            flex-grow: 1; /* Takes available space */
+            flex-grow: 1;
             display: flex;
             flex-direction: column;
             height: 100%;
             overflow: hidden;
             background-color: var(--container-bg);
+            transition: background-color var(--transition-speed);
         }
 
+        /* --- 侧边栏样式改进 --- */
         .sidebar-panel {
             width: var(--sidebar-width);
             height: 100%;
-            flex-shrink: 0; /* Prevents shrinking */
+            flex-shrink: 0;
             display: flex;
             flex-direction: column;
             overflow: hidden;
             background-color: var(--sidebar-bg);
-            border-left: 1px solid var(--sidebar-border); /* Sidebar on the right */
-            transition: var(--sidebar-transition);
-            position: relative; /* Keep relative for absolute positioning of button INSIDE */
+            border-left: 1px solid var(--sidebar-border);
+            transition: var(--sidebar-transition), background-color var(--transition-speed);
+            position: relative;
+            box-shadow: -1px 0 3px rgba(0, 0, 0, 0.05);
         }
 
         .sidebar-panel.collapsed {
@@ -193,89 +235,104 @@
             padding: 0;
             border-left: none;
             overflow: hidden;
-            /* transform: translateX(100%); REMOVED - Handled differently below */
-            /* visibility: hidden; */ /* Using width/border is sufficient */
         }
 
-        /* Sidebar Toggle Button (Chevron Style) */
+        /* --- 侧边栏切换按钮 --- */
         #toggleSidebarButton {
-            position: absolute; /* Base position is absolute (for desktop) */
-            top: 12px; /* Align better with header padding */
-            /* left is calculated dynamically below - REMOVED */
-            /* left: -14px; /* Position centered on the left edge of the parent - REMOVED */
-            z-index: 10; /* Default z-index (increased for mobile below) */
-            width: 28px; /* Smaller */
-            height: 28px;
+            position: absolute; /* Default for desktop, overridden by media query for mobile */
+            top: 12px;
+            z-index: 10;
+            width: 36px;
+            height: 36px;
             border-radius: 50%;
-            border: 1px solid var(--border-color);
-            background-color: var(--sidebar-bg);
+            border: 1px solid rgba(var(--outline-rgb), 0.3);
+            background-color: var(--container-bg);
             color: var(--icon-button-color);
             cursor: pointer;
             display: flex;
             align-items: center;
             justify-content: center;
             padding: 0;
-            font-size: 1em; /* Smaller icon */
-            transition: background-color 0.2s, color 0.2s, transform 0.3s ease, left 0.3s ease, border-color 0.2s;
+            font-size: 1em;
+            transition: background-color var(--transition-speed), color var(--transition-speed), transform 0.3s ease, box-shadow var(--transition-speed), left var(--transition-speed), right var(--transition-speed);
             box-shadow: var(--shadow-sm);
         }
+
         #toggleSidebarButton:hover {
-            /* background-color: var(--icon-button-hover-bg); REMOVED hover effect */
             border-color: var(--primary-color);
             color: var(--primary-color);
+            background-color: rgba(var(--primary-rgb), 0.05);
+            box-shadow: var(--shadow-md);
         }
-        /* Specific positioning and icon logic is in JS and @media */
 
+        /* --- 标题样式 --- */
         h1 {
             color: var(--text-color);
             text-align: center;
             margin: 0;
-            padding: 8px var(--content-padding); /* Toolbar padding */
-            gap: 8px; /* Gap between buttons */
-            background-color: var(--container-bg); /* Match chat panel */
-            font-size: 1.2em; /* Slightly smaller title */
-            font-weight: 600; /* Slightly bolder */
+            padding: 16px var(--content-padding);
+            background-color: var(--container-bg);
+            font-size: 1.4em;
+            font-weight: 600;
+            letter-spacing: -0.5px;
             flex-shrink: 0;
+            border-bottom: 1px solid rgba(var(--outline-rgb), 0.1);
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Noto Sans SC', sans-serif;
         }
 
+        .logo {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 12px;
+            color: var(--primary-color);
+        }
+
+        /* Removed .title-separator and .subtitle as title is simpler now */
+
+        /* --- 链接样式 --- */
         a {
             color: var(--primary-color);
             text-decoration: none;
             font-weight: 500;
+            transition: color var(--transition-speed);
         }
+
         a:hover {
-            text-decoration: underline;
-            filter: brightness(0.9);
+            text-decoration: none;
+            opacity: 0.85;
         }
 
-        strong {
-            font-weight: 600;
-        }
-
+        /* --- 消息样式增强 --- */
         #chatbox {
             flex-grow: 1;
             overflow-y: auto;
             padding: var(--content-padding);
             display: flex;
             flex-direction: column;
-            gap: 16px; /* M3 Spacing: Adjusted from 18px */
+            gap: 16px;
+            background-color: var(--bg-color);
+            transition: background-color var(--transition-speed);
         }
 
         .message {
-            padding: 16px; /* M3 Padding: Adjusted from 12px 18px */
-            border-radius: var(--border-radius-lg); /* Default, overridden below */
+            padding: 16px 18px;
+            border-radius: var(--border-radius-lg);
             max-width: 85%;
             word-wrap: break-word;
             line-height: 1.6;
-            box-shadow: var(--shadow-sm); /* Add subtle shadow */
-            border: 1px solid transparent; /* Ensure border space for consistency */
-            position: relative; /* For positioning edit/delete buttons */
-            transition: background-color 0.2s;
-            /* Remove inconsistent large radius - handled by specific messages */
-            /* border-radius: var(--border-radius-lg); */
+            box-shadow: var(--shadow-sm);
+            border: 1px solid transparent;
+            position: relative;
+            transition: background-color var(--transition-speed), box-shadow var(--transition-speed);
         }
-        .message:hover .message-actions {
-            opacity: 1;
+
+        .message:hover {
+            box-shadow: var(--shadow-md);
         }
 
         .user-message {
@@ -283,11 +340,9 @@
             color: var(--user-msg-text);
             align-self: flex-end;
             margin-left: auto;
-             /* M3 Speech bubble effect - Rounded corners away from pointer */
             border-radius: var(--border-radius-lg) var(--border-radius-sm) var(--border-radius-lg) var(--border-radius-lg);
-            border: 1px solid rgba(var(--on-surface-rgb), 0.1);
+            border-color: rgba(var(--primary-container-rgb), 0.5);
         }
-        html.dark-mode .user-message { border-color: rgba(var(--on-surface-rgb), 0.15); }
 
         .assistant-message {
             background-color: var(--assistant-msg-bg);
@@ -295,112 +350,118 @@
             align-self: flex-start;
             margin-right: auto;
             white-space: pre-wrap;
-             /* M3 Speech bubble effect - Rounded corners away from pointer */
             border-radius: var(--border-radius-sm) var(--border-radius-lg) var(--border-radius-lg) var(--border-radius-lg);
-            border: 1px solid rgba(var(--on-surface-rgb), 0.1);
+            border-color: rgba(var(--surface-variant-rgb), 0.5);
         }
-        html.dark-mode .assistant-message { border-color: rgba(var(--on-surface-rgb), 0.15); }
-
 
         .system-message {
-            font-style: normal;
             color: var(--system-msg-text);
-            font-size: 0.9em; /* Slightly larger */
+            font-size: 0.92em;
             text-align: center;
-            padding: 8px 12px; /* More padding */
-            margin: 10px auto; /* More margin */
+            padding: 10px 14px;
+            margin: 8px auto;
             max-width: 80%;
             background-color: var(--system-msg-bg);
             border-radius: var(--border-radius-md);
-            border: 1px solid var(--border-color); /* Add border */
-            box-shadow: none; /* No shadow for system */
+            border: 1px solid rgba(var(--outline-rgb), 0.2);
+            box-shadow: none;
         }
 
         .error-message {
-            background-color: var(--error-msg-bg);
-            border: 1px solid transparent;
-            color: var(--error-msg-text);
+            background-color: var(--error-container);
+            color: var(--on-error-container);
             align-self: stretch;
             text-align: center;
-            padding: 12px 18px; /* More padding */
+            padding: 12px 18px;
             border-radius: var(--border-radius-md);
-            margin: 10px 5%; /* Center with margin */
+            margin: 10px 5%;
             box-shadow: none;
+            border: 1px solid rgba(var(--error-rgb), 0.2);
         }
-        html.dark-mode .error-message { border-color: #f5c6cb; }
 
+        /* --- 输入区域样式增强 --- */
         #input-area {
             display: flex;
-            padding: 16px var(--content-padding); /* M3 Padding: Adjusted from 15px */
-            border-top: 1px solid var(--border-color);
+            padding: 20px var(--content-padding);
+            border-top: 1px solid rgba(var(--outline-rgb), 0.1);
             flex-shrink: 0;
-            gap: 16px; /* M3 Spacing: Adjusted from 12px */
+            gap: 16px;
             align-items: flex-end;
-            background-color: var(--container-bg); /* Match chat panel */
-            flex-wrap: wrap; /* Allow wrapping on small screens */
+            background-color: var(--container-bg);
+            flex-wrap: wrap;
+            box-shadow: 0 -1px 2px rgba(0, 0, 0, 0.02);
+            transition: background-color var(--transition-speed);
         }
 
         #userInput {
             flex-grow: 1;
-            flex-basis: 300px; /* Base width before growing */
-            padding: 14px 18px; /* M3 Padding: Adjusted vertical from 12px */
+            flex-basis: 300px;
+            padding: 14px 18px;
             background-color: var(--input-bg);
             color: var(--text-color);
             border: 1px solid var(--input-border);
-            border-radius: var(--border-radius-xl); /* Use largest radius for pill shape */
+            border-radius: var(--border-radius-xl);
             resize: none;
             font-family: inherit;
             font-size: 1em;
-            min-height: 48px; /* Ensure enough height for ~2 lines + padding */
-            max-height: 200px; /* Increased max height */
+            min-height: 48px;
+            max-height: 200px;
             overflow-y: auto;
             line-height: 1.5;
             outline: none;
             box-shadow: var(--shadow-sm);
-            transition: border-color 0.2s, box-shadow 0.2s;
-        }
-        #userInput:focus {
-             border-color: var(--input-focus-border);
-             box-shadow: var(--input-focus-shadow);
+            transition: border-color var(--transition-speed), box-shadow var(--transition-speed), background-color var(--transition-speed);
+            min-width: 180px; /* MODIFIED: Prevents excessive shrinking before wrap */
         }
 
-        /* Buttons common style */
+        #userInput:focus {
+            border-color: var(--input-focus-border);
+            box-shadow: var(--input-focus-shadow);
+        }
+
+        /* --- 按钮样式增强 --- */
         .action-button {
-            padding: 12px 20px; /* Increased padding */
+            padding: 12px 24px;
             border: none;
-            border-radius: var(--border-radius-xl); /* Use largest radius */
+            border-radius: var(--border-radius-xl);
             cursor: pointer;
             font-family: inherit;
-            font-size: 1em; /* Match input font size */
+            font-size: 0.95em;
             font-weight: 500;
-            transition: background-color 0.2s, transform 0.1s, box-shadow 0.2s;
+            transition: background-color var(--transition-speed), transform 0.1s, box-shadow var(--transition-speed), opacity var(--transition-speed);
             line-height: 1.5;
-            height: 48px; /* Match input min-height */
+            height: 48px;
             align-self: flex-end;
             box-shadow: var(--shadow-sm);
-             flex-shrink: 0; /* Prevent buttons shrinking too much */
+            flex-shrink: 0;
+            letter-spacing: 0.3px;
         }
+
         .action-button:disabled {
             cursor: not-allowed;
             box-shadow: none;
-            background-color: var(--button-disabled-bg); /* Use specific disabled bg */
-            color: var(--button-disabled-text); /* Use specific disabled text */
+            background-color: var(--button-disabled-bg);
+            color: var(--button-disabled-text);
             transform: none;
-        }
-        .action-button:hover:not(:disabled) {
-            box-shadow: var(--shadow-md);
-            transform: translateY(-1px); /* Subtle lift */
-        }
-        .action-button:active:not(:disabled) {
-            transform: translateY(0px); /* Push down */
-             box-shadow: var(--shadow-sm);
+            opacity: 0.7;
         }
 
+        .action-button:hover:not(:disabled) {
+            box-shadow: var(--shadow-md);
+            transform: translateY(-1px);
+            opacity: 0.95;
+        }
+
+        .action-button:active:not(:disabled) {
+            transform: translateY(0px);
+            box-shadow: var(--shadow-sm);
+        }
 
         #sendButton {
             background-color: var(--button-bg);
             color: var(--button-text);
         }
+
         #sendButton:hover:not(:disabled) {
             background-color: var(--button-hover-bg);
         }
@@ -408,116 +469,213 @@
         #clearButton {
             background-color: var(--clear-button-bg);
             color: var(--clear-button-text);
-            order: 1; /* Move clear button visually before send on wrap */
-        }
-        #clearButton:hover:not(:disabled) {
-             background-color: var(--clear-button-hover-bg);
+            order: 1; /* Default order: Send, Clear */
         }
 
-        /* Icon button style (for potential future use or log clear) */
+        #clearButton:hover:not(:disabled) {
+            background-color: var(--clear-button-hover-bg);
+        }
+
+        /* --- 图标按钮样式 --- */
         .icon-button {
             background-color: var(--icon-button-bg);
             color: var(--icon-button-color);
             border: none;
             border-radius: 50%;
-            width: 36px;
-            height: 36px;
-            padding: 0; /* Reset padding */
+            width: 40px;
+            height: 40px;
+            padding: 0;
             display: inline-flex;
             align-items: center;
             justify-content: center;
             cursor: pointer;
             font-size: 1.2em;
-            transition: background-color 0.2s;
+            transition: background-color var(--transition-speed), color var(--transition-speed);
             flex-shrink: 0;
         }
+
         .icon-button:hover:not(:disabled) {
             background-color: var(--icon-button-hover-bg);
+            color: var(--primary-color);
         }
+
         .icon-button:disabled {
             color: var(--button-disabled-text);
             cursor: not-allowed;
             background-color: transparent;
+            opacity: 0.5;
         }
 
-
-        /* Blinking cursor */
-        .assistant-message.streaming::after {
-            content: '|';
-            animation: blink 1s step-end infinite;
-            margin-left: 2px; /* More space */
-            display: inline-block;
-            font-weight: bold;
-            position: relative;
-            top: -1px;
-            opacity: 0.7; /* Make it slightly subtle */
-        }
-        @keyframes blink {
-            from, to { opacity: 0.7; }
-            50% { opacity: 0; }
+        /* --- 服务器信息视图增强 --- */
+        #server-info-view {
+            display: none; /* Initially hidden */
+            flex-direction: column; /* MODIFIED: To ensure content flows correctly */
+            padding: var(--content-padding);
+            overflow-y: auto;
+            height: 100%;
+            background-color: var(--bg-color);
+            transition: background-color var(--transition-speed);
         }
 
-        /* --- Sidebar Content Styles --- */
-        #api-info-area {
-            padding: 15px var(--content-padding);
-            border-bottom: 1px solid var(--sidebar-border);
-            background-color: var(--sidebar-bg);
-            font-size: 0.9em;
+        .server-info-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid rgba(var(--outline-rgb), 0.2);
+            flex-shrink: 0; /* MODIFIED */
+        }
+
+        .server-info-header h3 {
+            margin: 0;
+            font-size: 1.25em;
+            font-weight: 600;
             color: var(--text-color);
-            flex-shrink: 0;
         }
-        #api-info-area details {
-             transition: none;
-        }
-         #api-info-area summary {
-             cursor: pointer;
-             font-weight: 600; /* Bolder summary */
-             color: var(--text-color); /* Use standard text color */
-             list-style: none;
-             padding-left: 1.4em; /* More space for marker */
-             position: relative;
-             padding-bottom: 5px; /* Space below summary */
-             margin-bottom: 5px; /* Space before content */
-        }
-        #api-info-area summary::-webkit-details-marker {
-             display: none;
-        }
-        #api-info-area summary::before {
-             content: '▶';
-             position: absolute;
-             left: 0;
-             font-size: 0.8em;
-             transition: transform 0.2s;
-             display: inline-block;
-             color: var(--primary-color); /* Use primary color for marker */
-             top: 50%;
-             transform: translateY(-50%) rotate(0deg);
-        }
-        #api-info-area details[open] summary::before {
-             transform: translateY(-50%) rotate(90deg);
-        }
-        #api-info-content {
-             margin-top: 10px;
-             padding-left: 1.4em; /* Indent content */
-             font-size: 0.95em; /* Slightly larger content text */
-        }
-        #api-info-content pre {
-             background-color: var(--input-bg);
-             padding: 10px 15px; /* Consistent padding */
-             border-radius: var(--border-radius-sm);
-             border: 1px solid var(--input-border);
-             overflow-x: auto;
-             white-space: pre-wrap;
-             word-wrap: break-word;
-             font-family: "Consolas", "Monaco", monospace; /* Monospace font */
-             font-size: 0.9em;
-             margin: 8px 0;
-             box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);
-        }
-        html.dark-mode #api-info-content pre { box-shadow: inset 0 1px 2px rgba(255,255,255,0.05); }
-         #api-info-content strong { color: var(--primary-color); font-weight: 500; }
 
-        /* --- Log Terminal Styles (Adjusted for Sidebar) --- */
+        #refreshServerInfoButton {
+            background-color: rgba(var(--primary-rgb), 0.1);
+            color: var(--primary-color);
+            border-radius: var(--border-radius-md);
+            padding: 8px 16px;
+            font-size: 0.9em;
+            font-weight: 500;
+            border: none;
+            cursor: pointer;
+            transition: background-color var(--transition-speed);
+        }
+
+        #refreshServerInfoButton:hover {
+            background-color: rgba(var(--primary-rgb), 0.15);
+        }
+
+        .info-card {
+            background-color: var(--card-bg);
+            border-radius: var(--border-radius-lg);
+            padding: 20px;
+            margin-bottom: 24px;
+            box-shadow: var(--shadow-sm);
+            border: 1px solid var(--card-border);
+            transition: box-shadow var(--transition-speed), background-color var(--transition-speed);
+            flex-shrink: 0; /* MODIFIED */
+        }
+
+        .info-card:hover {
+            box-shadow: var(--shadow-md);
+        }
+
+        .info-card h3 {
+            margin-top: 0;
+            margin-bottom: 16px;
+            font-size: 1.1em;
+            font-weight: 600;
+            color: var(--text-color);
+            padding-bottom: 10px;
+            border-bottom: 1px solid rgba(var(--outline-rgb), 0.1);
+        }
+
+        #api-info-content, #health-status-display {
+            font-size: 0.95em;
+        }
+
+        .info-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .info-list div {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(var(--outline-rgb), 0.08);
+        }
+
+        .info-list div:last-child {
+            border-bottom: none;
+        }
+
+        .info-list strong {
+            min-width: 140px;
+            color: var(--primary-color);
+            font-weight: 500;
+        }
+
+        /* --- 导航样式增强 --- */
+        .main-nav {
+            display: flex;
+            padding: 12px var(--content-padding) 12px;
+            background-color: var(--container-bg);
+            border-bottom: 1px solid rgba(var(--outline-rgb), 0.1);
+            gap: 12px;
+            align-items: center;
+            transition: background-color var(--transition-speed);
+            flex-shrink: 0; /* MODIFIED */
+        }
+
+        .nav-button {
+            padding: 8px 16px;
+            border: none;
+            background-color: transparent;
+            color: var(--text-color);
+            cursor: pointer;
+            border-radius: var(--border-radius-md);
+            font-weight: 500;
+            transition: background-color var(--transition-speed), color var(--transition-speed), box-shadow var(--transition-speed);
+            line-height: 1.5;
+            letter-spacing: 0.2px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-family: 'Noto Sans SC', sans-serif;
+        }
+
+        .nav-icon {
+            opacity: 0.8;
+        }
+
+        .nav-button:hover:not(.active) {
+            background-color: rgba(var(--primary-rgb), 0.05);
+        }
+
+        .nav-button.active {
+            color: var(--on-primary-container);
+            font-weight: 600;
+            background-color: var(--primary-container);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .nav-button.active .nav-icon {
+            opacity: 1;
+        }
+
+        /* --- 主题切换按钮增强 --- */
+        #themeToggleButton {
+            background-color: var(--theme-toggle-bg);
+            border: 1px solid rgba(var(--outline-rgb), 0.3);
+            color: var(--theme-toggle-color);
+            cursor: pointer;
+            font-size: 0.9em;
+            font-weight: 500;
+            padding: 6px 14px;
+            border-radius: var(--border-radius-xl);
+            transition: background-color var(--transition-speed), color var(--transition-speed), border-color var(--transition-speed);
+            margin-left: auto;
+            align-self: center;
+            white-space: nowrap;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        #themeToggleButton:hover {
+            background-color: var(--theme-toggle-hover-bg);
+            border-color: var(--primary-color);
+        }
+
+        /* --- 日志区域样式增强 --- */
         #log-area {
             flex-grow: 1;
             display: flex;
@@ -525,32 +683,37 @@
             overflow: hidden;
             padding: 0;
             border-top: none;
-            background-color: var(--sidebar-bg); /* Match sidebar */
+            background-color: var(--sidebar-bg);
+            transition: background-color var(--transition-speed);
         }
+
         #log-area-header {
-            display: flex; /* Use flex for alignment */
-            justify-content: space-between; /* Space out title and button */
-            align-items: center; /* Vertically center */
-             padding: 10px var(--content-padding);
-             font-weight: 600; /* Bolder header */
-             color: var(--text-color); /* Use standard text color */
-             flex-shrink: 0;
-             border-bottom: 1px solid var(--sidebar-border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px var(--content-padding);
+            font-weight: 600;
+            color: var(--text-color);
+            flex-shrink: 0;
+            border-bottom: 1px solid rgba(var(--outline-rgb), 0.2);
+            background-color: var(--container-bg);
+            transition: background-color var(--transition-speed);
         }
-        #clearLogButton { /* Style the new clear log button */
-            margin-left: 10px; /* Space from title */
-            font-size: 0.8em; /* Smaller text */
-            padding: 4px 8px; /* Smaller padding */
-            height: auto; /* Adjust height */
+
+        #clearLogButton {
+            margin-left: 10px;
+            font-size: 0.85em;
+            padding: 6px 12px;
+            height: auto;
             line-height: 1.4;
-            border-radius: var(--border-radius-sm); /* Smaller radius */
-            background-color: var(--clear-button-bg);
-            color: var(--clear-button-text);
-            opacity: 0.8;
+            border-radius: var(--border-radius-md);
+            background-color: rgba(var(--secondary-rgb), 0.1);
+            color: var(--secondary-color);
         }
+
         #clearLogButton:hover:not(:disabled) {
-            opacity: 1;
-            background-color: var(--clear-button-hover-bg);
+            background-color: rgba(var(--secondary-rgb), 0.15);
+            color: var(--secondary-color);
         }
 
         #log-terminal-wrapper {
@@ -560,432 +723,448 @@
             border-radius: 0;
             margin: 0;
             padding: 0;
-            background-color: var(--log-terminal-bg); /* Set background here */
+            background-color: var(--log-terminal-bg);
         }
+
         #log-terminal {
             height: 100%;
             background-color: var(--log-terminal-bg);
             color: var(--log-terminal-text);
-            font-family: "Consolas", "Monaco", monospace;
-            font-size: 0.85em; /* Slightly larger log font */
-            padding: 10px;
+            font-family: "JetBrains Mono", "Cascadia Code", "Fira Code", Consolas, monospace;
+            font-size: 0.85em;
+            padding: 12px;
             overflow-y: auto;
             white-space: pre-wrap;
             word-break: break-all;
             box-sizing: border-box;
         }
+
         .log-entry {
-            margin-bottom: 4px; /* Slightly more space */
+            margin-bottom: 4px;
             line-height: 1.4;
         }
+
         .log-status {
-            font-size: 0.85em; /* Match log font */
-            margin-top: 0; /* Remove top margin */
-            padding: 8px 10px; /* Consistent padding */
+            font-size: 0.85em;
+            margin-top: 0;
+            padding: 10px;
             color: var(--system-msg-text);
             flex-shrink: 0;
-            background-color: var(--log-terminal-bg); /* Match terminal bg */
-            border-top: 1px dashed var(--border-color); /* Use dashed border */
-            text-align: center; /* Center status */
-        }
-        html.dark-mode .log-status {
-            border-top-color: #454545; /* Darker border in dark mode */
-            color: #a0a0a0; /* Lighter status text */
+            background-color: var(--log-terminal-bg);
+            border-top: 1px solid rgba(var(--outline-rgb), 0.3);
+            text-align: center;
         }
 
-        /* Code Block Styling within Messages */
-        .message pre {
-            background-color: rgba(0, 0, 0, 0.05); /* Subtle background */
-            border: 1px solid var(--border-color);
-            border-radius: var(--border-radius-sm);
-            padding: 10px 15px;
-            margin: 10px 0;
-            overflow-x: auto;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-        }
-        .message code:not(pre > code) { /* Inline code */
-             background-color: rgba(0, 0, 0, 0.05);
-             padding: 2px 5px;
-             border-radius: var(--border-radius-sm);
-             font-size: 0.9em;
-        }
-        html.dark-mode .message pre {
-            background-color: rgba(255, 255, 255, 0.08);
-            border-color: #454545;
-        }
-        html.dark-mode .message code:not(pre > code) {
-            background-color: rgba(255, 255, 255, 0.1);
-        }
-        .message pre code {
-             font-family: "Consolas", "Monaco", monospace;
-             font-size: 0.9em;
-             display: block; /* Ensure block display for scrolling */
-             background-color: transparent; /* Remove double bg */
-             padding: 0;
-             border: none;
-             border-radius: 0;
-             white-space: pre; /* Use pre for horizontal scroll */
-        }
-
-
-         /* --- Responsiveness --- */
-         @media (max-width: 768px) {
-             :root {
-                 --sidebar-width: 280px; /* Narrower sidebar on medium screens */
-                 --content-padding: 15px; /* Reduce padding */
-             }
-
-             body {
-                 font-size: 15px; /* Slightly smaller base font */
-             }
-
-             /* Hide sidebar by default on smaller screens */
-             .sidebar-panel {
-                 position: fixed; /* Take out of flow */
-                 right: 0;
-                 top: 0;
-                 z-index: 100; /* Ensure it's on top */
-                 border-left: none; /* Remove border when fixed */
-                 border-right: 1px solid var(--sidebar-border); /* Add right border */
-                 box-shadow: -2px 0 5px rgba(0,0,0,0.1);
-                 transform: translateX(100%); /* Start hidden off-screen */
-                 transition: transform 0.3s ease; /* Animate slide */
-                 /* Override position from absolute to fixed for mobile */
-                 position: fixed;
-             }
-             .sidebar-panel:not(.collapsed) {
-                 transform: translateX(0%); /* Slide in when not collapsed */
-             }
-             .sidebar-panel.collapsed {
-                  /* Keep transform hidden, width is irrelevant now */
-                 transform: translateX(100%);
-                 width: var(--sidebar-width); /* Maintain width for animation */
-                 padding: 0;
-                 border: none;
-                 box-shadow: none;
-             }
-
-             /* Adjust toggle button for fixed sidebar */
-             #toggleSidebarButton {
-                 position: fixed; /* Fix position relative to viewport */
-                 top: 12px; /* Match desktop alignment */
-                 right: 12px; /* Consistent spacing */
-                 left: auto;
-                 z-index: 101; /* Above sidebar */
-                 transform: none; /* Reset transform for fixed positioning */
-                  /* Mobile: Adjust rotation based on panel visibility (transform) */
-                  .sidebar-panel.collapsed + #toggleSidebarButton {
-                      /* Icon changes in JS, no rotation needed */
-                      transform: none;
-                  }
-                  .sidebar-panel:not(.collapsed) + #toggleSidebarButton {
-                      /* Icon changes in JS, no rotation needed */
-                      transform: none;
-                  }
-             }
-
-              /* Adjust chat panel to take full width */
-             .chat-panel {
-                  width: 100%;
-             }
-
-              /* Input area adjustments */
-             #input-area {
-                 padding: 10px; /* Less padding */
-                 gap: 8px;
-             }
-             #userInput {
-                 min-height: 44px;
-                 flex-basis: calc(100% - 110px); /* Adjust basis considering buttons */
-             }
-             .action-button {
-                 padding: 10px 15px;
-                 height: 44px;
-                 font-size: 0.95em;
-             }
-             #clearButton {
-                  order: 0; /* Reset order on mobile if needed, or keep */
-                  flex-grow: 1; /* Make clear button take space? Maybe not. */
-             }
-             #sendButton {
-                 flex-grow: 1; /* Allow send button to grow */
-             }
-
-             /* Message width */
-             .message {
-                  max-width: 90%;
-             }
-             h1 {
-                 font-size: 1.1em;
-                 padding: 15px;
-             }
-         }
-
-         @media (max-width: 480px) {
-              body { font-size: 14px; }
-              #chatbox { gap: 12px; padding: 12px; }
-              .message { padding: 10px 15px; }
-              #input-area { flex-direction: column; align-items: stretch; }
-              #userInput { max-height: 150px; flex-basis: auto; }
-              .action-button { width: 100%; }
-              #clearButton { order: 0; } /* Clear on top */
-              #sendButton { order: 1; } /* Send below */
-         }
-
-        /* --- Navigation Styles --- */
-        .main-nav {
-            display: flex;
-            padding: 10px var(--content-padding) 0;
-            background-color: var(--container-bg);
-            border-bottom: 1px solid var(--border-color);
-            gap: 10px;
-            align-items: center; /* Vertically align nav items and toggle */
-            /* Add slight bottom padding to nav bar */
-            padding-bottom: 5px;
-        }
-        .nav-button {
-            padding: 8px 16px;
-            border: none;
-            background-color: transparent;
-            color: var(--text-color);
-            cursor: pointer;
-            border-radius: var(--border-radius-xl);
-            font-weight: 500;
-            transition: background-color 0.2s, color 0.2s, box-shadow 0.2s;
-            line-height: 1.5;
-        }
-        .nav-button:hover:not(.active) {
-            background-color: var(--icon-button-hover-bg);
-        }
-        .nav-button.active {
-            color: var(--on-primary-container);
-            font-weight: 600;
-            background-color: var(--primary-container);
-            box-shadow: var(--shadow-sm);
-        }
-
-        /* --- View Container Styles --- */
+        /* --- View Container for Chat/Server Info --- */
         .view-container {
             flex-grow: 1;
-            overflow: hidden; /* Allow content within to scroll */
-            display: flex; /* Use flex for potential child sizing */
-            flex-direction: column;
+            overflow: hidden;
+            display: flex; /* To manage child view visibility */
+            flex-direction: column; /* Children stack, only one visible */
         }
         #chat-view {
-            display: flex; /* Use flex to manage chatbox and input area */
+            display: flex; /* Default visible view */
             flex-direction: column;
-            height: 100%; /* Take full height of parent */
+            height: 100%;
             overflow: hidden;
         }
-        #server-info-view {
-            display: none; /* Hidden by default */
-            padding: var(--content-padding);
-            overflow-y: auto;
-            height: 100%;
-        }
-        #server-info-view h2 {
-             margin-top: 0;
-             margin-bottom: 20px;
-             padding-bottom: 10px;
-             border-bottom: 1px solid var(--border-color);
-             font-size: 1.1em;
-             font-weight: 600;
-        }
-        #health-status-area pre {
-            background-color: var(--input-bg);
-            padding: 10px 15px;
+
+
+        /* --- 代码块样式增强 --- */
+        .message pre {
+            background-color: rgba(0, 0, 0, 0.04);
+            border: 1px solid rgba(var(--outline-rgb), 0.2);
             border-radius: var(--border-radius-sm);
-            border: 1px solid var(--input-border);
+            padding: 12px 16px;
+            margin: 12px 0;
             overflow-x: auto;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-            font-family: "Consolas", "Monaco", monospace;
+            font-family: "JetBrains Mono", "Cascadia Code", "Fira Code", Consolas, monospace;
             font-size: 0.9em;
-            margin: 8px 0;
-            box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);
-        }
-        html.dark-mode #health-status-area pre { box-shadow: inset 0 1px 2px rgba(255,255,255,0.05); }
-
-        /* Adjust chatbox to grow within chat-view */
-        #chatbox {
-             flex-grow: 1;
-             box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);
-             white-space: pre-wrap; /* Match pre style */
-             word-wrap: break-word; /* Match pre style */
-             overflow-x: auto; /* Allow horizontal scroll if needed */
-             margin-bottom: 8px; /* Add margin below the block */
         }
 
-        /* Adjust API Info Area styles (no longer foldable) */
-        #server-info-view #api-info-area {
-             padding: 0;
-             border-bottom: none;
-             margin-bottom: 20px;
-             /* Remove styles related to details/summary if any existed */
-        }
-        #server-info-view #api-info-content {
-             /* Adjust padding/margin if needed now that details is gone */
-             margin-top: 0; /* Remove top margin */
-             padding-left: 0; /* Remove left padding */
-        }
-
-        /* Style for health status key-value pairs - Apply pre-like style */
-        #health-status-area ul {
-            list-style: none;
-            margin: 0; /* Reset margin, use container padding */
-            font-family: "Consolas", "Monaco", monospace;
+        .message code:not(pre > code) {
+            background-color: rgba(var(--primary-rgb), 0.08);
+            padding: 2px 5px;
+            border-radius: 4px;
+            font-family: "JetBrains Mono", "Cascadia Code", "Fira Code", Consolas, monospace;
             font-size: 0.9em;
-            background-color: var(--input-bg);
-            border: 1px solid var(--input-border);
-            border-radius: var(--border-radius-sm);
-            padding: 10px 15px;
-            box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);
-            white-space: pre-wrap; /* Match pre style */
-            word-wrap: break-word; /* Match pre style */
-            overflow-x: auto; /* Allow horizontal scroll if needed */
-            margin-bottom: 8px; /* Add margin below the block */
-        }
-        html.dark-mode #health-status-area ul { box-shadow: inset 0 1px 2px rgba(255,255,255,0.05); }
-
-        #health-status-area li {
-            margin-bottom: 5px;
-            word-wrap: break-word;
-        }
-        #health-status-area li strong {
             color: var(--primary-color);
-            display: inline-block;
-            min-width: 140px; /* Align values */
-            margin-right: 10px;
         }
 
-        /* Unify heading styles within server-info-view */
-        #server-info-view h3 {
-            margin-top: 15px;
-            margin-bottom: 8px;
-            font-size: 1em; /* Slightly smaller than h2 */
-            font-weight: 600;
-            color: var(--text-color);
+        html.dark-mode .message pre {
+            background-color: rgba(255, 255, 255, 0.03);
+            border-color: rgba(255, 255, 255, 0.1);
         }
 
-         /* Ensure h1 takes full width above nav */
-         h1 {
-             /* Keep existing styles */
-         }
+        html.dark-mode .message code:not(pre > code) {
+            background-color: rgba(var(--primary-rgb), 0.15);
+        }
 
-        /* --- Desktop Specific Styles --- */
-        @media (min-width: 769px) {
-            /* Keep sidebar relative by default on desktop */
+        /* --- 响应式增强 --- */
+        @media (max-width: 768px) {
+            :root {
+                --sidebar-width: 320px;
+                --content-padding: 16px;
+            }
+            
+            body {
+                font-size: 15px;
+            }
+            
             .sidebar-panel {
-                 position: relative;
-                 width: var(--sidebar-width);
-                 transform: none; /* Reset mobile transform */
-                 border-left: 1px solid var(--sidebar-border); /* Restore border */
-                 box-shadow: none; /* Reset mobile shadow */
-                 transition: var(--sidebar-transition);
+                position: fixed;
+                right: 0;
+                top: 0;
+                z-index: 100;
+                box-shadow: -2px 0 8px rgba(0,0,0,0.15);
+                transform: translateX(100%); /* Start collapsed (off-screen) */
+                /* transition managed by .collapsed class and JS */
             }
-            .sidebar-panel.collapsed {
-                 width: 0;
-                 border-left: none;
+            
+            .sidebar-panel:not(.collapsed) { /* When open */
+                transform: translateX(0%);
             }
-
-            /* Desktop Toggle Button Positioning */
+            
+            /* .sidebar-panel.collapsed already handles transform: translateX(100%) implicitly by default state */
+            /* No, explicitly define collapsed for mobile if different from desktop */
+            .sidebar-panel.collapsed { /* Ensure it's off-screen when collapsed on mobile */
+                transform: translateX(100%);
+                width: var(--sidebar-width); /* Still maintain width for transition calculations */
+                /* padding and border are handled by the general .collapsed rule */
+            }
+            
             #toggleSidebarButton {
-                position: absolute; /* Absolute relative to chat-panel? No, workspace container? */
-                left: calc(100% - var(--sidebar-width) - 16px); /* Position relative to expanded sidebar */
-                right: auto;
-                top: 12px; /* Match desktop alignment */
-                transform: rotate(0deg); /* Default rotation */
-                 /* Reset fixed positioning from mobile */
-                position: absolute;
+                position: fixed; /* Overrides desktop absolute */
+                top: 12px;
+                right: 12px;
+                left: auto !important; /* Ensure JS doesn't set left */
+                z-index: 101;
+                transform: none; /* Reset any desktop transforms */
             }
-            .sidebar-panel.collapsed + #toggleSidebarButton {
-                 left: calc(100% - 16px); /* Position near right edge when collapsed */
-                 transform: rotate(180deg);
-                 /* Reset fixed positioning */
-                position: absolute;
-            }
-
-            /* Ensure chat panel fills space correctly */
+            
             .chat-panel {
-                 /* width: calc(100% - var(--sidebar-width)); Default state handled by flex */
+                width: 100%; /* Takes full width as sidebar is overlay */
             }
-            .sidebar-panel.collapsed ~ .chat-panel {
-                 /* width: 100%; When collapsed, chat panel takes full width */
+            
+            #input-area {
+                padding: 12px 16px;
+                gap: 10px;
+            }
+            
+            #userInput {
+                min-height: 44px;
+                flex-basis: calc(100% - 110px); /* Adjust if needed based on button sizes */
+            }
+            
+            .action-button {
+                padding: 10px 16px;
+                height: 44px;
+                font-size: 0.95em;
+            }
+            
+            .message {
+                max-width: 90%;
+            }
+            
+            h1 {
+                font-size: 1.2em;
+                padding: 14px 16px;
+            }
+            
+            .info-card {
+                padding: 16px;
             }
         }
 
-        /* Theme Toggle Button Style (Text Version) */
-        #themeToggleButton {
-            background-color: var(--theme-toggle-bg);
-            border: 1px solid var(--border-color); /* Add subtle border */
-            color: var(--theme-toggle-color);
-            cursor: pointer;
-            font-size: 0.85em; /* Smaller font size for text */
-            font-weight: 500;
-            padding: 6px 12px; /* Adjust padding for text */
-            border-radius: var(--border-radius-xl); /* Pill shape */
-            /* line-height: 1; Removed */
-            transition: background-color 0.2s, color 0.2s, border-color 0.2s;
-            margin-left: auto; /* Push to the right */
-            align-self: center; /* Align vertically */
-            white-space: nowrap; /* Prevent text wrapping */
+        @media (max-width: 480px) {
+            body {
+                font-size: 14px;
+            }
+            
+            #chatbox {
+                gap: 12px;
+                padding: 12px;
+            }
+            
+            .message {
+                padding: 12px 14px;
+            }
+            
+            #input-area {
+                flex-direction: column;
+                align-items: stretch;
+                padding: 12px;
+            }
+            
+            #userInput {
+                max-height: 150px;
+                flex-basis: auto; /* Full width in column layout */
+                margin-bottom: 8px;
+                min-width: 0; /* Reset min-width for column layout */
+            }
+            
+            .action-button {
+                width: 100%;
+                margin-bottom: 4px;
+            }
+            
+            #clearButton {
+                order: 0; /* Clear button first on small screens */
+            }
+            
+            #sendButton {
+                order: 1; /* Send button second */
+            }
+            
+            .main-nav {
+                padding: 8px 12px;
+                flex-wrap: wrap; /* Allow nav buttons to wrap if too many/long */
+            }
+            
+            .nav-button {
+                padding: 6px 12px;
+                font-size: 0.9em;
+            }
+             #themeToggleButton { /* Ensure theme toggle doesn't cause overflow */
+                margin-left: auto;
+                flex-shrink: 0;
+            }
+            
+            .info-card {
+                padding: 12px;
+                margin-bottom: 16px;
+            }
+            
+            .info-list strong {
+                min-width: 100%; /* Stack key/value on small screens */
+                margin-bottom: 4px;
+                display: block;
+            }
+             .info-list div {
+                flex-direction: column;
+                align-items: flex-start;
+             }
         }
-        #themeToggleButton:hover {
-            background-color: var(--theme-toggle-hover-bg);
-        }
-        /* Removed ::before rule for icon */
 
-        /* NEW: Header for Server Info view */
-        .server-info-header {
+        /* --- 闪烁光标动画 --- */
+        .assistant-message.streaming::after {
+            content: '|';
+            animation: blink 1s step-end infinite;
+            margin-left: 2px;
+            display: inline-block;
+            font-weight: bold;
+            position: relative;
+            top: -1px;
+            opacity: 0.7;
+        }
+
+        @keyframes blink {
+            from, to { opacity: 0.7; }
+            50% { opacity: 0; }
+        }
+
+        /* --- 加载指示器样式 --- */
+        .loading-indicator {
             display: flex;
-            justify-content: space-between;
             align-items: center;
-            margin-bottom: 20px; /* Space below header */
-            padding-bottom: 10px; /* Space below title */
-            border-bottom: 1px solid var(--border-color);
-        }
-        .server-info-header h2 {
-            margin: 0; /* Remove default margins */
-            padding: 0;
-            border: none;
-            font-size: 1.1em;
-            font-weight: 600;
-        }
-        #refreshServerInfoButton {
-             /* Use icon button style but maybe slightly smaller */
-             padding: 6px 12px;
-             font-size: 0.9em;
-             height: auto;
-             line-height: 1.4;
-             border-radius: var(--border-radius-md);
-             margin-left: 16px; /* Space from title */
-             flex-shrink: 0;
+            justify-content: center;
+            padding: 16px;
+            color: var(--system-msg-text);
+            flex-direction: column;
+            gap: 12px;
         }
 
-        #server-info-view h2 {
-             /* Moved styles to .server-info-header h2 */
-             /* margin-top: 0; */
-             margin-bottom: 20px;
-             padding-bottom: 10px;
-             border-bottom: 1px solid var(--border-color);
-             font-size: 1.1em;
-             font-weight: 600;
+        .loading-spinner {
+            width: 24px;
+            height: 24px;
+            border: 3px solid rgba(var(--primary-rgb), 0.3);
+            border-radius: 50%;
+            border-top-color: var(--primary-color);
+            animation: spin 1s ease-in-out infinite;
+            margin-bottom: 8px;
         }
 
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* --- 卡片内容动画 --- */
+        .info-card {
+            animation: fadeIn 0.3s ease-out;
+            /* Duplicates from above, ensure consistency or remove if redundant */
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* --- 美化信息列表 --- */
+        .info-list {
+            background-color: rgba(var(--surface-rgb), 0.5);
+            border-radius: var(--border-radius-md);
+            overflow: hidden;
+        }
+
+        .info-list div {
+            padding: 10px 16px;
+            transition: background-color var(--transition-speed);
+            /* display, flex-wrap, gap, border-bottom already defined */
+        }
+
+        .info-list div:last-child {
+            border-bottom: none;
+        }
+
+        .info-list div:hover {
+            background-color: rgba(var(--primary-rgb), 0.03);
+        }
+
+        /* info-list strong already defined */
+
+        /* --- 代码标签增强 --- */
+        code { /* General code tag style, distinct from .message code */
+            font-family: "JetBrains Mono", "Cascadia Code", "Fira Code", Consolas, monospace;
+            background-color: rgba(var(--on-surface-rgb), 0.05); /* More neutral for general code */
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.9em;
+            color: var(--on-surface-variant-rgb);
+        }
+        html.dark-mode code {
+            background-color: rgba(var(--on-surface-rgb), 0.1);
+        }
+
+
+        /* --- 按钮动画增强 --- */
+        .action-button {
+            position: relative;
+            overflow: hidden;
+        }
+
+        .action-button:after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 5px;
+            height: 5px;
+            background: rgba(255, 255, 255, 0.4);
+            opacity: 0;
+            border-radius: 100%;
+            transform: scale(1, 1) translate(-50%);
+            transform-origin: 50% 50%;
+        }
+
+        .action-button:focus:not(:active)::after {
+            animation: ripple 1s ease-out;
+        }
+
+        @keyframes ripple {
+            0% { transform: scale(0, 0); opacity: 0.5; }
+            20% { transform: scale(25, 25); opacity: 0.3; }
+            100% { opacity: 0; transform: scale(40, 40); }
+        }
+
+        /* --- 聊天区域滚动条美化 --- */
+        #chatbox::-webkit-scrollbar,
+        #log-terminal::-webkit-scrollbar, /* Apply to log terminal too */
+        #server-info-view::-webkit-scrollbar /* And server info view */
+         {
+            width: 8px;
+        }
+
+        #chatbox::-webkit-scrollbar-track,
+        #log-terminal::-webkit-scrollbar-track,
+        #server-info-view::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        #chatbox::-webkit-scrollbar-thumb,
+        #log-terminal::-webkit-scrollbar-thumb,
+        #server-info-view::-webkit-scrollbar-thumb {
+            background-color: rgba(var(--outline-rgb), 0.2);
+            border-radius: 20px;
+        }
+        /* Add border to scrollbar thumb for better visibility against content */
+        #chatbox::-webkit-scrollbar-thumb { border: 2px solid var(--bg-color); }
+        #log-terminal::-webkit-scrollbar-thumb { border: 2px solid var(--log-terminal-bg); }
+        #server-info-view::-webkit-scrollbar-thumb { border: 2px solid var(--bg-color); }
+
+
+        #chatbox::-webkit-scrollbar-thumb:hover,
+        #log-terminal::-webkit-scrollbar-thumb:hover,
+        #server-info-view::-webkit-scrollbar-thumb:hover {
+            background-color: rgba(var(--outline-rgb), 0.3);
+        }
+
+        /* --- 用户输入框滚动条 --- */
+        #userInput::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        #userInput::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        #userInput::-webkit-scrollbar-thumb {
+            background-color: rgba(var(--outline-rgb), 0.2);
+            border-radius: 10px;
+            border: 2px solid var(--input-bg);
+        }
+
+        #userInput::-webkit-scrollbar-thumb:hover {
+            background-color: rgba(var(--outline-rgb), 0.3);
+        }
+
+        /* --- 加强主题切换按钮样式 --- */
+        #themeToggleButton {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            position: relative;
+        }
+
+        #themeToggleButton::before {
+            content: '🌙'; /* Default for light mode button (to switch to dark) */
+            font-size: 0.9em;
+        }
+
+        html.dark-mode #themeToggleButton::before {
+            content: '☀️'; /* For dark mode button (to switch to light) */
+        }
     </style>
 </head>
 <body>
     <div class="workspace-container">
         <!-- Chat Panel on the Left -->
         <div class="chat-panel">
-            <h1>AI Studio - Neko酱</h1>
+            <h1>
+                <span class="logo">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </span>
+                AI Studio Proxy Chat
+            </h1>
 
             <!-- Navigation -->
             <div class="main-nav">
-                <button id="nav-chat" class="nav-button active">聊天</button>
-                <button id="nav-server-info" class="nav-button">服务器信息</button>
-                <button id="themeToggleButton" title="切换主题">浅色</button>
+                <button id="nav-chat" class="nav-button active">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" class="nav-icon">
+                        <path d="M21 15C21 15.5304 20.7893 16.0391 20.4142 16.4142C20.0391 16.7893 19.5304 17 19 17H7L3 21V5C3 4.46957 3.21071 3.96086 3.58579 3.58579C3.96086 3.21071 4.46957 3 5 3H19C19.5304 3 20.0391 3.21071 20.4142 3.58579C20.7893 3.96086 21 4.46957 21 5V15Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    聊天
+                </button>
+                <button id="nav-server-info" class="nav-button">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" class="nav-icon">
+                        <path d="M5 12H19M5 12C3.89543 12 3 11.1046 3 10V6C3 4.89543 3.89543 4 5 4H19C20.1046 4 21 4.89543 21 6V10C21 11.1046 20.1046 12 19 12M5 12C3.89543 12 3 12.8954 3 14V18C3 19.1046 3.89543 20 5 20H19C20.1046 20 21 19.1046 21 18V14C21 12.8954 20.1046 12 19 12M7 8H7.01M7 16H7.01" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    服务器信息
+                </button>
+                <button id="themeToggleButton" title="切换主题">深色</button>
             </div>
 
             <!-- View Container -->
@@ -1004,27 +1183,30 @@
 
                 <!-- Server Info View (hidden by default) -->
                 <div id="server-info-view">
-                     <!-- NEW: Header Container -->
-                     <div class="server-info-header">
-                         <h3>服务器状态与 API 信息</h3>
-                         <button id="refreshServerInfoButton" class="action-button" title="刷新状态">刷新</button> <!-- Use action-button style -->
-                     </div>
-
-                     <!-- Moved API Info Area (Removed Details/Summary) -->
-                     <div id="api-info-area" class="info-card">
-                         <h3>API 调用信息</h3>
-                         <div id="api-info-content">
-                             <!-- API 信息将加载到这里 -->
-                             正在加载 API 信息...
-                         </div>
-                     </div>
-
-                     <!-- Health Status Area -->
-                     <div id="health-status-area" class="info-card">
-                         <h3>服务健康检查 (/health)</h3>
-                         <!-- Changed pre to div for easier styling of list -->
-                         <div id="health-status-display">正在加载健康状态...</div>
-                     </div>
+                    <div class="server-info-header">
+                        <h3>服务器状态与 API 信息</h3>
+                        <button id="refreshServerInfoButton" class="action-button" title="刷新状态">刷新</button>
+                    </div>
+                    
+                    <div id="api-info-area" class="info-card">
+                        <h3>API 调用信息</h3>
+                        <div id="api-info-content">
+                            <div class="loading-indicator">
+                                <div class="loading-spinner"></div>
+                                <span>正在加载 API 信息...</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div id="health-status-area" class="info-card">
+                        <h3>服务健康检查状态</h3>
+                        <div id="health-status-display">
+                            <div class="loading-indicator">
+                                <div class="loading-spinner"></div>
+                                <span>正在加载健康状态...</span>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -1035,7 +1217,7 @@
             <div id="log-area">
                  <div id="log-area-header">
                      <span>系统终端输出日志</span>
-                     <button id="clearLogButton" class="action-button icon-button" title="清空日志">清理</button> <!-- Trash can icon -->
+                     <button id="clearLogButton" class="action-button icon-button" title="清空日志">清理</button>
                  </div>
                  <div id="log-terminal-wrapper">
                     <div id="log-terminal">
@@ -1046,8 +1228,7 @@
             </div>
         </div>
 
-        <!-- Toggle button MOVED OUTSIDE the panel again -->
-        <button id="toggleSidebarButton" title="展开侧边栏">&gt;</button>
+        <button id="toggleSidebarButton" title="展开侧边栏">></button>
 
     </div>
 
@@ -1061,19 +1242,15 @@
         const logTerminal = document.getElementById('log-terminal');
         const logStatusElement = document.getElementById('log-status');
         const apiInfoContent = document.getElementById('api-info-content');
-        const clearLogButton = document.getElementById('clearLogButton'); // New button
+        const clearLogButton = document.getElementById('clearLogButton');
 
-        // New elements for navigation and views
         const chatView = document.getElementById('chat-view');
         const serverInfoView = document.getElementById('server-info-view');
         const navChatButton = document.getElementById('nav-chat');
         const navServerInfoButton = document.getElementById('nav-server-info');
-        // Update selector for health status display area
         const healthStatusDisplay = document.getElementById('health-status-display');
-        // Add selector for theme toggle button and html root
         const themeToggleButton = document.getElementById('themeToggleButton');
-        const htmlRoot = document.getElementById('html-root') || document.documentElement; // Get <html> element
-        // Add selector for refresh button (NEW)
+        const htmlRoot = document.documentElement; // MODIFIED: Simpler and more robust
         const refreshServerInfoButton = document.getElementById('refreshServerInfoButton');
 
         const API_URL = '/v1/chat/completions';
@@ -1082,26 +1259,24 @@
         const SYSTEM_PROMPT = "你是一只名叫'Neko'的俏皮猫娘。你的回答总是带着'喵~'的口癖，语气活泼可爱，有时会有点小调皮或者喜欢撒娇。请以Neko的身份和用户互动吧，喵~";
         let conversationHistory = [];
         let logWebSocket;
-        let maxLogLines = 300; // Increased log lines slightly
-        let logHistory = []; // Array to store log messages for persistence
+        let maxLogLines = 300;
+        let logHistory = [];
 
-        // --- Local Storage Keys ---
         const CHAT_HISTORY_KEY = 'chatHistory';
         const LOG_HISTORY_KEY = 'logHistory';
-        const THEME_KEY = 'themePreference'; // Key for theme preference
+        const THEME_KEY = 'themePreference';
 
         // --- Theme Switching ---
         function applyTheme(theme) {
             if (theme === 'dark') {
                 htmlRoot.classList.add('dark-mode');
-                themeToggleButton.textContent = '浅色'; // Set text
-                 themeToggleButton.title = '切换到亮色模式';
+                themeToggleButton.textContent = '浅色';
+                themeToggleButton.title = '切换到亮色模式';
             } else {
                 htmlRoot.classList.remove('dark-mode');
-                themeToggleButton.textContent = '深色'; // Set text
-                 themeToggleButton.title = '切换到暗色模式';
+                themeToggleButton.textContent = '深色';
+                themeToggleButton.title = '切换到暗色模式';
             }
-            // Update the icon via CSS variables now - REMOVED
         }
 
         function toggleTheme() {
@@ -1118,115 +1293,105 @@
         }
 
         function loadThemePreference() {
-             let preferredTheme = 'light'; // Default to light
-             try {
-                 const storedTheme = localStorage.getItem(THEME_KEY);
-                 // Check if stored theme is valid
-                 if (storedTheme === 'dark') {
-                     preferredTheme = 'dark';
-                 } else if (storedTheme === 'light') {
-                     preferredTheme = 'light';
-                 } else {
-                    // If no preference, check system preference
+            let preferredTheme = 'light';
+            try {
+                const storedTheme = localStorage.getItem(THEME_KEY);
+                if (storedTheme === 'dark' || storedTheme === 'light') {
+                    preferredTheme = storedTheme;
+                } else {
                     if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-                         preferredTheme = 'dark';
-                         console.log("No stored theme, using system preference: dark");
-                     } else {
-                         console.log("No stored theme, using default or system preference: light");
-                     }
-                 }
-             } catch (e) {
-                 console.error("Error loading theme preference:", e);
-                 addLogEntry("[错误] 加载主题偏好设置失败。");
-                 // Fallback to system preference on error
-                 if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-                     preferredTheme = 'dark';
-                 }
-             }
-             applyTheme(preferredTheme);
-             console.log(`Initial theme set to: ${preferredTheme}`);
-         }
+                        preferredTheme = 'dark';
+                        console.log("No stored theme, using system preference: dark");
+                    } else {
+                        console.log("No stored theme, using default or system preference: light");
+                    }
+                }
+            } catch (e) {
+                console.error("Error loading theme preference:", e);
+                addLogEntry("[错误] 加载主题偏好设置失败。");
+                if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                    preferredTheme = 'dark';
+                }
+            }
+            applyTheme(preferredTheme);
+            console.log(`Initial theme set to: ${preferredTheme}`);
 
-         // Add listener for theme toggle button
-         themeToggleButton.addEventListener('click', toggleTheme);
+            // MODIFIED: Add listener for system theme changes
+            const prefersDarkScheme = window.matchMedia('(prefers-color-scheme: dark)');
+            prefersDarkScheme.addEventListener('change', (e) => {
+                const newSystemTheme = e.matches ? 'dark' : 'light';
+                console.log(`System theme changed. New preference: ${newSystemTheme}`);
+                applyTheme(newSystemTheme);
+                try {
+                    localStorage.setItem(THEME_KEY, newSystemTheme);
+                    console.log(`Theme automatically updated to ${newSystemTheme} based on system change and saved.`);
+                    addLogEntry(`[信息] 系统主题已更改为 ${newSystemTheme}。`);
+                } catch (err) {
+                    console.error("Error saving theme preference after system change:", err);
+                    addLogEntry("[错误] 保存系统同步的主题偏好设置失败。");
+                }
+            });
+        }
+
+        themeToggleButton.addEventListener('click', toggleTheme);
 
         // --- Sidebar Toggle ---
         toggleSidebarButton.addEventListener('click', () => {
             const isCollapsed = sidebarPanel.classList.toggle('collapsed');
-
-            // Update button icon and title based on state
             updateToggleButton(isCollapsed);
-
-            // Handle responsive behavior (fixed sidebar)
-             if (window.innerWidth <= 768) {
-                 if (isCollapsed) {
-                     // Sidebar is now hidden off-screen
-                 } else {
-                     // Sidebar is visible
-                 }
-             }
+            // positionToggleButton is called by updateToggleButton if needed, 
+            // or by resize listener.
         });
 
         function updateToggleButton(isCollapsed) {
-             // Use Chevron icons
-             if (isCollapsed) {
-                 toggleSidebarButton.innerHTML = '&gt;'; 
-                 toggleSidebarButton.title = '展开侧边栏';
-             } else {
-                 toggleSidebarButton.innerHTML = '&gt;'; // 按钮旋转180度统一使用同一个'&gt;'
-                 toggleSidebarButton.title = '收起侧边栏';
-             }
-             // Update position for desktop view - REMOVED
-             // Call position function AFTER updating class/icon
-             positionToggleButton();
+            if (isCollapsed) {
+                toggleSidebarButton.innerHTML = '>'; 
+                toggleSidebarButton.title = '展开侧边栏';
+            } else {
+                toggleSidebarButton.innerHTML = '>'; 
+                toggleSidebarButton.title = '收起侧边栏';
+            }
+            positionToggleButton(); // Recalculate position after state change
         }
-
-        // Function to handle desktop positioning of the toggle button - REMOVED
-        // REINTRODUCED Positioning Logic
+        
+        // MODIFIED: Simplified positionToggleButton
         function positionToggleButton() {
             const isMobile = window.innerWidth <= 768;
-            const isCollapsed = sidebarPanel.classList.contains('collapsed');
-            const buttonWidth = 28; // Hardcoded button width for simplicity
-            const sidebarWidthString = getComputedStyle(document.documentElement).getPropertyValue('--sidebar-width');
-            const sidebarWidth = parseInt(sidebarWidthString, 10) || 380; // Parse sidebar width
-            const offset = 10; // Desired space from edge
 
             if (isMobile) {
-                 // Mobile: Fixed position relative to viewport
-                 toggleSidebarButton.style.position = 'fixed';
-                 toggleSidebarButton.style.left = 'auto'; // Ensure left is not set
+                // On mobile, CSS handles fixed positioning (top: 12px, right: 12px).
+                // Clear any inline styles that might have been set by desktop mode.
+                toggleSidebarButton.style.left = '';
+                toggleSidebarButton.style.right = ''; // CSS `right: 12px !important` in media query will take over
+            } else {
+                // Desktop: absolute positioning relative to workspace-container
+                const isCollapsed = sidebarPanel.classList.contains('collapsed');
+                const buttonWidth = toggleSidebarButton.offsetWidth || 36;
+                const sidebarWidthString = getComputedStyle(document.documentElement).getPropertyValue('--sidebar-width');
+                const sidebarWidth = parseInt(sidebarWidthString, 10) || 380;
+                const offset = 10; // Desired space from edge for the button itself
+
+                toggleSidebarButton.style.right = 'auto'; // We will control via 'left'
+
                 if (isCollapsed) {
-                     // Position near the right edge when collapsed
-                     toggleSidebarButton.style.right = `${offset}px`;
-                 } else {
-                     // Position relative to the expanded sidebar's left edge (from viewport right)
-                     toggleSidebarButton.style.right = `${sidebarWidth + offset}px`;
-                 }
-             } else {
-                 // Desktop: Absolute position relative to workspace-container
-                 toggleSidebarButton.style.position = 'absolute';
-                 toggleSidebarButton.style.right = 'auto'; // Ensure right is not set
-                if (isCollapsed) {
-                     // Position near the right edge when collapsed
-                     toggleSidebarButton.style.left = `calc(100% - ${buttonWidth}px - ${offset}px)`;
-                 } else {
-                     // Position relative to the expanded sidebar's left edge
-                     toggleSidebarButton.style.left = `calc(100% - ${sidebarWidth}px - ${buttonWidth / 2}px)`; // Center on edge
-                 }
-             }
+                    // Position near the right edge of the workspace-container
+                    toggleSidebarButton.style.left = `calc(100% - ${buttonWidth}px - ${offset}px)`;
+                } else {
+                    // Position to the left of the expanded sidebar, centered on its edge
+                    toggleSidebarButton.style.left = `calc(100% - ${sidebarWidth}px - ${buttonWidth / 2}px)`;
+                }
+            }
         }
 
-        // --- Check initial sidebar state based on screen width ---
+
         function checkInitialSidebarState() {
             if (window.innerWidth <= 768) {
-                sidebarPanel.classList.add('collapsed'); // Start collapsed on mobile
+                sidebarPanel.classList.add('collapsed');
             } else {
-                 sidebarPanel.classList.remove('collapsed'); // Start open on desktop
+                sidebarPanel.classList.remove('collapsed');
             }
-             // Update button icon based on initial state
-              updateToggleButton(sidebarPanel.classList.contains('collapsed'));
-             // Initial position calculation
-             positionToggleButton();
+            updateToggleButton(sidebarPanel.classList.contains('collapsed'));
+            // positionToggleButton(); // Called by updateToggleButton
         }
 
         // --- Log Handling ---
@@ -1234,9 +1399,6 @@
             if (logStatusElement) {
                 logStatusElement.textContent = `[Log Status] ${message}`;
                 logStatusElement.style.color = isError ? 'var(--error-msg-text)' : 'var(--system-msg-text)';
-                 // Ensure log status text is also visible in dark terminal
-                 // Background is now handled by CSS var --log-terminal-bg
-                // logStatusElement.style.backgroundColor = 'var(--log-terminal-bg)';
             }
             console.log(`Log Status: ${message}`);
         }
@@ -1245,24 +1407,19 @@
             if (!logTerminal) return;
             const logEntry = document.createElement('div');
             logEntry.classList.add('log-entry');
-            // Sanitize basic HTML? For now, just textContent
             logEntry.textContent = message;
 
             logTerminal.appendChild(logEntry);
-            logHistory.push(message); // Add to JS array
+            logHistory.push(message);
 
-            // Limit log lines in DOM and array
             while (logTerminal.children.length > maxLogLines) {
                 logTerminal.removeChild(logTerminal.firstChild);
             }
             while (logHistory.length > maxLogLines) {
-                logHistory.shift(); // Remove oldest from array
+                logHistory.shift();
             }
-
-            saveLogHistory(); // Save updated history to localStorage
-
-            // Auto-scroll only if near the bottom
-            const isScrolledNearBottom = logTerminal.scrollHeight - logTerminal.clientHeight <= logTerminal.scrollTop + 50; // 50px tolerance
+            saveLogHistory();
+            const isScrolledNearBottom = logTerminal.scrollHeight - logTerminal.clientHeight <= logTerminal.scrollTop + 50;
             if (isScrolledNearBottom) {
                  logTerminal.scrollTop = logTerminal.scrollHeight;
             }
@@ -1271,13 +1428,12 @@
         function clearLogTerminal() {
             if(logTerminal) {
                 logTerminal.innerHTML = '';
-                logHistory = []; // Clear the array
-                localStorage.removeItem(LOG_HISTORY_KEY); // Clear from storage
-                addLogEntry('[信息] 日志已手动清除。'); // Add confirmation message
+                logHistory = [];
+                localStorage.removeItem(LOG_HISTORY_KEY);
+                addLogEntry('[信息] 日志已手动清除。');
             }
         }
-         // Add event listener for the new clear log button
-         clearLogButton.addEventListener('click', clearLogTerminal);
+        clearLogButton.addEventListener('click', clearLogTerminal);
 
         function initializeLogWebSocket() {
             const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -1285,13 +1441,12 @@
             updateLogStatus(`尝试连接到 ${wsUrl}...`);
             addLogEntry(`[信息] 正在连接日志流: ${wsUrl}`);
 
-
             logWebSocket = new WebSocket(wsUrl);
 
             logWebSocket.onopen = (event) => {
                 updateLogStatus("已连接到日志流。");
                 addLogEntry("[成功] 日志 WebSocket 已连接。");
-                clearLogButton.disabled = false; // Enable clear button on connect
+                clearLogButton.disabled = false;
             };
 
             logWebSocket.onmessage = (event) => {
@@ -1306,45 +1461,32 @@
                 updateLogStatus("连接错误！", true);
                 console.error("Log WebSocket Error:", event);
                 addLogEntry("[错误] 日志 WebSocket 连接失败。");
-                 clearLogButton.disabled = true; // Disable clear button on error
+                clearLogButton.disabled = true;
             };
 
             logWebSocket.onclose = (event) => {
-                let reason = '';
-                if (event.reason) {
-                    reason = ` Reason: ${event.reason}`;
-                }
-                let statusMsg = '';
+                let reason = event.reason ? ` Reason: ${event.reason}` : '';
+                let statusMsg = event.wasClean ? `连接已关闭 (Code: ${event.code})${reason}` : `连接意外断开 (Code: ${event.code})${reason}。5秒后尝试重连...`;
                 let logMsg = `[信息] 日志 WebSocket 连接已关闭 (Code: ${event.code}${reason})`;
 
-                if (event.wasClean) {
-                    statusMsg = `连接已关闭 (Code: ${event.code})${reason}`;
-                } else {
-                    statusMsg = `连接意外断开 (Code: ${event.code})${reason}。5秒后尝试重连...`;
+                if (!event.wasClean) {
                     setTimeout(initializeLogWebSocket, 5000);
                 }
                 updateLogStatus(statusMsg, !event.wasClean);
-                 addLogEntry(logMsg);
-                 clearLogButton.disabled = true; // Disable clear button on close
+                addLogEntry(logMsg);
+                clearLogButton.disabled = true;
             };
         }
 
         // --- Chat Initialization ---
         function initializeChat() {
-            conversationHistory = [
-                { role: "system", content: SYSTEM_PROMPT }
-            ];
+            conversationHistory = [ { role: "system", content: SYSTEM_PROMPT } ];
             chatbox.innerHTML = '';
-
             const historyLoaded = loadChatHistory();
-
             if (!historyLoaded) {
-                // If no valid history was loaded, display the initial system prompt message
-                 displayMessage(SYSTEM_PROMPT, 'system');
-                 // Save the initial state (system prompt only)
-                 saveChatHistory();
+                displayMessage(SYSTEM_PROMPT, 'system');
+                saveChatHistory();
             }
-
             userInput.disabled = false;
             sendButton.disabled = false;
             clearButton.disabled = false;
@@ -1352,100 +1494,75 @@
             autoResizeTextarea();
             userInput.focus();
             console.log("Chat initialized.");
-
-            // Load logs independently
             loadLogHistory();
-
             if (!logWebSocket || logWebSocket.readyState === WebSocket.CLOSED) {
                  initializeLogWebSocket();
-                 clearLogButton.disabled = true; // Initially disabled until connected
+                 clearLogButton.disabled = true;
             } else {
-                 updateLogStatus("已连接到日志流。"); // Reset status if already connected
+                 updateLogStatus("已连接到日志流。");
                  clearLogButton.disabled = false;
             }
         }
 
-        // --- Load API Info --- (Modified to use displayInfoList)
         async function loadApiInfo() {
-            apiInfoContent.innerHTML = '<div class="info-list"><div><strong>状态:</strong> <span>正在加载 API 信息...</span></div></div>'; // Loading state
+            apiInfoContent.innerHTML = '<div class="loading-indicator"><div class="loading-spinner"></div><span>正在加载 API 信息...</span></div>';
             try {
                 const response = await fetch('/api/info');
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                 const data = await response.json();
-
-                // Format data for displayInfoList
                 const formattedData = {
                     'API Base URL': data.api_base_url ? `<code>${data.api_base_url}</code>` : '未知',
                     'Model Name': data.model_name ? `<code>${data.model_name}</code>` : '未知',
                     'API Key Required': data.api_key_required ? '<span style="color: orange;">⚠️ 是 (请在后端配置)</span>' : '<span style="color: green;">✅ 否</span>'
                 };
-
                 displayInfoList(apiInfoContent, formattedData);
-
             } catch (error) {
                 console.error("获取 API 信息失败:", error);
                 apiInfoContent.innerHTML = `<div class="info-list"><div><strong style="color: var(--error-msg-text);">错误:</strong> <span style="color: var(--error-msg-text);">加载 API 信息失败: ${error.message}</span></div></div>`;
             }
         }
 
-        // --- Load Health Status --- (NEW)
         async function fetchHealthStatus() {
-            if (!healthStatusDisplay) return; // Element not found
-
+            if (!healthStatusDisplay) return;
+            healthStatusDisplay.innerHTML = '<div class="loading-indicator"><div class="loading-spinner"></div><span>正在加载健康状态...</span></div>';
             try {
                 const response = await fetch('/health');
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                 const data = await response.json();
-                displayInfoList(healthStatusDisplay, data); // Use new function
+                displayInfoList(healthStatusDisplay, data);
             } catch (error) {
                 console.error("获取健康状态失败:", error);
-                // Update error display
                 if (healthStatusDisplay) {
                      healthStatusDisplay.innerHTML = `<div class="info-list"><div><strong style="color: var(--error-msg-text);">错误:</strong> <span style="color: var(--error-msg-text);">加载健康状态失败: ${error.message}</span></div></div>`;
                 }
-                 // Also log this error to the main log panel
-                 addLogEntry(`[错误] 获取 /health 状态失败: ${error.message}`);
+                addLogEntry(`[错误] 获取 /health 状态失败: ${error.message}`);
             }
         }
 
-        // Generic function to display key-value data in a styled list
         function displayInfoList(targetElement, data) {
             if (!targetElement) return;
-
-            let html = '<div class="info-list">'; // Use div wrapper with class
+            let html = '<div class="info-list">';
             for (const key in data) {
                 if (Object.hasOwnProperty.call(data, key)) {
-                    const value = data[key];
-                    // Use div for each row, strong for key, span for value
-                    html += `<div><strong>${key}:</strong> <span>${value}</span></div>`;
+                    html += `<div><strong>${key}:</strong> <span>${data[key]}</span></div>`;
                 }
             }
             html += '</div>';
-
             targetElement.innerHTML = html;
         }
 
-        // --- Navigation --- (NEW)
         function switchView(viewId) {
             if (viewId === 'chat') {
-                chatView.style.display = 'flex'; // Use flex as it contains flex items
+                chatView.style.display = 'flex';
                 serverInfoView.style.display = 'none';
                 navChatButton.classList.add('active');
                 navServerInfoButton.classList.remove('active');
-                // Check if userInput exists before focusing
-                 if (userInput) {
-                    userInput.focus(); // Focus input when switching to chat
-                 }
+                if (userInput) userInput.focus();
             } else if (viewId === 'server-info') {
                 chatView.style.display = 'none';
-                serverInfoView.style.display = 'block'; // Simple block display is fine here
+                serverInfoView.style.display = 'flex'; // Changed to flex for consistency
                 navChatButton.classList.remove('active');
                 navServerInfoButton.classList.add('active');
-                // Optionally refresh data when switching to this view
                 fetchHealthStatus();
                 loadApiInfo();
             }
@@ -1454,56 +1571,42 @@
         navChatButton.addEventListener('click', () => switchView('chat'));
         navServerInfoButton.addEventListener('click', () => switchView('server-info'));
 
-        // --- Manual Refresh for Server Info --- (NEW)
         refreshServerInfoButton.addEventListener('click', async () => {
             refreshServerInfoButton.disabled = true;
-            refreshServerInfoButton.textContent = '刷新中...'; // Indicate loading
-            console.log("Manually refreshing server info...");
+            refreshServerInfoButton.textContent = '刷新中...';
             addLogEntry("[信息] 手动刷新服务器状态...");
-
-            // Clear existing content to show refresh is happening
-            if (apiInfoContent) apiInfoContent.innerHTML = '<div class="info-list"><div><strong>状态:</strong> <span>正在加载 API 信息...</span></div></div>';
-            if (healthStatusDisplay) healthStatusDisplay.innerHTML = '<div class="info-list"><div><strong>状态:</strong> <span>正在加载健康状态...</span></div></div>';
-
+            if (apiInfoContent) apiInfoContent.innerHTML = '<div class="loading-indicator"><div class="loading-spinner"></div><span>正在加载 API 信息...</span></div>';
+            if (healthStatusDisplay) healthStatusDisplay.innerHTML = '<div class="loading-indicator"><div class="loading-spinner"></div><span>正在加载健康状态...</span></div>';
             try {
-                // Fetch both pieces of data concurrently
                 await Promise.all([loadApiInfo(), fetchHealthStatus()]);
                 addLogEntry("[成功] 服务器状态已刷新。");
             } catch (error) {
-                // Errors should be handled within loadApiInfo/fetchHealthStatus
-                // but log a general failure message here too.
                 console.error("Error during manual refresh:", error);
                 addLogEntry("[错误] 手动刷新服务器状态失败。");
-                // Display a generic error in the UI if needed, although specific functions might already do that.
-                if (apiInfoContent) apiInfoContent.innerHTML = '<div class="info-list"><div><strong style="color: var(--error-msg-text);">错误:</strong> <span style="color: var(--error-msg-text);">刷新失败</span></div></div>';
-                if (healthStatusDisplay) healthStatusDisplay.innerHTML = '<div class="info-list"><div><strong style="color: var(--error-msg-text);">错误:</strong> <span style="color: var(--error-msg-text);">刷新失败</span></div></div>';
             } finally {
-                // Restore button state after a short delay
                 setTimeout(() => {
                     refreshServerInfoButton.disabled = false;
-                    refreshServerInfoButton.textContent = '刷新'; // Restore original text
-                }, 300); // 300ms delay
+                    refreshServerInfoButton.textContent = '刷新';
+                }, 300);
             }
         });
 
-        // --- Initial Setup ---
-        loadThemePreference(); // Load theme preference first
-        initializeChat(); // Initialize chat on load
-        // Load API info and Health Status into the correct view
+        loadThemePreference();
+        initializeChat();
         loadApiInfo();
         fetchHealthStatus();
-        // Set interval to refresh health status every 30 seconds
         setInterval(fetchHealthStatus, 30000);
+        checkInitialSidebarState();
+        window.addEventListener('resize', () => {
+            checkInitialSidebarState(); // This will also call positionToggleButton
+        });
 
-        checkInitialSidebarState(); // Set initial sidebar state & button icon
-        window.addEventListener('resize', checkInitialSidebarState); // Adjust on resize
 
-        // --- Event Listeners ---
         sendButton.addEventListener('click', sendMessage);
         clearButton.addEventListener('click', () => {
              if (confirm("确定要清除所有聊天记录吗？此操作也会清除浏览器缓存。")) {
-                 localStorage.removeItem(CHAT_HISTORY_KEY); // Clear storage
-                 initializeChat(); // Re-initialize (which loads empty history)
+                 localStorage.removeItem(CHAT_HISTORY_KEY);
+                 initializeChat();
              }
         });
         userInput.addEventListener('keydown', (event) => {
@@ -1512,15 +1615,14 @@
                  sendMessage();
              }
         });
-         userInput.addEventListener('input', autoResizeTextarea);
+        userInput.addEventListener('input', autoResizeTextarea);
+        autoResizeTextarea();
 
-        // --- Auto-Resize Textarea ---
         function autoResizeTextarea() {
             const target = userInput;
-            target.style.height = 'auto'; // Temporarily shrink
-            const maxHeight = 200; // Match CSS max-height
+            target.style.height = 'auto';
+            const maxHeight = parseInt(getComputedStyle(target).maxHeight) || 200;
             const scrollHeight = target.scrollHeight;
-
             if (scrollHeight > maxHeight) {
                  target.style.height = maxHeight + 'px';
                  target.style.overflowY = 'auto';
@@ -1529,30 +1631,25 @@
                  target.style.overflowY = 'hidden';
              }
         }
-        // Initial resize
-        autoResizeTextarea();
 
-        // --- Send Message Function ---
         async function sendMessage() {
              const messageText = userInput.value.trim();
              if (!messageText) return;
-
              userInput.disabled = true;
              sendButton.disabled = true;
              clearButton.disabled = true;
-
              try {
                  conversationHistory.push({ role: 'user', content: messageText });
                  const userMsgIndex = conversationHistory.length - 1;
                  displayMessage(messageText, 'user', userMsgIndex);
                  userInput.value = '';
                  autoResizeTextarea();
-                 saveChatHistory(); // Save history *after* adding user message
+                 saveChatHistory();
 
-                 const assistantMsgIndex = conversationHistory.length; // Index if added
+                 const assistantMsgIndex = conversationHistory.length;
                  const assistantMsgElement = displayMessage('', 'assistant', assistantMsgIndex);
                  assistantMsgElement.classList.add('streaming');
-                 chatbox.scrollTop = chatbox.scrollHeight; // Scroll down
+                 chatbox.scrollTop = chatbox.scrollHeight;
 
                  let fullResponse = '';
                  const response = await fetch(API_URL, {
@@ -1566,229 +1663,146 @@
                  });
 
                  if (!response.ok) {
-                     let errorBody = {};
-                     let errorText = `HTTP Error: ${response.status} ${response.statusText}`;
+                     let errorBody = {}, errorText = `HTTP Error: ${response.status} ${response.statusText}`;
                      try {
                          const text = await response.text();
-                         try { errorBody = JSON.parse(text); } catch (e) { errorBody = {detail: text};} // Try JSON, fallback to text
+                         try { errorBody = JSON.parse(text); } catch (e) { errorBody = {detail: text};}
                          errorText = errorBody.detail || errorBody.error?.message || text;
-                     } catch (e) { /* Ignore parse errors, use statusText */ }
+                     } catch (e) { /* Ignore */ }
                      throw new Error(errorText);
                  }
-
 
                  const reader = response.body.getReader();
                  const decoder = new TextDecoder();
                  let buffer = '';
-
                  while (true) {
                      const { done, value } = await reader.read();
                      if (done) break;
-
                      buffer += decoder.decode(value, { stream: true });
-                      // Process buffer line by line (SSE uses '\n\n' delimiters)
                      let boundary = buffer.indexOf('\n\n');
                      while (boundary >= 0) {
                           const line = buffer.substring(0, boundary).trim();
-                          buffer = buffer.substring(boundary + 2); // Move past delimiter
-
+                          buffer = buffer.substring(boundary + 2);
                          if (line.startsWith('data: ')) {
                              const data = line.substring(6).trim();
                              if (data === '[DONE]') continue;
                              try {
                                  const chunk = JSON.parse(data);
-                                 if (chunk.error) {
-                                     throw new Error(chunk.error.message || "Unknown stream error");
-                                 }
+                                 if (chunk.error) throw new Error(chunk.error.message || "Unknown stream error");
                                  const delta = chunk.choices?.[0]?.delta?.content || '';
                                  if (delta) {
                                      fullResponse += delta;
-                                     // Append incrementally using textContent for performance
-                                     const isScrolledToBottom = chatbox.scrollHeight - chatbox.clientHeight <= chatbox.scrollTop + 5; // Tighter tolerance
-                                     assistantMsgElement.textContent += delta; // Append text
-                                     if (isScrolledToBottom) {
-                                         chatbox.scrollTop = chatbox.scrollHeight;
-                                     }
+                                     const isScrolledToBottom = chatbox.scrollHeight - chatbox.clientHeight <= chatbox.scrollTop + 15; // Adjusted tolerance
+                                     assistantMsgElement.querySelector('.message-content').textContent += delta; // Append to content div
+                                     if (isScrolledToBottom) chatbox.scrollTop = chatbox.scrollHeight;
                                  }
-                                 const finishReason = chunk.choices?.[0]?.finish_reason;
-                                 if (finishReason) console.log("Stream finish reason:", finishReason);
-
+                                 if (chunk.choices?.[0]?.finish_reason) console.log("Stream finish reason:", chunk.choices[0].finish_reason);
                              } catch (e) {
                                  console.error('Error parsing stream chunk:', data, e);
                                  addLogEntry(`[错误] 解析流数据块失败: ${e.message}. 数据: ${data}`);
                              }
                          }
-                         boundary = buffer.indexOf('\n\n'); // Find next boundary
+                         boundary = buffer.indexOf('\n\n');
                      }
                  }
-
-                  // Process any remaining buffer after stream ends (though usually empty with SSE)
-                  // Not typically needed for properly formatted SSE
-
-                 // Render final message content with Markdown/HTML interpretation
-                  renderMessageContent(assistantMsgElement, fullResponse);
+                 
+                 renderMessageContent(assistantMsgElement.querySelector('.message-content'), fullResponse); // Final render on content div
 
                  if (fullResponse) {
                      conversationHistory.push({ role: 'assistant', content: fullResponse });
-                     assistantMsgElement.dataset.index = assistantMsgIndex; // Set index now
-                     saveChatHistory(); // Save history after adding assistant message
+                     assistantMsgElement.dataset.index = assistantMsgIndex;
+                     saveChatHistory();
                  } else {
                      console.warn("Stream finished with empty response.");
-                     assistantMsgElement.remove(); // Remove empty placeholder
-                     // Rollback user message if response was empty
+                     assistantMsgElement.remove();
                       if (conversationHistory[conversationHistory.length - 1]?.role === 'user') {
                           conversationHistory.pop();
-                          saveChatHistory(); // Save rolled-back history
+                          saveChatHistory();
                           const userMessages = chatbox.querySelectorAll('.user-message');
-                          if (userMessages.length > 0) {
-                              userMessages[userMessages.length - 1].remove();
-                          }
+                          if (userMessages.length > 0) userMessages[userMessages.length - 1].remove();
                       }
                  }
-
              } catch (error) {
                  console.error('Error sending message:', error);
-                  const errorText = `喵... 出错了: ${error.message || '未知错误'} >_<`;
+                 const errorText = `喵... 出错了: ${error.message || '未知错误'} >_<`;
                  displayMessage(errorText, 'error');
-                 addLogEntry(`[错误] 发送消息失败: ${error.message}`); // Log the error too
-                 // Clean up streaming placeholder
+                 addLogEntry(`[错误] 发送消息失败: ${error.message}`);
                  const streamingMsg = chatbox.querySelector('.assistant-message.streaming');
                  if (streamingMsg) streamingMsg.remove();
-                 // Rollback user message on error
                  if (conversationHistory[conversationHistory.length - 1]?.role === 'user') {
                      conversationHistory.pop();
-                     saveChatHistory(); // Save rolled-back history
+                     saveChatHistory();
                      const userMessages = chatbox.querySelectorAll('.user-message');
-                     if (userMessages.length > 0) {
-                         userMessages[userMessages.length - 1].remove();
-                     }
+                     if (userMessages.length > 0) userMessages[userMessages.length - 1].remove();
                  }
              } finally {
                  userInput.disabled = false;
                  sendButton.disabled = false;
                  clearButton.disabled = false;
-                 const finalAssistantMsg = Array.from(chatbox.querySelectorAll('.assistant-message')).pop();
+                 const finalAssistantMsg = Array.from(chatbox.querySelectorAll('.assistant-message.streaming')).pop();
                  if (finalAssistantMsg) finalAssistantMsg.classList.remove('streaming');
                  userInput.focus();
-                 chatbox.scrollTop = chatbox.scrollHeight; // Ensure scrolled to bottom
+                 chatbox.scrollTop = chatbox.scrollHeight;
              }
         }
 
-        // --- Display Message Function (Creates Element) ---
         function displayMessage(text, role, index) {
             const messageElement = document.createElement('div');
             messageElement.classList.add('message');
-            // Ensure role class is only added if it's user or assistant or system
             if ([ 'user', 'assistant', 'system', 'error' ].includes(role)) {
                 messageElement.classList.add(`${role}-message`);
             }
-
-            // Store index and original content for editing/deleting
             if (index !== undefined && (role === 'user' || role === 'assistant')) {
                 messageElement.dataset.index = index;
             }
-
             const messageContentElement = document.createElement('div');
             messageContentElement.classList.add('message-content');
-
-            // Render content immediately
-            if (text || role === 'system') { // System messages can be empty initially
+            if (text || role === 'system' || (role === 'assistant' && text === '')) { // Allow empty initial for streaming assistant
                  renderMessageContent(messageContentElement, text);
             }
-
             messageElement.appendChild(messageContentElement);
-
             chatbox.appendChild(messageElement);
-             // Scroll after adding element and potential reflow
              setTimeout(() => {
-                 if (chatbox.lastChild === messageElement) { // Only scroll if it's the last message added
+                 if (chatbox.lastChild === messageElement) {
                     chatbox.scrollTop = chatbox.scrollHeight;
                  }
              }, 0);
-            return messageElement;
+            return messageElement; // Return the main message element
         }
 
-        // --- Render Message Content (Handles Markdown/HTML, Improved) ---
         function renderMessageContent(element, text) {
-             // Only try to render if text is not null or undefined
              if (text == null) {
-                 element.innerHTML = ''; // Clear if text is null/undefined
-                 return;
+                 element.innerHTML = ''; return;
              }
-             // Escape HTML to prevent XSS before applying markdown
-             const escapeHtml = (unsafe) => {
-                 return unsafe
-                     .replace(/&/g, "&amp;")
-                     .replace(/</g, "&lt;")
-                     .replace(/>/g, "&gt;")
-                     .replace(/"/g, "&quot;")
-                     .replace(/'/g, "&#039;");
-             };
-
-             // Ensure text is a string before processing
+             const escapeHtml = (unsafe) => unsafe.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
              let safeText = escapeHtml(String(text));
-
-             // Code Blocks (```lang\ncode``` or ```\ncode```)
              const blockRegex = /```(?:[\w-]*\n)?([\s\S]+?)\n?```/g;
-             safeText = safeText.replace(blockRegex, (match, code) => {
-                  // No need to escape again, already done by escapeHtml
-                 return `<pre><code>${code.trim()}</code></pre>`; // Keep escaped code
-             });
-
-             // Inline Code (`code`)
+             safeText = safeText.replace(blockRegex, (match, code) => `<pre><code>${code.trim()}</code></pre>`);
              const inlineCodeRegex = /`([^`]+)`/g;
-             safeText = safeText.replace(inlineCodeRegex, '<code>$1</code>'); // Keep escaped content
-
-             // Links ([text](url)) - Need to be careful here not to double-escape
-             const linkRegex = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g;
-             // Temporarily use placeholders for links before applying other markdown
+             safeText = safeText.replace(inlineCodeRegex, '<code>$1</code>');
              const links = [];
+             const linkRegex = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g;
              safeText = safeText.replace(linkRegex, (match, linkText, url) => {
-                 links.push({ text: linkText, url: url }); // Store original (already escaped) text and raw URL
+                 links.push({ text: linkText, url: url });
                  return `__LINK_${links.length - 1}__`;
              });
-
-             // Basic Bold (**text** or __text__)
              const boldRegex = /(\*\*|__)(?=\S)([\s\S]*?\S)\1/g;
              safeText = safeText.replace(boldRegex, '<strong>$2</strong>');
-
-             // Basic Italic (*text* or _text_)
              const italicRegex = /(\*|_)(?=\S)([\s\S]*?\S)\1/g;
              safeText = safeText.replace(italicRegex, '<em>$2</em>');
-
-
-             // Restore links, ensuring URL is safe (already checked for http/https)
              safeText = safeText.replace(/__LINK_(\d+)__/g, (match, index) => {
                  const link = links[parseInt(index)];
-                 // Re-escape URL just in case, though regex limits it.
-                 const safeUrl = escapeHtml(link.url);
-                 // Link text is already escaped.
-                 return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${link.text}</a>`;
+                 return `<a href="${escapeHtml(link.url)}" target="_blank" rel="noopener noreferrer">${link.text}</a>`;
              });
-
-             // Handle newlines -> <br> (outside of pre/code)
-             // This is tricky. A simpler approach might be needed.
-             // For now, rely on `white-space: pre-wrap;` in CSS for assistant messages.
-             // If more complex markdown parsing is needed, a library is recommended.
-
-             element.innerHTML = safeText;
-
-             // Add syntax highlighting to code blocks if available
+             element.innerHTML = safeText; // white-space: pre-wrap on .assistant-message handles newlines mostly
              if (typeof hljs !== 'undefined' && element.querySelectorAll('pre code').length > 0) {
-                  element.querySelectorAll('pre code').forEach((block) => {
-                     hljs.highlightElement(block);
-                 });
+                  element.querySelectorAll('pre code').forEach((block) => hljs.highlightElement(block));
              }
         }
 
-        // --- Persistence Functions ---
         function saveChatHistory() {
-            try {
-                localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(conversationHistory));
-            } catch (e) {
-                console.error("Error saving chat history to localStorage:", e);
-                addLogEntry("[错误] 保存聊天记录到 localStorage 失败。");
-            }
+            try { localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(conversationHistory)); }
+            catch (e) { console.error("Error saving chat history:", e); addLogEntry("[错误] 保存聊天记录失败。"); }
         }
 
         function loadChatHistory() {
@@ -1796,37 +1810,22 @@
                 const storedHistory = localStorage.getItem(CHAT_HISTORY_KEY);
                 if (storedHistory) {
                     const parsedHistory = JSON.parse(storedHistory);
-                    // Basic validation: check if it's an array and has the system prompt
                     if (Array.isArray(parsedHistory) && parsedHistory.length > 0 && parsedHistory[0].role === 'system') {
                         conversationHistory = parsedHistory;
-                        // Don't display system message again, start from index 1
-                        for (let i = 1; i < conversationHistory.length; i++) {
-                            const msg = conversationHistory[i];
-                            displayMessage(msg.content, msg.role, i); // Pass index
+                        for (let i = 1; i < conversationHistory.length; i++) { // Skip system prompt
+                            displayMessage(conversationHistory[i].content, conversationHistory[i].role, i);
                         }
-                        console.log("Chat history loaded from localStorage.");
                         addLogEntry("[信息] 从 localStorage 加载了聊天记录。");
-                        return true; // Indicate history was loaded
-                    } else {
-                        console.warn("Invalid chat history found in localStorage. Starting fresh.");
-                        localStorage.removeItem(CHAT_HISTORY_KEY); // Clear invalid data
-                    }
+                        return true;
+                    } else { localStorage.removeItem(CHAT_HISTORY_KEY); }
                 }
-            } catch (e) {
-                console.error("Error loading chat history from localStorage:", e);
-                addLogEntry("[错误] 从 localStorage 加载聊天记录失败。");
-                localStorage.removeItem(CHAT_HISTORY_KEY); // Clear potentially corrupt data
-            }
-            return false; // Indicate history was not loaded
+            } catch (e) { console.error("Error loading chat history:", e); addLogEntry("[错误] 加载聊天记录失败。"); localStorage.removeItem(CHAT_HISTORY_KEY); }
+            return false;
         }
 
         function saveLogHistory() {
-            try {
-                localStorage.setItem(LOG_HISTORY_KEY, JSON.stringify(logHistory));
-            } catch (e) {
-                console.error("Error saving log history to localStorage:", e);
-                // Avoid adding log entry here to prevent potential loop
-            }
+            try { localStorage.setItem(LOG_HISTORY_KEY, JSON.stringify(logHistory)); }
+            catch (e) { console.error("Error saving log history:", e); }
         }
 
         function loadLogHistory() {
@@ -1836,29 +1835,24 @@
                     const parsedLogs = JSON.parse(storedLogs);
                     if (Array.isArray(parsedLogs)) {
                         logHistory = parsedLogs;
-                        logTerminal.innerHTML = ''; // Clear any default messages
+                        logTerminal.innerHTML = '';
                         parsedLogs.forEach(logMsg => {
                             const logEntry = document.createElement('div');
                             logEntry.classList.add('log-entry');
                             logEntry.textContent = logMsg;
                             logTerminal.appendChild(logEntry);
                         });
-                        logTerminal.scrollTop = logTerminal.scrollHeight; // Scroll to bottom
-                        console.log("Log history loaded from localStorage.");
+                        logTerminal.scrollTop = logTerminal.scrollHeight;
                         return true;
                     }
                 }
-            } catch (e) {
-                console.error("Error loading log history from localStorage:", e);
-                localStorage.removeItem(LOG_HISTORY_KEY); // Clear potentially corrupt data
-            }
+            } catch (e) { console.error("Error loading log history:", e); localStorage.removeItem(LOG_HISTORY_KEY); }
             return false;
         }
-
     </script>
     <!-- Optional: Add highlight.js for code syntax highlighting -->
-    <!-- <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css"> -->
+    <!-- <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/stackoverflow-dark.min.css"> -->
     <!-- <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script> -->
     <!-- <script>hljs.highlightAll();</script> -->
 </body>
-</html> 
+</html>
