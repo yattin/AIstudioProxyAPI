@@ -19,7 +19,7 @@
     *   [3. 首次运行与认证 (关键!)](#3-首次运行与认证-关键)
     *   [4. 日常运行 (推荐: 使用 `start.py`)](#4-日常运行-推荐-使用-startpy)
     *   [5. API 使用](#5-api-使用)
-    *   [6. Web UI (简单测试)](#6-web-ui-简单测试)
+    *   [6. Web UI (服务测试)](#6-web-ui-服务测试)
     *   [7. 配置客户端 (以 Open WebUI 为例)](#7-配置客户端-以-open-webui-为例)
     *   [8. (可选) 局域网域名访问 (mDNS)](#8-可选-局域网域名访问-mdns)
 7.  [多平台指南](#多平台指南-python-版本)
@@ -65,13 +65,13 @@
 *   **简化的启动脚本 (`start.py`)**:
     *   自动检查并尝试清理端口冲突 (默认 `2048`)。
     *   提供交互式代理设置 (可选)。
-    *   以后台模式自动启动 `launch_camoufox.py --headless`，无需手动粘贴 WebSocket 端点。
+    *   以后台模式自动启动 `launch_camoufox.py --headless`，并自动处理内部 WebSocket 连接，无需用户手动操作。
 *   **认证与调试模式 (`launch_camoufox.py --debug`)**:
     *   提供带界面的浏览器用于首次认证、调试和更新认证文件。
     *   支持保存和加载浏览器认证状态 (`auth_profiles` 目录) 实现免登录。
 *   **系统提示词与历史记录**: 支持 `messages` 中的 `system` 角色和多轮对话历史。
 *   **自动清空上下文 (条件性)**: 尝试在新对话开始时，如果当前不在 `/new_chat` 页面，则自动清空 AI Studio 页面的聊天记录。
-*   **智能响应获取**: 优先尝试通过模拟点击"编辑"或"复制"按钮获取原生响应，提高流式输出的准确性。
+*   **智能响应获取**: 优先尝试通过模拟点击"编辑"或"复制"按钮获取原生响应，提高响应内容的准确性。
 *   **Web UI**: 提供 `/` 路径访问一个基于 `index.html` 的现代聊天界面，包含：
     *   聊天视图。
     *   服务器信息视图 (API 信息、健康检查状态，支持刷新)。
@@ -79,9 +79,9 @@
     *   亮色/暗色主题切换与本地存储。
     *   响应式设计，适配不同屏幕尺寸。
 *   **服务端 (`server.py`)**: FastAPI 应用，处理 API 请求，通过 Playwright 控制 Camoufox 浏览器与 AI Studio 交互。
-*   **启动器 (`launch_camoufox.py`)**: 负责启动 Camoufox 服务和 FastAPI 服务，并协调两者之间的连接（通常由 `start.py` 在后台调用）。
+*   **启动器 (`launch_camoufox.py`)**: 负责协调启动 Camoufox 服务（通过内部调用自身）和 FastAPI 服务，并管理它们之间的连接。通常由 `start.py` 在后台调用。
 *   **错误快照**: 出错时自动在 `errors_py/` 目录保存截图和 HTML。
-*   **日志控制**: 可通过环境变量或命令行参数 (`--disable-print-redirect`) 调整日志级别和重定向。
+*   **日志控制**: 可通过环境变量控制 `server.py` 的日志级别和 `print` 输出重定向行为。
 *   **WebSocket 实时日志**: 提供 `/ws/logs` 端点，Web UI 通过此接口显示后端日志。
 *   **辅助端点**: 提供 `/health`, `/v1/queue`, `/v1/cancel/{req_id}` 等端点用于监控和管理。
 
@@ -94,7 +94,7 @@
 *   **稳定性**: 浏览器自动化本质上不如原生 API 稳定，长时间运行可能需要重启。
 *   **AI Studio 限制**: 无法绕过 AI Studio 本身的速率、内容等限制。
 *   **模型参数**: 温度、Top-K/P 等模型参数**需要在 AI Studio Web UI 中设置**，本代理暂时不转发 API 请求中的这些参数。
-*   **端口号**: 默认端口已更改为 `2048`。可在 `start.py` 和 `server.py` 中修改。
+*   **端口号**: 默认端口已更改为 `2048`。可在 `start.py` 的配置或 `launch_camoufox.py` 的 `--server-port` 参数中修改。
 *   **客户端管理历史，代理不支持 UI 内编辑**: 客户端负责维护完整的聊天记录并将其发送给代理。代理服务器本身不支持在 AI Studio 界面中对历史消息进行编辑或分叉操作；它总是处理客户端发送的完整消息列表，然后将其发送到 AI Studio 页面。
 
 ## 快速开始 (推荐流程)
@@ -121,7 +121,7 @@
     ```
     *   **重要:** 加上 `--server-port 2048` (或其他你想用的端口) 来指定 FastAPI 监听端口。
     *   会启动一个**带界面的浏览器**。
-    *   **关键交互:** **在弹出的浏览器窗口中完成 Google 登录**，直到看到 AI Studio 聊天界面。 (脚本会自动处理浏览器连接，无需手动操作端点)。
+    *   **关键交互:** **在弹出的浏览器窗口中完成 Google 登录**，直到看到 AI Studio 聊天界面。 (脚本会自动处理浏览器连接，无需用户手动操作)。
     *   回到终端，提示保存认证时输入 `y` 并回车 (文件名可默认)。文件会保存在 `auth_profiles/saved/`。
     *   **将 `auth_profiles/saved/` 下新生成的 `.json` 文件移动到 `auth_profiles/active/` 目录。** 确保 `active` 目录下只有一个 `.json` 文件。
     *   可以按 `Ctrl+C` 停止 `--debug` 模式的运行。
@@ -133,7 +133,7 @@
     *   **前提:** 确保 `auth_profiles/active/` 下有有效的 `.json` 文件。
     *   脚本会自动检查端口 `2048` 是否被占用，并尝试清理。
     *   会询问是否启用代理和代理地址 (可选)。
-    *   设置完成后，脚本会在后台自动启动 `launch_camoufox.py` (无头模式)，并处理 WebSocket 连接，**无需任何手动交互**。
+    *   设置完成后，脚本会在后台自动启动 `launch_camoufox.py` (无头模式)，并自动处理内部连接，**无需任何手动交互**。
     *   你可以关闭 `start.py` 的终端窗口，服务将在后台运行。
 
 4.  **使用:**
@@ -184,7 +184,7 @@
     # Camoufox 需要下载其修改版的 Firefox
     camoufox fetch
     ```
-    如果此步骤因 SSL 证书等网络问题失败，可以尝试运行项目中的 `fetch_camoufox_data.py` 脚本 (详见[下方说明](#-关于-fetch_camoufox_datapy))。
+    如果此步骤因 SSL 证书等网络问题失败，可以尝试运行项目中的 `fetch_camoufox_data.py` 脚本 (详见[下方说明](#关于-fetch_camoufox_datapy))。
 
 5.  **安装 Playwright 浏览器依赖 (如果需要)**:
     虽然 Camoufox 使用自己的 Firefox，但首次运行 Playwright 相关命令可能仍需要安装一些基础依赖。
@@ -203,13 +203,13 @@
     python launch_camoufox.py --debug --server-port 2048
     ```
     *   **重要:** 使用 `--server-port <端口号>` (例如 2048) 指定 FastAPI 服务器监听的端口，后续客户端连接需要使用此端口。
-    *   脚本会启动 Camoufox，并在终端输出启动信息。
+    *   脚本会启动 Camoufox（通过内部调用自身），并在终端输出启动信息。
     *   你会看到一个 **带界面的 Firefox 浏览器窗口** 弹出。
     *   **关键交互 1: 浏览器内登录**
         *   如果浏览器自动打开了 AI Studio 聊天界面 (`.../prompts/new_chat`)，说明可能已有登录状态或无需登录。
         *   如果浏览器打开了 Google 登录页面，**请在浏览器窗口中手动完成 Google 登录流程** (输入账号、密码、二次验证等)，直到你成功进入 AI Studio 的聊天界面。
     *   **关键交互 2: 保存认证状态**
-        *   当 `server.py` 确认页面加载完成且用户已登录后，它会在**终端**提示：`是否要将当前的浏览器认证状态保存到文件？ (y/N):`
+        *   当 `server.py` （在 `launch_camoufox.py` 进程内运行）确认页面加载完成且用户已登录后，它会在**终端**提示：`是否要将当前的浏览器认证状态保存到文件？ (y/N):`
         *   输入 `y` 并按回车。
         *   会再次提示输入文件名，你可以直接回车使用默认名称（`auth_state_时间戳.json`）。
         *   认证文件将保存在项目目录下的 `auth_profiles/saved/` 文件夹中。
@@ -236,7 +236,7 @@
 
 *   `launch_camoufox.py` 支持通过命令行参数 (`--headless` 或 `--debug`) 或交互式选择来启动有头（带界面）或无头模式。
 *   使用 `launch_camoufox.py --debug` 是生成和更新认证文件的**唯一方式**。
-*   通过直接运行 `launch_camoufox.py`，你可以更清晰地看到 Camoufox 服务和 FastAPI 服务器的启动过程和日志，方便排查初始设置问题。
+*   通过直接运行 `launch_camoufox.py`，你可以更清晰地看到内部 Camoufox 启动、FastAPI 服务器的启动过程和日志，方便排查初始设置问题。
 
 **只有当你确认使用 `launch_camoufox.py --debug` 一切运行正常（特别是浏览器内的登录和认证保存），并且 `auth_profiles/active/` 目录下有有效的认证文件后，才推荐使用下面的 `start.py` 作为日常后台运行的标准方式。**
 
@@ -249,18 +249,18 @@ python start.py
 *   **前提**: `auth_profiles/active/` 目录下**必须**存在一个有效的 `.json` 认证文件。
 *   **自动端口检查**: 脚本会检查默认端口 `2048` 是否被占用。如果被占用，会尝试识别占用进程并提示用户是否尝试自动终止它们。
 *   **代理设置 (可选)**: 脚本会交互式地询问你是否需要为 Camoufox 浏览器设置 HTTP/HTTPS 代理，并允许你输入代理地址。这对需要通过代理访问 Google 服务的用户很有用。
-*   **后台启动**: 设置完成后，脚本会在**后台**自动启动 `launch_camoufox.py` (强制使用 `--headless` 模式)，并处理进程分离和 WebSocket 连接。**无需任何手动交互。**
-*   **退出启动器**: `start.py` 成功启动后台服务后，会提示你可以安全地关闭该终端窗口。主服务 (`launch_camoufox.py` 和 `server.py`) 会在后台继续运行。
+*   **后台启动**: 设置完成后，脚本会在**后台**自动启动 `launch_camoufox.py` (强制使用 `--headless` 模式)，并自动处理内部连接和进程分离。**无需任何手动交互。**
+*   **退出启动器**: `start.py` 成功启动后台服务后，会提示你可以安全地关闭该终端窗口。主服务 (`launch_camoufox.py` 及其管理的 `server.py`) 会在后台继续运行。
 
 **如果你需要查看详细日志或进行调试，或者需要手动控制启动过程（例如更新认证），仍然可以使用:**
 ```bash
-# 运行 Debug 模式 (浏览器内交互，无需手动处理端点)
+# 运行 Debug 模式 (浏览器内交互，脚本自动处理内部连接)
 python launch_camoufox.py --debug --server-port 2048
 ```
 
 ### 5. API 使用
 
-代理服务器默认监听在 `http://127.0.0.1:2048`。端口可以在 `start.py` 脚本内部或 `launch_camoufox.py`/`server.py` 的启动参数中修改。
+代理服务器默认监听在 `http://127.0.0.1:2048`。端口可以在 `start.py` 脚本内部的配置或 `launch_camoufox.py` 的 `--server-port` 参数中修改。
 
 *   **聊天接口**: `POST /v1/chat/completions`
     *   请求体与 OpenAI API 兼容，需要 `messages` 数组。
@@ -347,12 +347,8 @@ python launch_camoufox.py --debug --server-port 2048
     *   返回当前请求队列的详细信息。
 *   **取消请求**: `POST /v1/cancel/{req_id}`
     *   尝试取消仍在队列中等待处理的请求。
-*   **自动化 WebSocket 端点传递**: 研究是否能让 `launch_camoufox.py` 自动捕获并传递 WebSocket 端点给 `server.py`，减少手动复制粘贴步骤。(注：此功能现已实现)
-*   **云服务器部署指南**: 提供更详细的在主流云平台（如 AWS, GCP, Azure）上部署和管理服务的指南。
-*   **参数自动化 (探索性)**: 研究通过 Playwright 自动化操作 AI Studio 页面的参数设置区域的可行性。
-*   **认证更新流程优化**: 探索更便捷的认证文件更新机制，减少手动操作。
 
-### 6. Web UI (简单测试)
+### 6. Web UI (服务测试)
 
 本项目提供了一个简单的 Web 用户界面 (`index.html`)，用于快速测试代理的基本功能和查看状态。
 
@@ -367,7 +363,7 @@ python launch_camoufox.py --debug --server-port 2048
     *   **主题切换**: 右上角提供 "浅色"/"深色" 按钮，用于切换界面主题，偏好设置会保存在浏览器本地存储中。
     *   **响应式设计**: 界面会根据屏幕大小自动调整布局。
 
-**用途**: 这个 Web UI 主要用于开发调试、快速验证代理是否正常工作以及监控服务器状态，不建议作为主要的聊天客户端使用。
+**用途**: 这个 Web UI 主要用于简单聊天、开发调试、快速验证代理是否正常工作以及监控服务器状态。
 
 ### 7. 配置客户端 (以 Open WebUI 为例)
 
@@ -395,7 +391,7 @@ python launch_camoufox.py --debug --server-port 2048
     ```bash
     pip install zeroconf netifaces
     ```
-2.  **运行脚本:** 你需要**同时运行** `launch_camoufox.py`(确保 `server.py` 监听在 `0.0.0.0` 和指定端口，如 2048) 和 `mdns_publisher.py`。
+2.  **运行脚本:** 你需要**同时运行**主代理服务 (通过 `start.py` 或 `launch_camoufox.py` 启动，确保 `server.py` 监听在 `0.0.0.0` 和指定端口，如 2048) 和 `mdns_publisher.py`。
     在**另一个终端**窗口，激活虚拟环境后，运行：
     ```bash
     python mdns_publisher.py
@@ -446,23 +442,19 @@ python launch_camoufox.py --debug --server-port 2048
     *   通常是 Linux 系统缺少必要的库。仔细阅读错误信息，根据提示安装缺失的系统包 (如 `libgbm-dev`, `libnss3` 等)。
 *   **`launch_camoufox.py` 启动报错**:
     *   检查 Camoufox 是否已通过 `camoufox fetch` 正确下载。
-    *   查看终端输出，是否有来自 Camoufox 库 (`launch_server` 调用) 的具体错误信息。
+    *   查看终端输出，是否有来自 Camoufox 库 (`launch_server` 调用) 或内部 Camoufox 进程的具体错误信息。
     *   确保没有其他 Camoufox 或 Playwright 进程冲突。
-*   **粘贴 WebSocket 端点后 `server.py` 连接失败**:
-    *   确认粘贴的 `ws://...` 地址完整且正确。
-    *   确认 Camoufox 服务仍在运行 (检查 `launch_camoufox.py` 启动的终端)。
-    *   检查防火墙是否阻止了本地 WebSocket 连接。
 *   **`server.py` 启动时提示端口 (`2048`) 被占用**:
     *   如果使用 `start.py` 启动，它会尝试自动检测并提示终止占用进程。
-    *   如果自动终止失败或未使用 `start.py`，请使用系统工具 (如 `netstat -ano | findstr 2048` on Windows, `lsof -i :2048` on Linux/macOS) 查找并结束占用该端口的进程，或修改 `start.py`/`launch_camoufox.py`/`server.py` 中的端口号。
+    *   如果自动终止失败或未使用 `start.py`，请使用系统工具 (如 `netstat -ano | findstr 2048` on Windows, `lsof -i :2048` on Linux/macOS) 查找并结束占用该端口的进程，或修改 `start.py` 的配置或 `launch_camoufox.py` 的 `--server-port` 参数。
 *   **认证失败 (特别是无头模式)**:
     *   **最常见**: `auth_profiles/active/` 下的 `.json` 文件已过期或无效。
     *   **解决**: 删除 `active` 下的文件，重新运行 `python launch_camoufox.py --debug --server-port 2048` 生成新的认证文件，并将其移动到 `active` 目录。
     *   确认 `active` 目录下只有一个 `.json` 文件。
-    *   检查 `server.py` 日志（可以通过 Web UI 的日志侧边栏查看），看是否明确提到登录重定向。
+    *   检查 `server.py` 日志（可以通过 Web UI 的日志侧边栏查看，或 `logs/app.log`），看是否明确提到登录重定向。
 *   **客户端 (如 Open WebUI) 无法连接**:
     *   确认 API 基础 URL 配置正确 (`http://<服务器IP或localhost>:端口/v1`，默认端口 2048)。
-    *   检查 `server.py` 日志是否有错误（Web UI 可看）。
+    *   检查 `server.py` 日志是否有错误（Web UI 可看，或 `logs/app.log`）。
 *   **API 请求返回 5xx / 499 错误**:
     *   **503 Service Unavailable**: `server.py` 未完全就绪 (例如正在初始化，或 Worker 未运行)。
     *   **504 Gateway Timeout**: AI Studio 响应慢或处理超时。
@@ -480,7 +472,7 @@ python launch_camoufox.py --debug --server-port 2048
     *   检查 `server.py` 日志中的警告或错误。
     *   检查 `errors_py/` 目录下的错误快照 (截图和 HTML)，对比实际页面元素，更新 `server.py` 中对应的 CSS 选择器常量。
 *   **`start.py` 启动后服务未运行或立即退出**:
-    *   检查 `auth_profiles/active/` 是否有有效的认证文件。
+    *   检查 `auth_profiles/active/` 是否有有效的认证文件。这是最常见的原因。
     *   尝试直接运行 `python launch_camoufox.py --headless --server-port 2048` 查看详细的启动错误日志。
     *   查看项目根目录下的 `logs/launch_app.log` (由 `launch_camoufox.py` 生成) 和 `logs/app.log` (由 `server.py` 生成) 获取详细错误信息。
 *   **Web UI 无法显示日志或服务器信息**:
@@ -495,7 +487,7 @@ python launch_camoufox.py --debug --server-port 2048
 *   **核心目标**: 模拟真实用户流量，避免被网站识别为自动化脚本或机器人。
 *   **实现方式**: Camoufox 基于 Firefox，通过修改浏览器底层 C++ 实现来伪装设备指纹（如屏幕、操作系统、WebGL、字体等），而不是通过容易被检测到的 JavaScript 注入。
 *   **Playwright 兼容**: Camoufox 提供了与 Playwright 兼容的接口。
-*   **Python 接口**: Camoufox 提供了 Python 包，可以通过 `camoufox.server.launch_server()` (如 `launch_camoufox.py` 中所用) 启动其服务，并通过 WebSocket 连接进行控制。
+*   **Python 接口**: Camoufox 提供了 Python 包，可以通过 `camoufox.server.launch_server()` (如 `launch_camoufox.py` 中所用，通过其 `--internal-launch` 模式间接调用) 启动其服务，并通过 WebSocket 连接进行控制。
 
 使用 Camoufox 的主要目的是提高与 AI Studio 网页交互时的隐蔽性，减少被检测或限制的可能性。但请注意，没有任何反指纹技术是绝对完美的。
 
@@ -509,56 +501,71 @@ python launch_camoufox.py --debug --server-port 2048
 
 ## 控制日志输出 (Python 版本)
 
-可以通过多种方式控制日志的详细程度：
+可以通过多种方式控制日志的详细程度和行为：
 
-1.  **`server.py` 的命令行参数**:
-    *   在通过 `launch_camoufox.py` 启动 `server.py` 时（无论是直接运行还是通过 `start.py`），`server.py` 会接收一个 `--disable-print-redirect` 参数。
-    *   `start.py` **不会** 传递此参数，因此默认情况下 `server.py` 的 `print` 输出会被重定向到日志文件和 WebSocket。
-    *   如果直接运行 `launch_camoufox.py`，可以考虑是否需要在其启动 `server.py` 的命令中加入此参数（目前未加）。
-    *   如果直接运行 `python server.py` (不推荐)，可以使用 `--disable-print-redirect` 来阻止 `print` 被重定向。
+1.  **`launch_camoufox.py` 的日志**:
+    *   此脚本负责启动和协调，其日志记录在 `logs/launch_app.log`。
+    *   它的日志级别在脚本内部通过 `setup_launcher_logging(log_level=logging.INFO)` 设置，通常为 `INFO`。
+    *   它也会捕获并记录其内部启动的 Camoufox 进程（`--internal-launch` 模式）的 `stdout` 和 `stderr`。
 
-2.  **环境变量 (影响 `server.py`)**:
-    在启动 `launch_camoufox.py` 或 `start.py` **之前** 设置环境变量：
+2.  **`server.py` (FastAPI 应用) 的日志**:
+    *   `server.py` 拥有自己独立的日志系统，记录在 `logs/app.log`。
+    *   其行为主要通过**环境变量**控制，这些环境变量由 `launch_camoufox.py` 在启动 `server.py` 之前设置：
+        *   **`SERVER_LOG_LEVEL`**: 控制 `server.py` 的主日志记录器 (`AIStudioProxyServer`) 的级别。默认为 `INFO`。可以设置为 `DEBUG`, `WARNING`, `ERROR` 等。
+            *   例如，在运行 `start.py` 或 `launch_camoufox.py` **之前** 设置:
+                ```bash
+                # Linux/macOS
+                export SERVER_LOG_LEVEL=DEBUG
+                python start.py # 或 python launch_camoufox.py ...
+
+                # Windows (cmd)
+                set SERVER_LOG_LEVEL=DEBUG
+                python start.py
+
+                # Windows (PowerShell)
+                $env:SERVER_LOG_LEVEL="DEBUG"
+                python start.py
+                ```
+        *   **`SERVER_REDIRECT_PRINT`**: 控制 `server.py` 内部的 `print()` 和 `input()` 行为。
+            *   如果设置为 `'true'` (默认，当通过 `start.py` 启动，或 `launch_camoufox.py` 以无头模式启动时)，`print()` 输出会被重定向到 `server.py` 的日志系统（文件、WebSocket 和控制台），`input()` 调用可能会出问题或无响应（因此只在无头模式推荐）。
+            *   如果设置为 `'false'` (当 `launch_camoufox.py` 以调试模式启动时)，`print()` 会输出到 `launch_camoufox.py` 所在的原始终端，`input()` 也会在该终端等待用户输入。
+        *   **`DEBUG_LOGS_ENABLED`**: (布尔值，`true` 或 `false`) 控制 `server.py` 内部一些非常详细的、用于特定功能调试的日志点是否激活。即使 `SERVER_LOG_LEVEL` 不是 `DEBUG`，这些日志点如果被激活且其消息级别达到 `SERVER_LOG_LEVEL`，也会输出。默认为 `false`。
+        *   **`TRACE_LOGS_ENABLED`**: (布尔值，`true` 或 `false`) 类似 `DEBUG_LOGS_ENABLED`，用于更深层次的跟踪日志。默认为 `false`。
+
+3.  **环境变量 (`DEBUG_LOGS_ENABLED`, `TRACE_LOGS_ENABLED`) (影响 `server.py` 内部细节日志)**:
+    这些环境变量控制 `server.py` 内部某些特定代码块是否输出更详细的调试信息，独立于 `SERVER_LOG_LEVEL`。
     ```bash
     # Linux/macOS
-    export DEBUG_LOGS_ENABLED=true    # 启用详细调试日志
-    export TRACE_LOGS_ENABLED=true    # 启用更详细的跟踪日志 (目前可能未广泛使用)
-    export LOG_INTERVAL=50            # 流式日志按次数输出的间隔 (默认 20)
-    export LOG_TIME_INTERVAL=5.0      # 流式日志按时间输出的间隔 (默认 3.0)
+    export DEBUG_LOGS_ENABLED=true
+    # export TRACE_LOGS_ENABLED=true # 通常不需要，除非深度调试
     python start.py # 或者 python launch_camoufox.py ...
 
     # Windows (cmd)
     set DEBUG_LOGS_ENABLED=true
-    set TRACE_LOGS_ENABLED=true
-    set LOG_INTERVAL=50
-    set LOG_TIME_INTERVAL=5.0
     python start.py
 
     # Windows (PowerShell)
     $env:DEBUG_LOGS_ENABLED="true"
-    $env:TRACE_LOGS_ENABLED="true"
-    $env:LOG_INTERVAL="50"
-    $env:LOG_TIME_INTERVAL="5.0"
     python start.py
     ```
-    `server.py` 启动时会读取这些环境变量来控制内部某些操作的日志输出频率。
 
-3.  **日志文件**:
+4.  **日志文件**:
     *   `logs/app.log`: FastAPI 服务器 (`server.py`) 的详细日志。
     *   `logs/launch_app.log`: 启动器 (`launch_camoufox.py`) 的日志。
-    *   文件日志通常包含比终端或 Web UI 更详细的信息（例如 DEBUG 级别的日志）。
+    *   文件日志通常包含比终端或 Web UI 更详细的信息。
 
-4.  **Web UI 日志**:
-    *   Web UI 右侧边栏实时显示来自 `server.py` 的 `INFO` 及以上级别的日志。
+5.  **Web UI 日志**:
+    *   Web UI 右侧边栏实时显示来自 `server.py` 的 `INFO` 及以上级别的日志（通过 WebSocket）。
 
-通过组合使用这些方法，可以根据需要调整日志的详细程度和输出位置。对于日常运行，默认的日志级别通常足够；在排查问题时，可以查看日志文件或启用环境变量获取更详细的信息。
+通过组合使用这些方法，可以根据需要调整日志的详细程度和输出位置。对于日常运行，默认的日志级别通常足够；在排查问题时，可以查看日志文件或按需设置环境变量获取更详细的信息。
 
 ## 未来计划 / Roadmap
 
 以下是一些计划中的改进方向：
 
 *   **Docker支持**: 提供官方的 `Dockerfile` 以及 Docker Compose 配置，简化容器化部署流程。
-*   **参数自动化**: 研究通过 Playwright 自动化操作 AI Studio 页面的参数设置区域的可行性。
+*   **云服务器部署指南**: 提供更详细的在主流云平台（如 AWS, GCP, Azure）上部署和管理服务的指南。
+*   **参数自动化 (探索性)**: 研究通过 Playwright 自动化操作 AI Studio 页面的参数设置区域的可行性。
 *   **认证更新流程优化**: 探索更便捷的认证文件更新机制，减少手动操作。
 *   **MCP兼容性支持**: 增加健壮性提高对MCP的兼容性。
 
