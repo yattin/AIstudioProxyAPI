@@ -330,7 +330,7 @@ def setup_server_logging(log_level_name: str = "INFO", redirect_print_str: str =
     logging.getLogger("playwright").setLevel(logging.WARNING) # Playwright 日志也非常多
 
     # 通过配置好的 logger 记录初始化完成信息
-    logger.info("=" * 30 + " AIStudioProxyServer 日志系统已在 lifespan 中初始化 " + "=" * 30)
+    logger.info("=" * 5 + " AIStudioProxyServer 日志系统已在 lifespan 中初始化 " + "=" * 5)
     logger.info(f"日志级别设置为: {logging.getLevelName(log_level)}")
     logger.info(f"日志文件路径: {APP_LOG_FILE_PATH}")
     logger.info(f"控制台日志处理器已添加。") # 新增提示
@@ -1074,31 +1074,6 @@ async def lifespan(app_param: FastAPI): # app_param 未使用
              logger.info(f"   启动请求处理 Worker...")
              worker_task = asyncio.create_task(queue_worker())
              logger.info(f"   ✅ 请求处理 Worker 已启动。")
-             
-             # 新增: 尝试从页面读取初始模型设置
-             if is_page_ready and is_browser_connected:
-                 try:
-                     logger.info("   尝试读取 AI Studio 初始模型设置...")
-                     initial_model_preference = await page_instance.evaluate('''() => {
-                         const prefs = localStorage.getItem('aiStudioUserPreference');
-                         if (prefs) {
-                             const prefObj = JSON.parse(prefs);
-                             return prefObj.promptModel || null;
-                         }
-                         return null;
-                     }''')
-                     
-                     if initial_model_preference and isinstance(initial_model_preference, str):
-                         # 从 "models/gemini-1.5-pro" 提取 "gemini-1.5-pro"
-                         model_parts = initial_model_preference.split('/')
-                         extracted_model = model_parts[-1] if len(model_parts) > 1 else initial_model_preference
-                         global current_ai_studio_model_id
-                         current_ai_studio_model_id = extracted_model
-                         logger.info(f"   ✅ 检测到初始模型: {current_ai_studio_model_id}")
-                     else:
-                         logger.info("   ⚠️ 未能从 localStorage 读取初始模型信息")
-                 except Exception as model_read_err:
-                     logger.error(f"   ❌ 读取初始模型设置时出错: {model_read_err}", exc_info=True)
         elif launch_mode == "direct_debug_no_browser":
             logger.warning("浏览器和页面未就绪 (direct_debug_no_browser 模式)，请求处理 Worker 未启动。API 可能功能受限。")
         else:
@@ -1201,9 +1176,16 @@ async def get_api_info(request: Request):
     scheme = request.headers.get('x-forwarded-proto', 'http')
     base_url = f"{scheme}://{host}"
     api_base = f"{base_url}/v1"
+
+    # 使用全局 current_ai_studio_model_id (如果有效) 作为模型名称，否则回退到 MODEL_NAME
+    effective_model_name = current_ai_studio_model_id if current_ai_studio_model_id else MODEL_NAME
+    
     return JSONResponse(content={
-        "model_name": MODEL_NAME, "api_base_url": api_base, "server_base_url": base_url,
-        "api_key_required": False, "message": "API Key is not required."
+        "model_name": effective_model_name, # 使用获取到的或默认的模型名称
+        "api_base_url": api_base,
+        "server_base_url": base_url,
+        "api_key_required": False,
+        "message": "API Key is not required."
     })
 
 @app.get("/health")
