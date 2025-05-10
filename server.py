@@ -546,7 +546,10 @@ async def _initialize_page_logic(browser: AsyncBrowser):
     if launch_mode == 'headless':
         auth_filename = os.environ.get('ACTIVE_AUTH_JSON_PATH')
         if auth_filename: # 确保 auth_filename 不是 None 或空字符串
-            constructed_path = os.path.join(ACTIVE_AUTH_DIR, auth_filename)
+            # 假设 ACTIVE_AUTH_JSON_PATH 已经是完整路径或相对于 server.py 的路径
+            # 如果它是相对于 auth_profiles/active 的文件名，则需要调整
+            # 从 launch_camoufox.py 的修改来看，它传递的是完整路径
+            constructed_path = auth_filename 
             if os.path.exists(constructed_path):
                 storage_state_path_to_use = constructed_path
                 logger.info(f"   无头模式将使用的认证文件: {constructed_path}")
@@ -554,51 +557,23 @@ async def _initialize_page_logic(browser: AsyncBrowser):
                 logger.error(f"无头模式认证文件无效或不存在: '{constructed_path}'")
                 raise RuntimeError(f"无头模式认证文件无效: '{constructed_path}'")
         else:
-            logger.error("无头模式需要 ACTIVE_AUTH_JSON_PATH 环境变量，但未设置。")
-            raise RuntimeError("无头模式需要设置 ACTIVE_AUTH_JSON_PATH 环境变量。")
+            logger.error("无头模式需要 ACTIVE_AUTH_JSON_PATH 环境变量，但未设置或为空。")
+            # 如果 launch_camoufox.py 确保总会设置（即使是空），那这个错误可能不会触发
+            # 但以防万一，保留检查
+            raise RuntimeError("无头模式需要 ACTIVE_AUTH_JSON_PATH。")
     elif launch_mode == 'debug':
-        logger.info(f"   调试模式: 检查可用的认证文件...")
-        available_profiles = []
-        for profile_dir_path in [ACTIVE_AUTH_DIR, SAVED_AUTH_DIR]: # 使用更明确的变量名
-            if os.path.exists(profile_dir_path):
-                try:
-                    for filename in os.listdir(profile_dir_path):
-                        if filename.lower().endswith(".json"): # 不区分大小写
-                            full_path = os.path.join(profile_dir_path, filename)
-                            relative_dir_name = os.path.basename(profile_dir_path)
-                            available_profiles.append({"name": f"{relative_dir_name}/{filename}", "path": full_path})
-                except OSError as e:
-                    logger.warning(f"   ⚠️ 警告: 无法读取目录 '{profile_dir_path}': {e}")
+        logger.info(f"   调试模式: 尝试从环境变量 ACTIVE_AUTH_JSON_PATH 加载认证文件...")
+        auth_filepath_from_env = os.environ.get('ACTIVE_AUTH_JSON_PATH')
+        if auth_filepath_from_env and os.path.exists(auth_filepath_from_env):
+            storage_state_path_to_use = auth_filepath_from_env
+            logger.info(f"   调试模式将使用的认证文件 (来自环境变量): {storage_state_path_to_use}")
+            # 用户交互已在 launch_camoufox.py 中完成，这里不再需要 input
+        elif auth_filepath_from_env: # 环境变量设置了，但文件不存在
+            logger.warning(f"   调试模式下环境变量 ACTIVE_AUTH_JSON_PATH 指向的文件不存在: '{auth_filepath_from_env}'。不加载认证文件。")
+        else: # 环境变量未设置或为空，意味着用户在启动器中选择不加载
+            logger.info("   调试模式下未通过环境变量提供认证文件。将使用浏览器当前状态。")
+            # 此处 storage_state_path_to_use 将保持为 None
 
-        if available_profiles:
-            # 这里的 print 会根据 SERVER_REDIRECT_PRINT 决定去向
-            print('-'*60 + "\n   找到以下可用的认证文件:", flush=True)
-            for i, profile in enumerate(available_profiles):
-                print(f"     {i+1}: {profile['name']}", flush=True)
-            print("     N: 不加载任何文件 (使用浏览器当前状态)\n" + '-'*60, flush=True)
-
-            print(USER_INPUT_START_MARKER_SERVER, flush=True) # 标记开始
-            choice_prompt = "   请选择要加载的认证文件编号 (输入 N 或直接回车则不加载): "
-            # input() 的提示会直接显示在 launch_camoufox.py 的控制台
-            choice = await loop.run_in_executor(None, input, choice_prompt)
-            print(USER_INPUT_END_MARKER_SERVER, flush=True)   # 标记结束
-
-            if choice.strip().lower() not in ['n', '']:
-                try:
-                    choice_index = int(choice.strip()) - 1
-                    if 0 <= choice_index < len(available_profiles):
-                        selected_profile = available_profiles[choice_index]
-                        storage_state_path_to_use = selected_profile["path"]
-                        print(f"   已选择加载: {selected_profile['name']}", flush=True)
-                    else:
-                        print("   无效的选择编号。将不加载认证文件。", flush=True)
-                except ValueError:
-                    print("   无效的输入。将不加载认证文件。", flush=True)
-            else:
-                print("   好的，不加载认证文件。", flush=True)
-            print('-'*60, flush=True)
-        else:
-            print("   未找到认证文件。将使用浏览器当前状态。", flush=True)
     elif launch_mode == "direct_debug_no_browser":
         logger.info("   direct_debug_no_browser 模式：不加载 storage_state，不进行浏览器操作。")
     else: # 未知模式
@@ -686,10 +661,14 @@ async def _initialize_page_logic(browser: AsyncBrowser):
                 raise RuntimeError("无头模式认证失败，需要更新认证文件。")
             else: # 调试模式，提示用户手动登录
                 print(f"\n{'='*20} 需要操作 {'='*20}", flush=True)
-                print(USER_INPUT_START_MARKER_SERVER, flush=True)
-                login_prompt = "   请在浏览器窗口中完成 Google 登录，然后在此处按 Enter 键继续..."
+                # USER_INPUT_START_MARKER_SERVER 相关的 input 已移至 launch_camoufox.py
+                # print(USER_INPUT_START_MARKER_SERVER, flush=True) 
+                login_prompt = "   检测到可能需要登录。如果浏览器显示登录页面，请在浏览器窗口中完成 Google 登录，然后在此处按 Enter 键继续..."
+                # 这里的 input 仍然是必要的，用于等待用户在浏览器中操作
+                # 但它不再是选择认证文件，而是确认登录操作
+                print(USER_INPUT_START_MARKER_SERVER, flush=True) # 保留此标记以兼容可能的外部解析器
                 await loop.run_in_executor(None, input, login_prompt)
-                print(USER_INPUT_END_MARKER_SERVER, flush=True)
+                print(USER_INPUT_END_MARKER_SERVER, flush=True) # 保留此标记
                 logger.info("   用户已操作，正在检查登录状态...")
                 try:
                     # 等待 URL 变为 AI Studio 的 URL，超时时间设为3分钟
@@ -710,7 +689,8 @@ async def _initialize_page_logic(browser: AsyncBrowser):
                         logger.info("   自动保存认证模式已启用，将自动保存认证状态...")
                         should_save_auth_choice = 'y'
                     else:
-                        print(USER_INPUT_START_MARKER_SERVER, flush=True)
+                        # print(USER_INPUT_START_MARKER_SERVER, flush=True) # 标记相关的 input 也移除了
+                        print(USER_INPUT_START_MARKER_SERVER, flush=True) # 保留此标记
                         try:
                             auth_save_input_future = loop.run_in_executor(None, input, save_auth_prompt)
                             should_save_auth_choice = await asyncio.wait_for(auth_save_input_future, timeout=AUTH_SAVE_TIMEOUT)
@@ -718,13 +698,15 @@ async def _initialize_page_logic(browser: AsyncBrowser):
                             print(f"   输入等待超时({AUTH_SAVE_TIMEOUT}秒)。默认不保存认证状态。", flush=True)
                             should_save_auth_choice = 'n' # 或 ''，下面会处理
                         finally: # 确保结束标记被打印
-                            print(USER_INPUT_END_MARKER_SERVER, flush=True)
+                            # print(USER_INPUT_END_MARKER_SERVER, flush=True)
+                            print(USER_INPUT_END_MARKER_SERVER, flush=True) # 保留此标记
                     
                     if should_save_auth_choice.strip().lower() == 'y':
                         os.makedirs(SAVED_AUTH_DIR, exist_ok=True) # 确保保存目录存在
                         default_auth_filename = f"auth_state_{int(time.time())}.json"
                         
-                        print(USER_INPUT_START_MARKER_SERVER, flush=True)
+                        # print(USER_INPUT_START_MARKER_SERVER, flush=True) # 相关的 input 也移除了
+                        print(USER_INPUT_START_MARKER_SERVER, flush=True) # 保留此标记
                         filename_prompt_str = f"   请输入保存的文件名 (默认为: {default_auth_filename}): "
                         chosen_auth_filename = ''
                         try:
@@ -733,7 +715,8 @@ async def _initialize_page_logic(browser: AsyncBrowser):
                         except asyncio.TimeoutError:
                             print(f"   输入文件名等待超时({AUTH_SAVE_TIMEOUT}秒)。将使用默认文件名: {default_auth_filename}", flush=True)
                         finally:
-                            print(USER_INPUT_END_MARKER_SERVER, flush=True)
+                            # print(USER_INPUT_END_MARKER_SERVER, flush=True)
+                            print(USER_INPUT_END_MARKER_SERVER, flush=True) # 保留此标记
 
                         final_auth_filename = chosen_auth_filename.strip() or default_auth_filename
                         if not final_auth_filename.endswith(".json"):

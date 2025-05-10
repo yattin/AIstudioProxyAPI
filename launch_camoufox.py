@@ -498,7 +498,56 @@ if __name__ == "__main__":
 
     if final_launch_mode == 'debug':
         logger.info("--- 步骤 3: 内部启动 Camoufox (调试模式)... ---")
+        # 新增: 调试模式下的认证文件选择逻辑
+        logger.info(f"  调试模式: 检查可用的认证文件...")
+        available_profiles = []
+        for profile_dir_path_str, dir_label in [(ACTIVE_AUTH_DIR, "active"), (SAVED_AUTH_DIR, "saved")]:
+            profile_dir_path = os.path.join(os.path.dirname(__file__), profile_dir_path_str) # 确保是绝对或相对工作区的正确路径
+            if os.path.exists(profile_dir_path):
+                try:
+                    for filename in os.listdir(profile_dir_path):
+                        if filename.lower().endswith(".json"):
+                            full_path = os.path.join(profile_dir_path, filename)
+                            # 使用 dir_label 来区分来源，例如 "active/auth.json" 或 "saved/auth.json"
+                            available_profiles.append({"name": f"{dir_label}/{filename}", "path": full_path})
+                except OSError as e:
+                    logger.warning(f"   ⚠️ 警告: 无法读取目录 '{profile_dir_path}': {e}")
+
+        if available_profiles:
+            print('-'*60 + "\n   找到以下可用的认证文件:", flush=True)
+            for i, profile in enumerate(available_profiles):
+                print(f"     {i+1}: {profile['name']}", flush=True)
+            print("     N: 不加载任何文件 (使用浏览器当前状态)\n" + '-'*60, flush=True)
+
+            choice_prompt = "   请选择要加载的认证文件编号 (输入 N 或直接回车则不加载): "
+            choice = input_with_timeout(choice_prompt, 30) # 使用已有的带超时输入函数
+
+            if choice.strip().lower() not in ['n', '']:
+                try:
+                    choice_index = int(choice.strip()) - 1
+                    if 0 <= choice_index < len(available_profiles):
+                        selected_profile = available_profiles[choice_index]
+                        auth_file_for_server_lifespan = selected_profile["path"] # 存储选择的文件
+                        logger.info(f"   已选择加载认证文件: {selected_profile['name']}")
+                        print(f"   已选择加载: {selected_profile['name']}", flush=True)
+                    else:
+                        logger.info("   无效的选择编号。将不加载认证文件。")
+                        print("   无效的选择编号。将不加载认证文件。", flush=True)
+                except ValueError:
+                    logger.info("   无效的输入。将不加载认证文件。")
+                    print("   无效的输入。将不加载认证文件。", flush=True)
+            else:
+                logger.info("   好的，不加载认证文件。")
+                print("   好的，不加载认证文件。", flush=True)
+            print('-'*60, flush=True)
+        else:
+            logger.info("   未找到认证文件。将使用浏览器当前状态。")
+            print("   未找到认证文件。将使用浏览器当前状态。", flush=True)
+        # 结束: 调试模式下的认证文件选择逻辑
+
         camoufox_internal_full_cmd = camoufox_internal_base_cmd + ['--internal-debug']
+        if auth_file_for_server_lifespan: # 如果在调试模式下选择了文件
+            camoufox_internal_full_cmd.extend(['--internal-auth-file', auth_file_for_server_lifespan])
         if sys.platform != "win32":
             camoufox_popen_kwargs['start_new_session'] = True
     elif final_launch_mode == 'headless':
@@ -581,6 +630,8 @@ if __name__ == "__main__":
             os.environ['CAMOUFOX_WS_ENDPOINT'] = captured_ws_endpoint
             os.environ['LAUNCH_MODE'] = final_launch_mode
             if final_launch_mode == 'headless' and auth_file_for_server_lifespan:
+                os.environ['ACTIVE_AUTH_JSON_PATH'] = auth_file_for_server_lifespan
+            elif final_launch_mode == 'debug' and auth_file_for_server_lifespan: # 新增：调试模式也设置环境变量
                 os.environ['ACTIVE_AUTH_JSON_PATH'] = auth_file_for_server_lifespan
             
             # 控制 server.py 内部的日志和 print 重定向
