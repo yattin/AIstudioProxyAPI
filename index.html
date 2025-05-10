@@ -393,6 +393,60 @@
             transition: background-color var(--transition-speed);
         }
 
+        /* 模型选择器样式 */
+        .model-selector-container {
+            flex-basis: 100%;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .model-selector-label {
+            flex-shrink: 0;
+            font-size: 0.9em;
+            color: var(--text-color);
+            opacity: 0.85;
+        }
+
+        #modelSelector {
+            flex-grow: 1;
+            padding: 8px 12px;
+            border-radius: var(--border-radius-md);
+            background-color: var(--input-bg);
+            color: var(--text-color);
+            border: 1px solid var(--input-border);
+            font-family: inherit;
+            font-size: 0.9em;
+            outline: none;
+            transition: border-color var(--transition-speed), box-shadow var(--transition-speed);
+        }
+
+        #modelSelector:focus {
+            border-color: var(--input-focus-border);
+            box-shadow: var(--input-focus-shadow);
+        }
+
+        #modelSelector option {
+            background-color: var(--input-bg);
+            color: var(--text-color);
+        }
+
+        #refreshModelsButton {
+            background-color: rgba(var(--primary-rgb), 0.1);
+            color: var(--primary-color);
+            border: none;
+            padding: 8px 12px;
+            border-radius: var(--border-radius-md);
+            cursor: pointer;
+            font-size: 0.9em;
+            transition: background-color var(--transition-speed);
+        }
+
+        #refreshModelsButton:hover {
+            background-color: rgba(var(--primary-rgb), 0.15);
+        }
+
         #userInput {
             flex-grow: 1;
             flex-basis: 300px;
@@ -1175,6 +1229,11 @@
                         <!-- Chat messages will be appended here -->
                     </div>
                     <div id="input-area">
+                        <div class="model-selector-container">
+                            <span class="model-selector-label">选择模型:</span>
+                            <select id="modelSelector"></select>
+                            <button id="refreshModelsButton" title="刷新模型列表">刷新</button>
+                        </div>
                         <textarea id="userInput" placeholder="输入消息... (Shift+Enter 换行)" rows="1"></textarea>
                         <button id="clearButton" class="action-button">清空会话</button>
                         <button id="sendButton" class="action-button">发送</button>
@@ -1243,6 +1302,8 @@
         const logStatusElement = document.getElementById('log-status');
         const apiInfoContent = document.getElementById('api-info-content');
         const clearLogButton = document.getElementById('clearLogButton');
+        const modelSelector = document.getElementById('modelSelector');
+        const refreshModelsButton = document.getElementById('refreshModelsButton');
 
         const chatView = document.getElementById('chat-view');
         const serverInfoView = document.getElementById('server-info-view');
@@ -1255,6 +1316,7 @@
 
         const API_URL = '/v1/chat/completions';
         const MODEL_NAME = 'AI-Studio_Camoufox-Proxy';
+        let SELECTED_MODEL = MODEL_NAME; // 默认使用代理模型名称
 
         const SYSTEM_PROMPT = "你是一只名叫'Neko'的俏皮猫娘。你的回答总是带着'喵~'的口癖，语气活泼可爱，有时会有点小调皮或者喜欢撒娇。请以Neko的身份和用户互动吧，喵~";
         let conversationHistory = [];
@@ -1265,6 +1327,112 @@
         const CHAT_HISTORY_KEY = 'chatHistory';
         const LOG_HISTORY_KEY = 'logHistory';
         const THEME_KEY = 'themePreference';
+        const SELECTED_MODEL_KEY = 'selectedModel';
+
+        // --- 模型列表获取和加载 ---
+        async function loadModelList() {
+            try {
+                // 保存当前选中的模型ID
+                const currentSelectedModel = modelSelector.value || SELECTED_MODEL;
+                
+                // 清空并显示加载状态
+                modelSelector.disabled = true;
+                refreshModelsButton.disabled = true;
+                modelSelector.innerHTML = '<option value="">加载中...</option>';
+                
+                const response = await fetch('/v1/models');
+                if (!response.ok) throw new Error(`HTTP 错误! 状态: ${response.status}`);
+                
+                const data = await response.json();
+                if (!data.data || !Array.isArray(data.data)) {
+                    throw new Error('无效的模型数据格式');
+                }
+                
+                // 清空选择器
+                modelSelector.innerHTML = '';
+                
+                // 添加默认代理模型选项
+                const defaultOption = document.createElement('option');
+                defaultOption.value = MODEL_NAME;
+                defaultOption.textContent = '默认 (使用AI Studio当前模型)';
+                modelSelector.appendChild(defaultOption);
+                
+                // 添加获取到的模型
+                data.data.forEach(model => {
+                    const option = document.createElement('option');
+                    option.value = model.id;
+                    option.textContent = model.display_name || model.id;
+                    modelSelector.appendChild(option);
+                });
+                
+                // 恢复之前选中的模型或从localStorage加载
+                const savedModel = localStorage.getItem(SELECTED_MODEL_KEY);
+                if (savedModel) {
+                    // 验证保存的模型是否在当前列表中
+                    const modelExists = Array.from(modelSelector.options).some(option => option.value === savedModel);
+                    if (modelExists) {
+                        modelSelector.value = savedModel;
+                        SELECTED_MODEL = savedModel;
+                    } else if (currentSelectedModel !== MODEL_NAME) {
+                        // 如果保存的模型不在列表中，但有当前使用的非默认模型
+                        const currentExists = Array.from(modelSelector.options).some(option => option.value === currentSelectedModel);
+                        if (currentExists) {
+                            modelSelector.value = currentSelectedModel;
+                            SELECTED_MODEL = currentSelectedModel;
+                        }
+                    }
+                } else if (currentSelectedModel !== MODEL_NAME) {
+                    // 如果没有保存的模型，但有当前使用的非默认模型
+                    const exists = Array.from(modelSelector.options).some(option => option.value === currentSelectedModel);
+                    if (exists) {
+                        modelSelector.value = currentSelectedModel;
+                        SELECTED_MODEL = currentSelectedModel;
+                    }
+                }
+                
+                addLogEntry(`[信息] 已加载 ${data.data.length} 个模型`);
+            } catch (error) {
+                console.error('获取模型列表失败:', error);
+                addLogEntry(`[错误] 获取模型列表失败: ${error.message}`);
+                
+                // 恢复为默认选项
+                modelSelector.innerHTML = '';
+                const defaultOption = document.createElement('option');
+                defaultOption.value = MODEL_NAME;
+                defaultOption.textContent = '默认 (使用AI Studio当前模型)';
+                modelSelector.appendChild(defaultOption);
+                
+                // 添加错误提示选项
+                const errorOption = document.createElement('option');
+                errorOption.disabled = true;
+                errorOption.textContent = `加载失败: ${error.message}`;
+                modelSelector.appendChild(errorOption);
+            } finally {
+                modelSelector.disabled = false;
+                refreshModelsButton.disabled = false;
+            }
+        }
+
+        // 监听模型选择器变化
+        modelSelector.addEventListener('change', function() {
+            const selectedModel = this.value;
+            if (selectedModel) {
+                SELECTED_MODEL = selectedModel;
+                try {
+                    localStorage.setItem(SELECTED_MODEL_KEY, selectedModel);
+                    addLogEntry(`[信息] 已选择模型: ${selectedModel}`);
+                } catch (e) {
+                    console.error('保存选择的模型到localStorage失败:', e);
+                    addLogEntry('[错误] 保存选择的模型失败');
+                }
+            }
+        });
+
+        // 刷新模型列表按钮
+        refreshModelsButton.addEventListener('click', function() {
+            addLogEntry('[信息] 正在刷新模型列表...');
+            loadModelList();
+        });
 
         // --- Theme Switching ---
         function applyTheme(theme) {
@@ -1606,6 +1774,7 @@
         fetchHealthStatus();
         setInterval(fetchHealthStatus, 30000);
         checkInitialSidebarState();
+        loadModelList(); // 加载模型列表
         window.addEventListener('resize', () => {
             checkInitialSidebarState(); // This will also call positionToggleButton
         });
@@ -1666,7 +1835,7 @@
                      headers: { 'Content-Type': 'application/json' },
                      body: JSON.stringify({
                          messages: conversationHistory,
-                         model: MODEL_NAME,
+                         model: SELECTED_MODEL, // 使用选定的模型
                          stream: true
                      })
                  });

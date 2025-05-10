@@ -2,7 +2,7 @@ import asyncio
 import random
 import time
 import json
-from typing import List, Optional, Dict, Any, Union, AsyncGenerator, Tuple, Callable
+from typing import List, Optional, Dict, Any, Union, AsyncGenerator, Tuple, Callable, Set
 import os
 import traceback
 from contextlib import asynccontextmanager
@@ -108,6 +108,14 @@ is_initializing = False # 这个状态由 lifespan 控制
 global_model_list_raw_json: Optional[List[Any]] = None
 parsed_model_list: List[Dict[str, Any]] = [] # 存储解析后的模型列表 [{id: "model_id", ...}, ...]
 model_list_fetch_event = asyncio.Event() # 用于指示模型列表是否已获取
+
+# 新增: 模型切换相关的全局变量
+current_ai_studio_model_id: Optional[str] = None  # 当前在AI Studio页面上设置的模型ID (可以是名称或ID)
+model_switching_lock: Lock = Lock()  # 模型切换操作的锁
+
+# 新增: 模型排除列表
+excluded_model_ids: Set[str] = set()
+EXCLUDED_MODELS_FILENAME = "excluded_models.txt" # 排除列表文件名
 
 request_queue: Queue = Queue()
 processing_lock: Lock = Lock()
@@ -965,7 +973,7 @@ async def signal_camoufox_shutdown():
 async def lifespan(app_param: FastAPI): # app_param 未使用
     global playwright_manager, browser_instance, page_instance, worker_task
     global is_playwright_ready, is_browser_connected, is_page_ready, is_initializing
-    global logger, log_ws_manager, model_list_fetch_event
+    global logger, log_ws_manager, model_list_fetch_event, current_ai_studio_model_id, excluded_model_ids
 
     true_original_stdout, true_original_stderr = sys.stdout, sys.stderr
     initial_stdout_before_redirect, initial_stderr_before_redirect = sys.stdout, sys.stderr
@@ -989,6 +997,9 @@ async def lifespan(app_param: FastAPI): # app_param 未使用
         logger.info(f"-----------------------")
     else:
         logger.info("--- 未检测到 HTTP_PROXY 或 HTTPS_PROXY 环境变量，不使用代理 (由 server.py 的 lifespan 记录) ---")
+
+    # 新增: 加载模型排除列表
+    load_excluded_models(EXCLUDED_MODELS_FILENAME)
 
     is_initializing = True
     logger.info("\n" + "="*60 + "\n          🚀 AI Studio Proxy Server (FastAPI App Lifespan) 🚀\n" + "="*60)
@@ -1023,10 +1034,10 @@ async def lifespan(app_param: FastAPI): # app_param 未使用
                 if temp_page_instance and temp_is_page_ready:
                     page_instance = temp_page_instance
                     is_page_ready = temp_is_page_ready
-                    # 移除这里的监听器添加，因为 _initialize_page_logic 应该已经处理了
-                    # if page_instance and not page_instance.is_closed():
-                    #     logger.info(f"为页面 {page_instance.url} 添加模型列表响应监听器 (来自 lifespan)。")
-                    #     page_instance.on("response", _handle_model_list_response)
+                    
+                    # 检查并处理初始 localStorage 和模型状态
+                    await _handle_initial_model_state_and_storage(page_instance)
+
                 else: # _initialize_page_logic 失败
                     is_page_ready = False
                     if not model_list_fetch_event.is_set(): model_list_fetch_event.set()
@@ -1063,6 +1074,31 @@ async def lifespan(app_param: FastAPI): # app_param 未使用
              logger.info(f"   启动请求处理 Worker...")
              worker_task = asyncio.create_task(queue_worker())
              logger.info(f"   ✅ 请求处理 Worker 已启动。")
+             
+             # 新增: 尝试从页面读取初始模型设置
+             if is_page_ready and is_browser_connected:
+                 try:
+                     logger.info("   尝试读取 AI Studio 初始模型设置...")
+                     initial_model_preference = await page_instance.evaluate('''() => {
+                         const prefs = localStorage.getItem('aiStudioUserPreference');
+                         if (prefs) {
+                             const prefObj = JSON.parse(prefs);
+                             return prefObj.promptModel || null;
+                         }
+                         return null;
+                     }''')
+                     
+                     if initial_model_preference and isinstance(initial_model_preference, str):
+                         # 从 "models/gemini-1.5-pro" 提取 "gemini-1.5-pro"
+                         model_parts = initial_model_preference.split('/')
+                         extracted_model = model_parts[-1] if len(model_parts) > 1 else initial_model_preference
+                         global current_ai_studio_model_id
+                         current_ai_studio_model_id = extracted_model
+                         logger.info(f"   ✅ 检测到初始模型: {current_ai_studio_model_id}")
+                     else:
+                         logger.info("   ⚠️ 未能从 localStorage 读取初始模型信息")
+                 except Exception as model_read_err:
+                     logger.error(f"   ❌ 读取初始模型设置时出错: {model_read_err}", exc_info=True)
         elif launch_mode == "direct_debug_no_browser":
             logger.warning("浏览器和页面未就绪 (direct_debug_no_browser 模式)，请求处理 Worker 未启动。API 可能功能受限。")
         else:
@@ -1253,8 +1289,10 @@ async def list_models():
 
 
     if parsed_model_list:
-        logger.info(f"返回缓存的 {len(parsed_model_list)} 个模型。")
-        return {"object": "list", "data": parsed_model_list}
+        # 过滤掉排除列表中的模型
+        final_model_list = [m for m in parsed_model_list if m.get("id") not in excluded_model_ids]
+        logger.info(f"返回过滤后的 {len(final_model_list)} 个模型 (原缓存 {len(parsed_model_list)} 个)。排除的有: {excluded_model_ids.intersection(set(m.get('id') for m in parsed_model_list))}")
+        return {"object": "list", "data": final_model_list}
     else:
         logger.warning("模型列表为空或未成功获取。返回默认后备模型。")
         # 返回符合 OpenAI API 风格的列表，即使是后备
@@ -1945,6 +1983,37 @@ async def _process_request_refactored(
     is_streaming = request.stream
     page: Optional[AsyncPage] = page_instance # Use global instance
     completion_event: Optional[Event] = None # For streaming
+    
+    # --- 新增: 模型验证和切换逻辑 ---
+    requested_model = request.model
+    model_id_to_use = None
+    needs_model_switching = False
+    
+    if requested_model and requested_model != MODEL_NAME: # 如果指定了具体模型且不是代理模型名
+        # 从请求模型中提取真正的模型ID (例如从 "gemini-1.5-pro-latest" 提取)
+        requested_model_parts = requested_model.split('/')
+        requested_model_id = requested_model_parts[-1] if len(requested_model_parts) > 1 else requested_model
+        
+        # 强制验证模型
+        logger.info(f"[{req_id}] 请求使用模型: {requested_model_id}")
+        
+        if parsed_model_list: # 如果我们有已知模型列表
+            valid_model_ids = [m.get("id") for m in parsed_model_list]
+            if requested_model_id not in valid_model_ids:
+                logger.error(f"[{req_id}] ❌ 无效的模型ID: {requested_model_id}。可用模型: {valid_model_ids}")
+                raise HTTPException(status_code=400, detail=f"[{req_id}] Invalid model '{requested_model_id}'. Available models: {', '.join(valid_model_ids)}")
+            
+        model_id_to_use = requested_model_id
+        
+        # 检查是否需要切换模型
+        global current_ai_studio_model_id
+        if current_ai_studio_model_id != model_id_to_use:
+            needs_model_switching = True
+            logger.info(f"[{req_id}] 需要切换模型: 当前={current_ai_studio_model_id} -> 目标={model_id_to_use}")
+        else:
+            logger.info(f"[{req_id}] 请求模型与当前模型相同 ({model_id_to_use})，无需切换")
+    else:
+        logger.info(f"[{req_id}] 未指定具体模型或使用代理模型名称，将使用当前模型: {current_ai_studio_model_id or '未知'}")
 
     # --- Setup Disconnect Handling --- (Same as before)
     client_disconnected_event = Event()
@@ -1990,6 +2059,52 @@ async def _process_request_refactored(
         if not page or page.is_closed() or not is_page_ready:
             raise HTTPException(status_code=503, detail=f"[{req_id}] AI Studio 页面丢失或未就绪。", headers={"Retry-After": "30"})
         check_client_disconnected("Initial Page Check: ")
+        
+        # --- 新增: 执行模型切换 ---
+        if needs_model_switching and model_id_to_use:
+            async with model_switching_lock:  # 使用锁确保一次只有一个请求在切换模型
+                model_before_switch_attempt = current_ai_studio_model_id # 用于日志和回退
+                # 再次检查当前模型，因为在获取锁的过程中可能已经被其他请求更新
+                if current_ai_studio_model_id != model_id_to_use:
+                    logger.info(f"[{req_id}] 获取锁后准备切换: 当前内存中模型={current_ai_studio_model_id}, 目标={model_id_to_use}")
+                    
+                    switch_success = await switch_ai_studio_model(page, model_id_to_use, req_id)
+                    
+                    if switch_success:
+                        current_ai_studio_model_id = model_id_to_use # 更新全局为目标模型 ID
+                        logger.info(f"[{req_id}] ✅ 模型切换成功。全局模型状态已更新为: {current_ai_studio_model_id}")
+                    else:
+                        logger.warning(f"[{req_id}] ❌ 模型切换至 {model_id_to_use} 失败 (AI Studio 未接受或覆盖了更改)。")
+                        
+                        # 确定切换失败后 localStorage 中的实际模型
+                        active_model_id_after_fail = model_before_switch_attempt # 默认回退到尝试切换前的模型
+                        try:
+                            final_prefs_str_after_fail = await page.evaluate("() => localStorage.getItem('aiStudioUserPreference')")
+                            if final_prefs_str_after_fail:
+                                final_prefs_obj_after_fail = json.loads(final_prefs_str_after_fail)
+                                model_path_in_final_prefs = final_prefs_obj_after_fail.get("promptModel")
+                                if model_path_in_final_prefs and isinstance(model_path_in_final_prefs, str):
+                                    active_model_id_after_fail = model_path_in_final_prefs.split('/')[-1]
+                        except Exception as read_final_prefs_err:
+                            logger.error(f"[{req_id}] 切换失败后读取最终 localStorage 出错: {read_final_prefs_err}")
+                        
+                        current_ai_studio_model_id = active_model_id_after_fail # 更新全局状态为实际生效的模型
+                        logger.info(f"[{req_id}] 全局模型状态在切换失败后设置为 (或保持为): {current_ai_studio_model_id}")
+
+                        # 获取页面实际显示的名称用于错误提示
+                        actual_displayed_model_name = "未知 (无法读取)"
+                        try:
+                            model_wrapper_locator = page.locator('#mat-select-value-0 mat-select-trigger').first
+                            actual_displayed_model_name = await model_wrapper_locator.inner_text(timeout=3000)
+                        except Exception:
+                            pass # 允许读取失败，使用默认值
+                                        
+                        raise HTTPException(
+                            status_code=422, # Unprocessable Entity
+                            detail=f"[{req_id}] AI Studio 未能应用所请求的模型 '{model_id_to_use}' 或该模型不受支持。请选择 AI Studio 网页界面中可用的模型。当前实际生效的模型 ID 为 '{current_ai_studio_model_id}', 页面显示为 '{actual_displayed_model_name}'."
+                        )
+                else:
+                    logger.info(f"[{req_id}] 获取锁后发现模型已是目标模型 {current_ai_studio_model_id}，无需切换")
 
         # --- 1. Validation & Prompt Prep --- (Use logger for validation message)
         try: validate_chat_request(request.messages, req_id)
@@ -2500,3 +2615,313 @@ if __name__ == "__main__":
     print("  2. 然后可以尝试: python -m uvicorn server:app --host 0.0.0.0 --port <端口号>", file=sys.stderr)
     print("     例如: LAUNCH_MODE=direct_debug_no_browser SERVER_REDIRECT_PRINT=false python -m uvicorn server:app --port 8000", file=sys.stderr)
     sys.exit(1)
+
+# --- 添加模型切换的辅助函数 ---
+async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) -> bool:
+    """
+    在AI Studio页面上切换模型。
+    
+    Args:
+        page: Playwright页面对象
+        model_id: 目标模型ID (例如 "gemini-1.5-pro")
+        req_id: 请求ID，用于日志记录
+        
+    Returns:
+        bool: 切换是否成功
+    """
+    logger.info(f"[{req_id}] 开始切换模型到: {model_id}")
+    
+    original_prefs_str: Optional[str] = None
+    original_prompt_model: Optional[str] = None
+    # 定义固定的新聊天 URL
+    new_chat_url = f"https://{AI_STUDIO_URL_PATTERN}prompts/new_chat"
+
+    try:
+        # 1. 读取并备份当前设置
+        original_prefs_str = await page.evaluate("() => localStorage.getItem('aiStudioUserPreference')")
+        if original_prefs_str:
+            try:
+                original_prefs_obj = json.loads(original_prefs_str)
+                original_prompt_model = original_prefs_obj.get("promptModel")
+                logger.info(f"[{req_id}] 切换前 localStorage.promptModel 为: {original_prompt_model or '未设置'}")
+            except json.JSONDecodeError:
+                logger.warning(f"[{req_id}] 无法解析原始的 aiStudioUserPreference JSON 字符串。")
+                original_prefs_str = None # 视为无效
+
+        current_prefs_for_modification = json.loads(original_prefs_str) if original_prefs_str else {}
+        
+        # 2. 修改模型设置
+        full_model_path = f"models/{model_id}"
+        if current_prefs_for_modification.get("promptModel") == full_model_path:
+            logger.info(f"[{req_id}] 模型已经设置为 {model_id} (localStorage 中已是目标值)，无需切换")
+            # 即使无需切换localStorage，也确保导航到new_chat页面，以统一行为
+            if page.url != new_chat_url:
+                 logger.info(f"[{req_id}] 当前 URL 不是 new_chat ({page.url})，导航到 {new_chat_url}")
+                 await page.goto(new_chat_url, wait_until="domcontentloaded", timeout=30000)
+                 await expect_async(page.locator(INPUT_SELECTOR)).to_be_visible(timeout=30000)
+            return True
+            
+        logger.info(f"[{req_id}] 从 {current_prefs_for_modification.get('promptModel', '未知')} 更新 localStorage.promptModel 为 {full_model_path}")
+        current_prefs_for_modification["promptModel"] = full_model_path
+        
+        # 3. 保存修改后的设置到 localStorage
+        await page.evaluate("(prefsStr) => localStorage.setItem('aiStudioUserPreference', prefsStr)", json.dumps(current_prefs_for_modification))
+        
+        # 4. 导航到新聊天页面应用新设置
+        logger.info(f"[{req_id}] localStorage 已更新，导航到 '{new_chat_url}' 应用新模型...")
+        await page.goto(new_chat_url, wait_until="domcontentloaded", timeout=30000)
+        
+        # 5. 等待页面重新加载完成 (核心元素可见)
+        input_field = page.locator(INPUT_SELECTOR)
+        await expect_async(input_field).to_be_visible(timeout=30000)
+        logger.info(f"[{req_id}] 页面已导航到新聊天并加载完成，输入框可见")
+        
+        # 6. 验证 AI Studio 是否接受了模型更改 (检查 localStorage 的最终状态)
+        final_prefs_str = await page.evaluate("() => localStorage.getItem('aiStudioUserPreference')")
+        final_prompt_model_in_storage: Optional[str] = None
+        if final_prefs_str:
+            try:
+                final_prefs_obj = json.loads(final_prefs_str)
+                final_prompt_model_in_storage = final_prefs_obj.get("promptModel")
+            except json.JSONDecodeError:
+                logger.warning(f"[{req_id}] 无法解析刷新后的 aiStudioUserPreference JSON 字符串。")
+
+        if final_prompt_model_in_storage == full_model_path:
+            logger.info(f"[{req_id}] ✅ AI Studio localStorage 中模型已成功设置为: {full_model_path}")
+            
+            page_display_match = False
+            expected_display_name_for_target_id = None
+            actual_displayed_model_name_on_page = "无法读取" # Default value
+
+            if parsed_model_list:
+                for m_obj in parsed_model_list:
+                    if m_obj.get("id") == model_id:
+                        expected_display_name_for_target_id = m_obj.get("display_name")
+                        break
+            
+            if not expected_display_name_for_target_id:
+                logger.warning(f"[{req_id}] 无法在parsed_model_list中找到目标ID '{model_id}' 的显示名称，跳过页面显示名称验证。这可能不准确。")
+                page_display_match = True 
+            else:
+                try:
+                    model_wrapper_locator = page.locator('#mat-select-value-0 mat-select-trigger').first
+                    actual_displayed_model_name_on_page_raw = await model_wrapper_locator.inner_text(timeout=5000)
+                    actual_displayed_model_name_on_page = actual_displayed_model_name_on_page_raw.strip()
+
+                    normalized_actual_display = actual_displayed_model_name_on_page.lower()
+                    normalized_expected_display = expected_display_name_for_target_id.strip().lower()
+                    
+                    if normalized_actual_display == normalized_expected_display:
+                        page_display_match = True
+                        logger.info(f"[{req_id}] ✅ 页面显示模型 ('{actual_displayed_model_name_on_page}') 与期望 ('{expected_display_name_for_target_id}') 一致。")
+                    else:
+                        logger.error(f"[{req_id}] ❌ 页面显示模型 ('{actual_displayed_model_name_on_page}') 与期望 ('{expected_display_name_for_target_id}') 不一致。(Raw page: '{actual_displayed_model_name_on_page_raw}')")
+                except Exception as e_disp:
+                    logger.warning(f"[{req_id}] 读取页面显示的当前模型名称时出错: {e_disp}。将无法验证页面显示。")
+            
+            if page_display_match:
+                return True
+            else:
+                logger.error(f"[{req_id}] ❌ 模型切换失败，因为页面显示的模型与期望不符 (即使localStorage可能已更改)。")
+        else:
+            logger.error(f"[{req_id}] ❌ AI Studio 未接受模型更改 (localStorage)。期望='{full_model_path}', 实际='{final_prompt_model_in_storage or '未设置或无效'}'.")
+
+        logger.info(f"[{req_id}] 模型切换失败。尝试恢复到页面当前实际显示的模型的状态...")
+
+        current_displayed_name_for_revert_raw = "无法读取"
+        current_displayed_name_for_revert_stripped = "无法读取"
+        try:
+            model_wrapper_locator_for_revert = page.locator('#mat-select-value-0 mat-select-trigger').first
+            current_displayed_name_for_revert_raw = await model_wrapper_locator_for_revert.inner_text(timeout=5000)
+            current_displayed_name_for_revert_stripped = current_displayed_name_for_revert_raw.strip()
+            logger.info(f"[{req_id}] 恢复：页面当前显示的模型名称 (原始: '{current_displayed_name_for_revert_raw}', 清理后: '{current_displayed_name_for_revert_stripped}')")
+        except Exception as e_read_disp_revert:
+            logger.warning(f"[{req_id}] 恢复：读取页面当前显示模型名称失败: {e_read_disp_revert}。将尝试回退到原始localStorage。")
+            if original_prefs_str:
+                logger.info(f"[{req_id}] 恢复：由于无法读取当前页面显示，尝试将 localStorage 恢复到原始状态: '{original_prompt_model or '未设置'}'")
+                await page.evaluate("(origPrefs) => localStorage.setItem('aiStudioUserPreference', origPrefs)", original_prefs_str)
+                logger.info(f"[{req_id}] 恢复：导航到 '{new_chat_url}' 以应用恢复的原始 localStorage 设置...")
+                await page.goto(new_chat_url, wait_until="domcontentloaded", timeout=20000)
+                await expect_async(page.locator(INPUT_SELECTOR)).to_be_visible(timeout=20000)
+                logger.info(f"[{req_id}] 恢复：页面已导航到新聊天并加载，已尝试应用原始 localStorage。")
+            else:
+                logger.warning(f"[{req_id}] 恢复：无有效的原始 localStorage 状态可恢复，也无法读取当前页面显示。")
+            return False
+
+        model_id_to_revert_to = None
+        if parsed_model_list and current_displayed_name_for_revert_stripped != "无法读取":
+            normalized_current_display_for_revert = current_displayed_name_for_revert_stripped.lower()
+            for m_obj in parsed_model_list:
+                parsed_list_display_name = m_obj.get("display_name", "").strip().lower()
+                if parsed_list_display_name == normalized_current_display_for_revert:
+                    model_id_to_revert_to = m_obj.get("id")
+                    logger.info(f"[{req_id}] 恢复：页面显示名称 '{current_displayed_name_for_revert_stripped}' 对应模型ID: {model_id_to_revert_to}")
+                    break
+            if not model_id_to_revert_to:
+                logger.warning(f"[{req_id}] 恢复：无法在 parsed_model_list 中找到与页面显示名称 '{current_displayed_name_for_revert_stripped}' 匹配的模型ID。")
+        else:
+            if current_displayed_name_for_revert_stripped == "无法读取":
+                 logger.warning(f"[{req_id}] 恢复：因无法读取页面显示名称，故不能从 parsed_model_list 转换ID。")
+            else:
+                 logger.warning(f"[{req_id}] 恢复：parsed_model_list 为空，无法从显示名称 '{current_displayed_name_for_revert_stripped}' 转换模型ID。")
+
+        if model_id_to_revert_to:
+            base_prefs_for_final_revert = {}
+            try:
+                current_ls_content_str = await page.evaluate("() => localStorage.getItem('aiStudioUserPreference')")
+                if current_ls_content_str:
+                    base_prefs_for_final_revert = json.loads(current_ls_content_str)
+                elif original_prefs_str:
+                    base_prefs_for_final_revert = json.loads(original_prefs_str)
+            except json.JSONDecodeError:
+                logger.warning(f"[{req_id}] 恢复：解析现有 localStorage 以构建恢复偏好失败。")
+            
+            path_to_revert_to = f"models/{model_id_to_revert_to}"
+            base_prefs_for_final_revert["promptModel"] = path_to_revert_to
+            
+            logger.info(f"[{req_id}] 恢复：准备将 localStorage.promptModel 设置回页面实际显示的模型的路径: '{path_to_revert_to}'")
+            await page.evaluate("(prefsStr) => localStorage.setItem('aiStudioUserPreference', prefsStr)", json.dumps(base_prefs_for_final_revert))
+            
+            logger.info(f"[{req_id}] 恢复：导航到 '{new_chat_url}' 以应用恢复到 '{model_id_to_revert_to}' 的 localStorage 设置...")
+            await page.goto(new_chat_url, wait_until="domcontentloaded", timeout=30000)
+            await expect_async(page.locator(INPUT_SELECTOR)).to_be_visible(timeout=30000)
+            logger.info(f"[{req_id}] 恢复：页面已导航到新聊天并加载。localStorage 应已设置为反映模型 '{model_id_to_revert_to}'。")
+        else:
+            logger.error(f"[{req_id}] 恢复：无法将模型恢复到页面显示的状态，因为未能从显示名称 '{current_displayed_name_for_revert_stripped}' 确定有效模型ID。")
+            if original_prefs_str:
+                logger.warning(f"[{req_id}] 恢复：作为最终后备，尝试恢复到原始 localStorage: '{original_prompt_model or '未设置'}'")
+                await page.evaluate("(origPrefs) => localStorage.setItem('aiStudioUserPreference', origPrefs)", original_prefs_str)
+                logger.info(f"[{req_id}] 恢复：导航到 '{new_chat_url}' 以应用最终后备的原始 localStorage。")
+                await page.goto(new_chat_url, wait_until="domcontentloaded", timeout=20000)
+                await expect_async(page.locator(INPUT_SELECTOR)).to_be_visible(timeout=20000)
+                logger.info(f"[{req_id}] 恢复：页面已导航到新聊天并加载，已应用最终后备的原始 localStorage。")
+            else:
+                logger.warning(f"[{req_id}] 恢复：无有效的原始 localStorage 状态可作为最终后备。")
+                
+        return False
+            
+    except Exception as e:
+        logger.exception(f"[{req_id}] ❌ 切换模型过程中发生严重错误")
+        await save_error_snapshot(f"model_switch_error_{req_id}")
+        try:
+            if original_prefs_str:
+                logger.info(f"[{req_id}] 发生异常，尝试恢复 localStorage 至: {original_prompt_model or '未设置'}")
+                await page.evaluate("(origPrefs) => localStorage.setItem('aiStudioUserPreference', origPrefs)", original_prefs_str)
+                logger.info(f"[{req_id}] 异常恢复：导航到 '{new_chat_url}' 以应用恢复的 localStorage。")
+                await page.goto(new_chat_url, wait_until="domcontentloaded", timeout=15000)
+                await expect_async(page.locator(INPUT_SELECTOR)).to_be_visible(timeout=15000)
+        except Exception as recovery_err:
+            logger.error(f"[{req_id}] 异常后恢复 localStorage 失败: {recovery_err}")
+        return False
+
+# 新增: 加载排除模型列表的函数
+def load_excluded_models(filename: str):
+    """从指定文件加载模型ID到排除列表。"""
+    global excluded_model_ids, logger
+    excluded_file_path = os.path.join(os.path.dirname(__file__), filename)
+    try:
+        if os.path.exists(excluded_file_path):
+            with open(excluded_file_path, 'r', encoding='utf-8') as f:
+                loaded_ids = {line.strip() for line in f if line.strip()}
+            if loaded_ids:
+                excluded_model_ids.update(loaded_ids)
+                logger.info(f"✅ 从 '{filename}' 加载了 {len(loaded_ids)} 个模型到排除列表: {excluded_model_ids}")
+            else:
+                logger.info(f"'{filename}' 文件为空或不包含有效的模型 ID，排除列表未更改。")
+        else:
+            logger.info(f"模型排除列表文件 '{filename}' 未找到，排除列表为空。")
+    except Exception as e:
+        logger.error(f"❌ 从 '{filename}' 加载排除模型列表时出错: {e}", exc_info=True)
+
+# 新增: 处理初始模型状态和 localStorage 的函数
+async def _handle_initial_model_state_and_storage(page: AsyncPage):
+    """检查初始 localStorage，如果为空则尝试根据页面显示设置，并更新全局状态。"""
+    global current_ai_studio_model_id, logger, parsed_model_list, model_list_fetch_event
+    
+    logger.info("--- 处理初始模型状态和 localStorage ---")
+    try:
+        initial_prefs_str = await page.evaluate("() => localStorage.getItem('aiStudioUserPreference')")
+        
+        if initial_prefs_str:
+            logger.info("localStorage 中找到 'aiStudioUserPreference'。")
+            try:
+                pref_obj = json.loads(initial_prefs_str)
+                prompt_model_path = pref_obj.get("promptModel")
+                if prompt_model_path and isinstance(prompt_model_path, str):
+                    current_ai_studio_model_id = prompt_model_path.split('/')[-1]
+                    logger.info(f"   ✅ 从 localStorage 读取到初始模型 ID: {current_ai_studio_model_id}")
+                else:
+                    logger.warning("   ⚠️ localStorage.promptModel 无效或未设置。")
+                    await _set_model_from_page_display(page) # 尝试从页面显示获取
+            except json.JSONDecodeError:
+                logger.error("   ❌ 解析 localStorage.aiStudioUserPreference JSON 失败。将尝试从页面显示获取模型。")
+                await _set_model_from_page_display(page)
+        else:
+            logger.info("localStorage 中未找到 'aiStudioUserPreference'。将尝试从页面显示设置。")
+            await _set_model_from_page_display(page, set_storage=True)
+
+    except Exception as e:
+        logger.error(f"❌ 处理初始模型状态和 localStorage 时发生错误: {e}", exc_info=True)
+
+async def _set_model_from_page_display(page: AsyncPage, set_storage: bool = False):
+    """尝试从页面显示的元素读取模型，更新全局状态，并可选地设置 localStorage。"""
+    global current_ai_studio_model_id, logger, parsed_model_list, model_list_fetch_event
+    try:
+        logger.info("   尝试从页面显示元素读取当前模型名称...")
+        model_wrapper_locator = page.locator('#mat-select-value-0 mat-select-trigger').first
+        displayed_model_name_from_page_raw = await model_wrapper_locator.inner_text(timeout=7000)
+        
+        # 新增：去除首尾空格
+        displayed_model_name = displayed_model_name_from_page_raw.strip()
+
+        logger.info(f"   页面当前显示模型名称 (原始: '{displayed_model_name_from_page_raw}', 清理后: '{displayed_model_name}')")
+
+        # 尝试将显示名称转换为模型ID
+        found_model_id_from_display = None
+        if not model_list_fetch_event.is_set():
+            logger.info("   等待模型列表数据 (最多5秒) 以便转换显示名称...")
+            try: await asyncio.wait_for(model_list_fetch_event.wait(), timeout=5.0)
+            except asyncio.TimeoutError: logger.warning("   等待模型列表超时，可能无法准确转换显示名称为ID。")
+
+        if parsed_model_list:
+            for model_obj in parsed_model_list:
+                # 确保比较时双方都是清理过的，或假设 parsed_model_list 中的 display_name 是干净的
+                if model_obj.get("display_name") and model_obj.get("display_name").strip() == displayed_model_name:
+                    found_model_id_from_display = model_obj.get("id")
+                    logger.info(f"   显示名称 '{displayed_model_name}' 对应模型 ID: {found_model_id_from_display}")
+                    break
+            if not found_model_id_from_display:
+                 logger.warning(f"   未在已知模型列表中找到与显示名称 '{displayed_model_name}' 匹配的 ID。")
+        else:
+            logger.warning("   模型列表尚不可用，无法将显示名称转换为ID。")
+
+        # 更新全局 current_ai_studio_model_id
+        # 优先使用转换得到的 ID，其次是原始显示名称 (如果转换失败)
+        new_model_value = found_model_id_from_display if found_model_id_from_display else displayed_model_name
+        if current_ai_studio_model_id != new_model_value:
+            current_ai_studio_model_id = new_model_value
+            logger.info(f"   全局 current_ai_studio_model_id 已更新为: {current_ai_studio_model_id}")
+        else:
+            logger.info(f"   全局 current_ai_studio_model_id ('{current_ai_studio_model_id}') 与从页面获取的值一致，未更改。")
+
+        if set_storage and found_model_id_from_display:
+            logger.info(f"   需要为 '{found_model_id_from_display}' 设置初始 localStorage...")
+            default_prefs = {
+                "promptModel": f"models/{found_model_id_from_display}",
+                "bidiModel": "models/gemini-1.0-pro-001", # 一个合理的默认值
+                "isAdvancedOpen": True, "isSafetySettingsOpen": False, "areToolsOpen": True,
+                "hasShownSearchGroundingTos": False, "autosaveEnabled": True, "theme": "system",
+                "bidiOutputFormat": 3, "isSystemInstructionsOpen": False, "warmWelcomeDisplayed": True,
+                "getCodeLanguage": "Node.js", "getCodeHistoryToggle": False, "fileCopyrightAcknowledged": True
+            }
+            await page.evaluate("(prefsStr) => localStorage.setItem('aiStudioUserPreference', prefsStr)", json.dumps(default_prefs))
+            logger.info(f"   ✅ 初始 localStorage.aiStudioUserPreference 已为模型 '{found_model_id_from_display}' 设置。")
+            # 可选：刷新以确保应用。但注意这可能导致启动时间变长或循环。
+            # logger.info("   刷新页面以应用新的 localStorage 设置...")
+            # await page.goto(page.url, wait_until="domcontentloaded", timeout=20000)
+            # await expect_async(page.locator(INPUT_SELECTOR)).to_be_visible(timeout=20000)
+        elif set_storage and not found_model_id_from_display:
+            logger.warning("   无法将页面显示模型转换为ID，跳过设置初始 localStorage。")
+
+    except Exception as e_set_disp:
+        logger.error(f"   尝试从页面显示设置模型时出错: {e_set_disp}", exc_info=True)
