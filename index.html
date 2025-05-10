@@ -1544,7 +1544,16 @@
             let html = '<div class="info-list">';
             for (const key in data) {
                 if (Object.hasOwnProperty.call(data, key)) {
-                    html += `<div><strong>${key}:</strong> <span>${data[key]}</span></div>`;
+                    let value = data[key];
+                    if (typeof value === 'object' && value !== null && !Array.isArray(value)) { // 检查是否是对象且非数组
+                        // 使用 pre 和 code 标签来格式化对象输出
+                        html += `<div><strong>${key}:</strong> <pre style="white-space: pre-wrap; word-break: break-all; background-color: rgba(var(--on-surface-rgb), 0.03); padding: 8px; border-radius: 4px; margin-top: 4px;"><code>${JSON.stringify(value, null, 2)}</code></pre></div>`;
+                    } else if (Array.isArray(value)) { // 如果是数组
+                         html += `<div><strong>${key}:</strong> <pre style="white-space: pre-wrap; word-break: break-all; background-color: rgba(var(--on-surface-rgb), 0.03); padding: 8px; border-radius: 4px; margin-top: 4px;"><code>${JSON.stringify(value, null, 2)}</code></pre></div>`;
+                    }
+                    else {
+                        html += `<div><strong>${key}:</strong> <span>${value}</span></div>`;
+                    }
                 }
             }
             html += '</div>';
