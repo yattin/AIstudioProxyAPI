@@ -20,7 +20,7 @@ def is_port_in_use(port: int) -> bool:
         try:
             # 允许地址重用，主要用于防止 TIME_WAIT 状态的干扰
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            s.bind(("127.0.0.1", port))
+            s.bind(("0.0.0.0", port))
             return False  # 绑定成功，端口可用
         except OSError:
             # 端口被占用
