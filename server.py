@@ -1,5 +1,3 @@
-# server.py (最终集成版 - 作为模块供 launch_camoufox.py 使用)
-
 import asyncio
 import random
 import time
@@ -80,6 +78,8 @@ if PROXY_SERVER_ENV:
 # --- Constants ---
 MODEL_NAME = 'AI-Studio_Camoufox-Proxy'
 CHAT_COMPLETION_ID_PREFIX = 'chatcmpl-'
+MODELS_ENDPOINT_URL_CONTAINS = "MakerSuiteService/ListModels" # 目标请求URL的一部分
+DEFAULT_FALLBACK_MODEL_ID = "gemini-pro" # 如果无法获取列表，使用的默认模型
 
 # --- Selectors ---
 INPUT_SELECTOR = 'ms-prompt-input-wrapper textarea'
@@ -103,6 +103,11 @@ is_playwright_ready = False
 is_browser_connected = False
 is_page_ready = False
 is_initializing = False # 这个状态由 lifespan 控制
+
+# 新增：用于模型列表的全局变量
+global_model_list_raw_json: Optional[List[Any]] = None
+parsed_model_list: List[Dict[str, Any]] = [] # 存储解析后的模型列表 [{id: "model_id", ...}, ...]
+model_list_fetch_event = asyncio.Event() # 用于指示模型列表是否已获取
 
 request_queue: Queue = Queue()
 processing_lock: Lock = Lock()
@@ -632,6 +637,10 @@ async def _initialize_page_logic(browser: AsyncBrowser):
                     found_page = p_iter
                     current_url = page_url_to_check
                     logger.info(f"   找到已打开的 AI Studio 页面: {current_url}")
+                    # 立即为找到的页面添加监听器
+                    if found_page: # 确保 found_page 有效
+                        logger.info(f"   为已存在的页面 {found_page.url} 添加模型列表响应监听器。")
+                        found_page.on("response", _handle_model_list_response)
                     break
             except PlaywrightAsyncError as pw_err_url: # Playwright 操作可能引发的错误
                 logger.warning(f"   检查页面 URL 时出现 Playwright 错误: {pw_err_url}")
@@ -644,6 +653,10 @@ async def _initialize_page_logic(browser: AsyncBrowser):
         if not found_page: # 如果没有找到合适的已打开页面
             logger.info(f"-> 未找到合适的现有页面，正在打开新页面并导航到 {target_full_url}...")
             found_page = await temp_context.new_page()
+            # 立即为新页面添加监听器，在 goto 之前
+            if found_page: # 确保 found_page 有效
+                logger.info(f"   为新创建的页面添加模型列表响应监听器 (导航前)。")
+                found_page.on("response", _handle_model_list_response)
             try:
                 # 等待 DOM 内容加载完成，设置较长超时时间
                 await found_page.goto(target_full_url, wait_until="domcontentloaded", timeout=90000)
@@ -798,6 +811,149 @@ async def _close_page_logic():
     logger.info("页面逻辑状态已重置。")
     return None, False
 
+async def _handle_model_list_response(response: Any):
+    global global_model_list_raw_json, parsed_model_list, model_list_fetch_event, logger, MODELS_ENDPOINT_URL_CONTAINS, DEBUG_LOGS_ENABLED
+
+    if MODELS_ENDPOINT_URL_CONTAINS in response.url and response.ok:
+        logger.info(f"捕获到潜在的模型列表响应来自: {response.url} (状态: {response.status})")
+        try:
+            data = await response.json()
+            if DEBUG_LOGS_ENABLED:
+                try: logger.debug(f"完整模型列表响应数据: {json.dumps(data, indent=2, ensure_ascii=False)}")
+                except Exception as log_dump_err: logger.debug(f"记录完整模型列表响应数据时出错: {log_dump_err}, 原始数据预览: {str(data)[:1000]}")
+            global_model_list_raw_json = data
+
+            models_array_container = None # 用于存放实际的模型条目列表 [model_A_fields_list, model_B_fields_list, ...]
+
+            # 检查 data 是否是列表，并且 data[0] 也是列表
+            if isinstance(data, list) and data and isinstance(data[0], list):
+                # 根据您的最新分析: data 是 [[["model_A"...], ["model_B"...]]]
+                # 那么 data[0] 是 [["model_A"...], ["model_B"...]]，这应该是 models_array_container
+                # 进一步检查 data[0][0] 是否也是列表，以确认这个三层结构
+                if data[0] and isinstance(data[0][0], list):
+                    logger.info("检测到三层列表结构 (data[0][0] 是列表)。models_array_container 设置为 data[0]。")
+                    models_array_container = data[0]
+                # 如果 data[0][0] 是字符串，说明 data 是 [[field1, field2...], [fieldA, fieldB...]]
+                # 这种情况下，data 本身就是 models_array_container
+                elif data[0] and isinstance(data[0][0], str):
+                    logger.info("检测到两层列表结构 (data[0][0] 是字符串)。models_array_container 设置为 data。")
+                    models_array_container = data
+                else:
+                    logger.warning(f"data[0] 的首元素既不是列表也不是字符串。结构未知。data[0] 预览: {str(data[0])[:200]}")
+            # 兼容旧的字典结构以及其他可能的根列表结构
+            elif isinstance(data, dict):
+                logger.info("检测到模型列表响应为根字典结构。")
+                if "model" in data and isinstance(data["model"], list): models_array_container = data["model"]
+                elif "models" in data and isinstance(data["models"], list): models_array_container = data["models"]
+                elif "supportedModels" in data and isinstance(data["supportedModels"], list):
+                    logger.info("从 'supportedModels' 键提取模型列表。")
+                    models_array_container = data["supportedModels"]
+            elif isinstance(data, list): # 如果 data 本身就是模型列表（例如 OpenAI 风格的 data: [...]）
+                 if data and isinstance(data[0], dict): # 检查是否是字典列表
+                      logger.info("检测到模型列表响应为根列表 (元素为字典)。直接使用 data 作为 models_array_container。")
+                      models_array_container = data
+                 # 此处可以添加对根列表且元素为列表的检查，但上面的三层/两层检查可能已覆盖
+
+            if models_array_container is not None:
+                new_parsed_list = []
+                # models_array_container 应该是 [ ["model_A_fields"], ["model_B_fields"], ... ] (来自三层嵌套)
+                # 或者 [ ["model_A_f1", "f2"], ["model_B_f1", "f2"] ] (来自两层嵌套)
+                # 或者 [ {"name": ...}, {"name": ...} ] (来自字典或OpenAI风格列表)
+                for entry_in_container in models_array_container:
+                    model_fields_list = None # 这是我们最终要解析的，包含模型字段的列表或字典
+                    raw_entry_for_log = str(entry_in_container)[:200]
+
+                    # 情况 A: 对应三层嵌套 data[0][i] -> entry_in_container 是 ["model_fields_list_content"]
+                    if isinstance(entry_in_container, list) and len(entry_in_container) == 1 and isinstance(entry_in_container[0], list):
+                        model_fields_list = entry_in_container[0]
+                        if DEBUG_LOGS_ENABLED:
+                            logger.debug(f"从包装列表解包: {raw_entry_for_log} -> {str(model_fields_list)[:100]}")
+                    # 情况 B: 对应两层嵌套 data[i] -> entry_in_container 是 ["field1", "field2", ...]
+                    # 或者 entry_in_container 是字典 (来自字典解析或OpenAI风格列表)
+                    elif isinstance(entry_in_container, list) or isinstance(entry_in_container, dict):
+                        model_fields_list = entry_in_container # 直接使用
+                        if DEBUG_LOGS_ENABLED:
+                            logger.debug(f"直接使用条目 (列表或字典): {raw_entry_for_log}")
+                    else:
+                        logger.warning(f"跳过未知结构的 entry_in_container: {raw_entry_for_log}")
+                        continue
+                    
+                    if not model_fields_list:
+                        # logger.warning(f"未能从 entry_in_container 获取 model_fields_list: {raw_entry_for_log}") # 上面 continue 了
+                        continue
+
+                    # 现在 model_fields_list 应该是包含模型字段的列表或字典
+                    model_id_path = None
+                    display_name_candidate = ""
+                    description_candidate = "N/A"
+                    raw_model_fields_list_for_log = str(model_fields_list)[:200]
+
+                    if isinstance(model_fields_list, list):
+                        if not (len(model_fields_list) > 0 and isinstance(model_fields_list[0], str)):
+                            logger.warning(f"跳过列表 model_fields_list，因其首元素无效或非字符串: {raw_model_fields_list_for_log}")
+                            continue
+                        model_id_path = model_fields_list[0]
+                        # 根据您的确认，displayName 索引 3, description 索引 4
+                        display_name_candidate = model_fields_list[3] if len(model_fields_list) > 3 and isinstance(model_fields_list[3], str) else ""
+                        description_candidate = model_fields_list[4] if len(model_fields_list) > 4 and isinstance(model_fields_list[4], str) else "N/A"
+                    
+                    elif isinstance(model_fields_list, dict):
+                        model_id_path = model_fields_list.get("name") or model_fields_list.get("model") or model_fields_list.get("id")
+                        if not model_id_path or not isinstance(model_id_path, str):
+                             logger.warning(f"跳过字典 model_fields_list，因其缺少有效的 'name'/'model'/'id' 字段: {raw_model_fields_list_for_log}")
+                             continue
+                        display_name_candidate = model_fields_list.get("displayName", model_fields_list.get("display_name", ""))
+                        description_candidate = model_fields_list.get("description", "N/A")
+                        # 检查原始 data 是否是字典，并且我们正在处理 supportedModels 的情况
+                        if isinstance(data, dict) and "supportedModels" in data and not display_name_candidate:
+                            version = model_fields_list.get("version")
+                            if version: display_name_candidate = f"{model_id_path.split('/')[-1]} ({version})"
+                    else:
+                        logger.warning(f"跳过未知类型的 model_fields_list: {raw_model_fields_list_for_log}")
+                        continue
+
+                    if model_id_path:
+                        simple_model_id = model_id_path.split('/')[-1] if '/' in model_id_path else model_id_path
+                        final_display_name = display_name_candidate if display_name_candidate else simple_model_id.replace("-", " ").title()
+                        new_parsed_list.append({
+                            "id": simple_model_id, "object": "model", "created": int(time.time()),
+                            "owned_by": "google", "display_name": final_display_name,
+                            "description": description_candidate, "raw_model_path": model_id_path
+                        })
+                
+                if new_parsed_list:
+                    current_parsed_json = json.dumps(sorted(parsed_model_list, key=lambda x: x['id']), sort_keys=True)
+                    new_parsed_json = json.dumps(sorted(new_parsed_list, key=lambda x: x['id']), sort_keys=True)
+                    if current_parsed_json != new_parsed_json:
+                        old_len = len(parsed_model_list)
+                        parsed_model_list.clear(); parsed_model_list.extend(new_parsed_list)
+                        logger.info(f"模型列表已更新。之前 {old_len} 个模型，现在 {len(parsed_model_list)} 个模型。")
+                        if not model_list_fetch_event.is_set(): model_list_fetch_event.set(); logger.info("模型列表获取事件已设置 (因列表更新)。")
+                    else:
+                        logger.info(f"捕获到的模型列表与当前缓存 ({len(parsed_model_list)} 个模型) 相同，未更新。")
+                        if not model_list_fetch_event.is_set(): model_list_fetch_event.set(); logger.info("模型列表获取事件已设置 (列表无变化但已获取)。")
+                else: 
+                    logger.warning("在响应中找到了模型数据容器，但解析后列表为空 (请检查日志中的跳过原因和数据结构)。")
+                    if not model_list_fetch_event.is_set(): model_list_fetch_event.set(); logger.info("模型列表获取事件已设置 (解析后列表为空)。")
+            else: 
+                logger.warning(f"在API响应中未找到预期的模型列表结构或容器。响应数据预览: {str(data)[:500]}")
+                if not model_list_fetch_event.is_set(): model_list_fetch_event.set(); logger.info("模型列表获取事件已设置 (未找到模型数据容器)。")
+
+        except json.JSONDecodeError as json_err:
+            logger.error(f"从模型列表响应 ({response.url}) 解码JSON失败: {json_err}")
+            if not model_list_fetch_event.is_set(): model_list_fetch_event.set()
+        except PlaywrightAsyncError as pw_err: 
+            logger.error(f"处理模型列表响应 ({response.url}) 时发生Playwright错误: {pw_err}")
+            if not model_list_fetch_event.is_set(): model_list_fetch_event.set()
+        except Exception as e:
+            logger.error(f"处理来自 {response.url} 的模型列表响应时发生意外错误: {e}", exc_info=True)
+            if not model_list_fetch_event.is_set(): model_list_fetch_event.set()
+    else:
+        if DEBUG_LOGS_ENABLED and response.url and not response.url.startswith("data:") and \
+           not any(response.url.endswith(ext) for ext in (".js", ".css", ".png", ".svg", ".woff2", ".ico", ".gif", ".jpeg", ".jpg")):
+             logger.debug(f"忽略的响应 (非目标URL、非OK状态或常见静态资源): {response.url} - 状态: {response.status}")
+             pass
+
 async def signal_camoufox_shutdown():
     # (此函数在 server.py 中可能不再需要，应由 launch_camoufox.py 控制 Camoufox 进程)
     # 但如果 Camoufox 是一个独立的外部服务，则此逻辑可能仍然相关。
@@ -826,7 +982,7 @@ async def signal_camoufox_shutdown():
 async def lifespan(app_param: FastAPI): # app_param 未使用
     global playwright_manager, browser_instance, page_instance, worker_task
     global is_playwright_ready, is_browser_connected, is_page_ready, is_initializing
-    global logger, log_ws_manager
+    global logger, log_ws_manager, model_list_fetch_event
 
     true_original_stdout, true_original_stderr = sys.stdout, sys.stderr
     initial_stdout_before_redirect, initial_stderr_before_redirect = sys.stdout, sys.stderr
@@ -868,6 +1024,7 @@ async def lifespan(app_param: FastAPI): # app_param 未使用
                 logger.warning("CAMOUFOX_WS_ENDPOINT 未设置，但 LAUNCH_MODE 表明不需要浏览器。跳过浏览器连接。")
                 is_browser_connected = False
                 is_page_ready = False
+                model_list_fetch_event.set() # 没有页面，无法获取，直接设置事件
             else:
                 logger.error("未找到 CAMOUFOX_WS_ENDPOINT 环境变量。Playwright 将无法连接到浏览器。")
                 raise ValueError("CAMOUFOX_WS_ENDPOINT 环境变量缺失。")
@@ -877,7 +1034,21 @@ async def lifespan(app_param: FastAPI): # app_param 未使用
                 browser_instance = await playwright_manager.firefox.connect(ws_endpoint, timeout=30000)
                 is_browser_connected = True
                 logger.info(f"   ✅ 已连接到浏览器实例: 版本 {browser_instance.version}")
-                page_instance, is_page_ready = await _initialize_page_logic(browser_instance)
+                
+                # _initialize_page_logic 返回 page 实例，并将其赋值给全局 page_instance
+                temp_page_instance, temp_is_page_ready = await _initialize_page_logic(browser_instance)
+                if temp_page_instance and temp_is_page_ready:
+                    page_instance = temp_page_instance
+                    is_page_ready = temp_is_page_ready
+                    # 移除这里的监听器添加，因为 _initialize_page_logic 应该已经处理了
+                    # if page_instance and not page_instance.is_closed():
+                    #     logger.info(f"为页面 {page_instance.url} 添加模型列表响应监听器 (来自 lifespan)。")
+                    #     page_instance.on("response", _handle_model_list_response)
+                else: # _initialize_page_logic 失败
+                    is_page_ready = False
+                    if not model_list_fetch_event.is_set(): model_list_fetch_event.set()
+
+
             except Exception as connect_err:
                 logger.error(f"未能连接到 Camoufox 服务器 (浏览器) 或初始化页面失败: {connect_err}", exc_info=True)
                 if launch_mode != "direct_debug_no_browser":
@@ -885,8 +1056,27 @@ async def lifespan(app_param: FastAPI): # app_param 未使用
                 else:
                     is_browser_connected = False
                     is_page_ready = False
+                    if not model_list_fetch_event.is_set(): model_list_fetch_event.set() # 没有页面，直接设置
 
-        if is_page_ready and is_browser_connected:
+        # 等待模型列表捕获或超时
+        if is_page_ready and is_browser_connected and not model_list_fetch_event.is_set():
+            logger.info("等待模型列表捕获 (最多等待15秒)...")
+            try:
+                await asyncio.wait_for(model_list_fetch_event.wait(), timeout=15.0) # 增加等待时间
+                if model_list_fetch_event.is_set():
+                    logger.info("模型列表事件已触发。")
+                else: # 超时但事件未设置（理论上wait_for会抛TimeoutError）
+                    logger.warning("模型列表事件等待后仍未设置。")
+            except asyncio.TimeoutError:
+                logger.warning("等待模型列表捕获超时。将使用默认或空列表。")
+            finally: # 确保事件最终被设置，避免后续阻塞
+                if not model_list_fetch_event.is_set():
+                    model_list_fetch_event.set()
+        elif not (is_page_ready and is_browser_connected): # 如果页面/浏览器没准备好，也设置事件
+             if not model_list_fetch_event.is_set(): model_list_fetch_event.set()
+
+
+        if (is_page_ready and is_browser_connected) or launch_mode == "direct_debug_no_browser":
              logger.info(f"   启动请求处理 Worker...")
              worker_task = asyncio.create_task(queue_worker())
              logger.info(f"   ✅ 请求处理 Worker 已启动。")
@@ -894,6 +1084,7 @@ async def lifespan(app_param: FastAPI): # app_param 未使用
             logger.warning("浏览器和页面未就绪 (direct_debug_no_browser 模式)，请求处理 Worker 未启动。API 可能功能受限。")
         else:
              logger.error("页面或浏览器初始化失败，无法启动 Worker。")
+             if not model_list_fetch_event.is_set(): model_list_fetch_event.set() # 确保事件设置
              raise RuntimeError("页面或浏览器初始化失败，无法启动 Worker。")
 
         logger.info(f"✅ FastAPI 应用生命周期: 启动完成。服务已就绪。")
@@ -902,6 +1093,7 @@ async def lifespan(app_param: FastAPI): # app_param 未使用
 
     except Exception as startup_err:
         logger.critical(f"❌ FastAPI 应用生命周期: 启动期间发生严重错误: {startup_err}", exc_info=True)
+        if not model_list_fetch_event.is_set(): model_list_fetch_event.set() # 错误情况下也设置
         if worker_task and not worker_task.done(): worker_task.cancel()
         if browser_instance and browser_instance.is_connected():
             try: await browser_instance.close()
@@ -911,7 +1103,7 @@ async def lifespan(app_param: FastAPI): # app_param 未使用
             except: pass
         raise RuntimeError(f"应用程序启动失败: {startup_err}") from startup_err
     finally:
-        is_initializing = False
+        is_initializing = False # 重置状态
         logger.info(f"\nFastAPI 应用生命周期: 关闭中...")
         if worker_task and not worker_task.done():
              logger.info(f"   正在取消请求处理 Worker...")
@@ -923,8 +1115,18 @@ async def lifespan(app_param: FastAPI): # app_param 未使用
              except asyncio.CancelledError: logger.info(f"   ✅ 请求处理 Worker 已确认取消。")
              except Exception as wt_err: logger.error(f"   ❌ 等待 Worker 停止时出错: {wt_err}", exc_info=True)
 
-        if page_instance: # 确保在关闭浏览器前关闭页面
-            await _close_page_logic()
+        if page_instance and not page_instance.is_closed(): # 在关闭页面前，确保移除监听器
+            try:
+                # 尝试移除，以防 _handle_model_list_response 未成功执行或未移除
+                # page_instance.remove_listener("response", _handle_model_list_response) # 原有代码
+                # logger.info("Lifespan 清理：尝试移除模型列表响应监听器。") # 原有代码
+                logger.info("Lifespan 清理：移除模型列表响应监听器。")
+                page_instance.remove_listener("response", _handle_model_list_response)
+            except Exception as e: # 比如监听器不存在的错误
+                logger.debug(f"Lifespan 清理：移除监听器时发生非严重错误或监听器本不存在: {e}")
+        
+        if page_instance: 
+            await _close_page_logic() # 这会设置 page_instance = None
 
         if browser_instance:
             logger.info(f"   正在关闭与浏览器实例的连接...")
@@ -1031,7 +1233,58 @@ async def health_check():
 @app.get("/v1/models")
 async def list_models():
     logger.info("[API] 收到 /v1/models 请求。")
-    return {"object": "list", "data": [{"id": MODEL_NAME, "object": "model", "created": int(time.time()), "owned_by": "camoufox-proxy"}]}
+    # 如果事件未设置且页面实例存在，尝试触发一次获取
+    if not model_list_fetch_event.is_set() and page_instance and not page_instance.is_closed():
+        logger.info("/v1/models: 模型列表事件未设置或列表为空，尝试页面刷新以触发捕获...")
+        try:
+            # 检查监听器是否已附加，如果未附加，则添加。
+            listener_attached = False
+            # Playwright的事件监听器存储方式可能因版本而异
+            # _events 属性是非公开API，但可用于调试或此种检查
+            if hasattr(page_instance, '_events') and "response" in page_instance._events:
+                for handler_slot_or_func in page_instance._events["response"]:
+                    # 在Playwright 1.30+版本中，监听器被包装在HandlerSlot对象中
+                    actual_handler = getattr(handler_slot_or_func, 'handler', handler_slot_or_func)
+                    if actual_handler == _handle_model_list_response:
+                        listener_attached = True
+                        break
+            
+            if not listener_attached:
+                logger.info("/v1/models: 响应监听器似乎不存在或已被移除，尝试重新添加。")
+                page_instance.on("response", _handle_model_list_response)
+
+
+            await page_instance.reload(wait_until="domcontentloaded", timeout=20000)
+            logger.info(f"页面已刷新。等待模型列表事件 (最多10秒)...")
+            await asyncio.wait_for(model_list_fetch_event.wait(), timeout=10.0)
+        except asyncio.TimeoutError:
+            logger.warning("/v1/models: 刷新后等待模型列表事件超时。")
+        except PlaywrightAsyncError as reload_err:
+            logger.error(f"/v1/models: 刷新页面失败: {reload_err}")
+        except Exception as e: 
+            logger.error(f"/v1/models: 尝试触发模型列表捕获时发生错误: {e}")
+        finally: # 无论如何，确保事件最终被设置，避免后续请求卡住
+            if not model_list_fetch_event.is_set():
+                logger.info("/v1/models: 尝试捕获后，强制设置模型列表事件。")
+                model_list_fetch_event.set()
+
+
+    if parsed_model_list:
+        logger.info(f"返回缓存的 {len(parsed_model_list)} 个模型。")
+        return {"object": "list", "data": parsed_model_list}
+    else:
+        logger.warning("模型列表为空或未成功获取。返回默认后备模型。")
+        # 返回符合 OpenAI API 风格的列表，即使是后备
+        fallback_model_obj = {
+            "id": DEFAULT_FALLBACK_MODEL_ID, 
+            "object": "model",
+            "created": int(time.time()), 
+            "owned_by": "camoufox-proxy-fallback",
+            "display_name": DEFAULT_FALLBACK_MODEL_ID.replace("-", " ").title(),
+            "description": "Default fallback model.",
+            "raw_model_path": f"models/{DEFAULT_FALLBACK_MODEL_ID}"
+        }
+        return {"object": "list", "data": [fallback_model_obj]}
 
 # --- Helper: Detect Error ---
 async def detect_and_extract_page_error(page: AsyncPage, req_id: str) -> Optional[str]:
