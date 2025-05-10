@@ -254,7 +254,7 @@
             justify-content: center;
             padding: 0;
             font-size: 1em;
-            transition: background-color var(--transition-speed), color var(--transition-speed), transform 0.3s ease, box-shadow var(--transition-speed), left var(--transition-speed), right var(--transition-speed);
+            transition: background-color var(--transition-speed), color var(--transition-speed), transform 0.3s ease, box-shadow var(--transition-speed), left 0.3s ease, right 0.3s ease; /* MODIFIED */
             box-shadow: var(--shadow-sm);
         }
 
@@ -907,7 +907,9 @@
             
             #userInput {
                 min-height: 44px;
-                flex-basis: calc(100% - 110px); /* Adjust if needed based on button sizes */
+                flex-grow: 1; /* ADDED */
+                flex-basis: 0;  /* ADDED */
+                min-width: 120px; /* ADDED/ADJUSTED */
             }
             
             .action-button {
@@ -1235,7 +1237,7 @@
                             <button id="refreshModelsButton" title="刷新模型列表">刷新</button>
                         </div>
                         <textarea id="userInput" placeholder="输入消息... (Shift+Enter 换行)" rows="1"></textarea>
-                        <button id="clearButton" class="action-button">清空会话</button>
+                        <button id="clearButton" class="action-button">清空</button>
                         <button id="sendButton" class="action-button">发送</button>
                     </div>
                 </div>
