@@ -35,7 +35,7 @@ managed_process_info: Dict[str, Any] = {
 
 # --- Internationalization (i18n) ---
 LANG_TEXTS = {
-    "title": {"zh": "Camoufox 项目启动器", "en": "Camoufox Project Launcher"},
+    "title": {"zh": "AI Studio Proxy API Launcher GUI", "en": "AI Studio Proxy API Launcher GUI"},
     "status_idle": {"zh": "空闲，请选择操作。", "en": "Idle. Select an action."},
     "port_section_label": {"zh": "服务端口配置", "en": "Service Port Configuration"},
     "port_input_description_lbl": {"zh": "提示: 下方所有启动选项均会使用此端口号。", "en": "Note: All launch options below will use this port number."},
@@ -48,8 +48,8 @@ LANG_TEXTS = {
     "launch_options_label": {"zh": "启动选项", "en": "Launch Options"},
     "launch_options_note_revised": {"zh": "提示：有头模式用于调试和认证，会打开浏览器和新控制台。\n无头模式在后台独立运行 (关闭GUI后服务仍运行)，需预先认证。",
                                     "en": "Tip: Headed mode is for debug and auth (opens browser & console).\nHeadless mode runs independently in background (service persists after GUI close), requires pre-auth."},
-    "launch_headed_interactive_btn": {"zh": "1. 启动有头模式 (Debug, 交互式)", "en": "1. Launch Headed Mode (Debug, Interactive)"},
-    "launch_headless_independent_btn": {"zh": "2. 启动无头模式 (后台独立运行)", "en": "2. Launch Headless Mode (Independent Background)"},
+    "launch_headed_interactive_btn": {"zh": "启动有头模式", "en": "Launch Headed Mode"},
+    "launch_headless_independent_btn": {"zh": "启动无头模式", "en": "Launch Headless Mode"},
     "stop_gui_service_btn": {"zh": "停止当前GUI管理的服务", "en": "Stop Current GUI-Managed Service"},
     "status_label": {"zh": "状态", "en": "Status"},
     "output_label": {"zh": "输出日志", "en": "Output Log"},
@@ -118,7 +118,7 @@ def is_port_in_use(port: int) -> bool: # Simplified, launch_camoufox.py handles 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            s.bind(("127.0.0.1", port)) # Check against 127.0.0.1 for GUI context
+            s.bind(("0.0.0.0", port)) # Check against 127.0.0.1 for GUI context
             return False
         except OSError: return True
         except Exception: return True # Broad exception for safety
@@ -134,10 +134,26 @@ def get_process_name_by_pid(pid: int) -> str:
             if process.stdout.strip():
                 parts = process.stdout.strip().split('","')
                 if len(parts) > 0: name = parts[0].strip('"')
-        elif system == "Linux" or system == "Darwin":
+        elif system == "Linux":
             cmd_args = ["ps", "-p", str(pid), "-o", "comm="]
             process = subprocess.run(cmd_args, capture_output=True, text=True, check=True, timeout=3)
             if process.stdout.strip(): name = process.stdout.strip()
+        elif system == "Darwin":  # macOS 系统
+            # 首先获取命令名
+            cmd_args = ["ps", "-p", str(pid), "-o", "comm="]
+            process = subprocess.run(cmd_args, capture_output=True, text=True, check=True, timeout=3)
+            raw_path = process.stdout.strip() if process.stdout.strip() else ""
+            
+            # 然后获取完整进程命令行
+            cmd_args = ["ps", "-p", str(pid), "-o", "command="]
+            process = subprocess.run(cmd_args, capture_output=True, text=True, check=True, timeout=3)
+            full_command = process.stdout.strip() if process.stdout.strip() else ""
+            
+            if raw_path:
+                # 提取路径中的文件名
+                base_name = os.path.basename(raw_path)
+                # 返回 "文件名 (完整路径)" 格式
+                name = f"{base_name} ({raw_path})"
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
         # print(f"Error getting name for PID {pid} with '{' '.join(cmd_args)}': {e}", file=sys.stderr) # Less verbose
         pass
@@ -478,7 +494,7 @@ def query_port_and_display_pids_gui():
     processes_info = find_processes_on_port(port)
     if processes_info:
         for proc_info in processes_info:
-            # 简化显示格式，便于解析和更整洁的外观
+            # 显示格式为"PID - 名称"
             display_text = f"{proc_info['pid']} - {proc_info['name']}"
             if pid_listbox_widget: pid_listbox_widget.insert(tk.END, display_text)
     else:
@@ -583,7 +599,7 @@ def build_gui(root: tk.Tk):
     # --- 设置窗口属性 ---
     root.title(get_text("title"))
     # 设置最小窗口大小，防止组件挤压变形
-    root.minsize(580, 520)
+    root.minsize(750, 500)
     
     # --- 样式配置 ---
     s = ttk.Style()
@@ -620,11 +636,30 @@ def build_gui(root: tk.Tk):
     root.columnconfigure(0, weight=1)
     root.rowconfigure(0, weight=1)
     
-    current_row = 0
-
+    # 将界面分为左右两栏，使用PanedWindow以允许用户调整分割
+    paned_window = ttk.PanedWindow(main_frame, orient=tk.HORIZONTAL)
+    paned_window.grid(row=0, column=0, sticky="nsew")
+    main_frame.columnconfigure(0, weight=1)
+    main_frame.rowconfigure(0, weight=1)
+    
+    # 左右两个框架作为PanedWindow的子项
+    left_frame = ttk.Frame(paned_window, width=400)  # 增加左侧最小宽度
+    right_frame = ttk.Frame(paned_window, width=200)  # 减小右侧初始宽度
+    
+    # 添加到PanedWindow
+    paned_window.add(left_frame, weight=1)  # 左侧固定宽度优先
+    paned_window.add(right_frame, weight=4)  # 右侧获得更大的伸缩空间
+    
+    # 确保框架可以正确扩展
+    left_frame.columnconfigure(0, weight=1)
+    right_frame.columnconfigure(0, weight=1)
+    
+    # === 左侧栏 ===
+    left_current_row = 0
+    
     # 端口管理部分
-    port_section = ttk.LabelFrame(main_frame, text="")
-    port_section.grid(row=current_row, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
+    port_section = ttk.LabelFrame(left_frame, text="")
+    port_section.grid(row=left_current_row, column=0, padx=5, pady=5, sticky="ew")
     widgets_to_translate.append({"widget": port_section, "key": "port_section_label", "property": "text"})
     
     # 确保端口部分的内容可以水平扩展
@@ -635,35 +670,37 @@ def build_gui(root: tk.Tk):
     widgets_to_translate.append({"widget": lbl_port, "key": "port_label"})
     
     entry_port = ttk.Entry(port_section, textvariable=port_entry_var, width=8)
-    entry_port.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+    entry_port.grid(row=0, column=1, padx=5, pady=5, sticky="w")
     
-    lbl_port_desc = ttk.Label(port_section, text="")
+    lbl_port_desc = ttk.Label(port_section, text="", wraplength=200)
     lbl_port_desc.grid(row=1, column=0, columnspan=2, padx=5, pady=(0,5), sticky="w")
     widgets_to_translate.append({"widget": lbl_port_desc, "key": "port_input_description_lbl"})
     
+    # 自适应换行长度
+    def update_port_desc_wraplength(event=None):
+        if lbl_port_desc.winfo_exists():
+            width = port_section.winfo_width() - 20
+            if width > 100:
+                lbl_port_desc.config(wraplength=width)
+    
+    port_section.bind("<Configure>", update_port_desc_wraplength)
+    
     btn_query = ttk.Button(port_section, text="", command=query_port_and_display_pids_gui)
-    btn_query.grid(row=0, column=2, rowspan=2, padx=5, pady=5, sticky="ns")
+    btn_query.grid(row=0, column=2, rowspan=2, padx=5, pady=5, sticky="ne")
     widgets_to_translate.append({"widget": btn_query, "key": "query_pids_btn"})
     
-    current_row += 1
+    left_current_row += 1
 
-    # PID管理部分 - 包括列表和自定义PID输入
-    pid_frame = ttk.Frame(main_frame)
-    pid_frame.grid(row=current_row, column=0, columnspan=2, padx=5, pady=5, sticky="nsew")
-    
-    # 让PID框架可以水平扩展
-    pid_frame.columnconfigure(0, weight=1)
-    
-    # 进程列表部分
-    pid_list_lbl_frame = ttk.LabelFrame(pid_frame, text=get_text("pids_on_port_label"))
-    pid_list_lbl_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+    # PID管理部分 - 减少高度
+    pid_list_lbl_frame = ttk.LabelFrame(left_frame, text=get_text("pids_on_port_label"))
+    pid_list_lbl_frame.grid(row=left_current_row, column=0, sticky="nsew", padx=5, pady=5)
     widgets_to_translate.append({"widget": pid_list_lbl_frame, "key": "pids_on_port_label", "property": "text"})
     
     # 让列表框架可以在其容器中扩展
     pid_list_lbl_frame.columnconfigure(0, weight=1)
     pid_list_lbl_frame.rowconfigure(0, weight=1)
     
-    pid_listbox_widget = tk.Listbox(pid_list_lbl_frame, height=4, exportselection=False)
+    pid_listbox_widget = tk.Listbox(pid_list_lbl_frame, height=3, exportselection=False)
     pid_listbox_widget.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
     
     # 添加滚动条
@@ -671,67 +708,89 @@ def build_gui(root: tk.Tk):
     scrollbar.grid(row=0, column=1, sticky="ns", padx=(0,5), pady=5)
     pid_listbox_widget.config(yscrollcommand=scrollbar.set)
     
-    # 按钮框架 - 用于存放"停止选中进程"和"终止指定PID"按钮
-    btn_frame = ttk.Frame(pid_frame)
-    btn_frame.grid(row=0, column=1, padx=5, pady=5, sticky="nsew")
+    left_current_row += 1
     
-    # 停止选中进程按钮
-    btn_stop_pid = ttk.Button(btn_frame, text="", command=stop_selected_pid_from_list_gui)
+    # 进程控制按钮区域（垂直排列）
+    pid_control_frame = ttk.Frame(left_frame)
+    pid_control_frame.grid(row=left_current_row, column=0, padx=5, pady=5, sticky="ew")
+    pid_control_frame.columnconfigure(0, weight=1)  # 让内部控件可以水平扩展
+    
+    # 停止选中进程按钮（第一行）
+    btn_stop_pid = ttk.Button(pid_control_frame, text="", command=stop_selected_pid_from_list_gui)
     btn_stop_pid.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
     widgets_to_translate.append({"widget": btn_stop_pid, "key": "stop_selected_pid_btn"})
     
-    # 自定义PID输入部分
-    custom_pid_frame = ttk.Frame(btn_frame)
-    custom_pid_frame.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
+    # 终止指定PID输入框和按钮（第二行）
+    kill_custom_frame = ttk.Frame(pid_control_frame)
+    kill_custom_frame.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
+    kill_custom_frame.columnconfigure(0, weight=0)  # 标签固定宽度
+    kill_custom_frame.columnconfigure(1, weight=1)  # 输入框可扩展
+    kill_custom_frame.columnconfigure(2, weight=0)  # 按钮固定宽度
     
-    lbl_custom_pid = ttk.Label(custom_pid_frame, text="")
+    lbl_custom_pid = ttk.Label(kill_custom_frame, text="")
     lbl_custom_pid.grid(row=0, column=0, padx=(0,5), pady=2, sticky="w")
     widgets_to_translate.append({"widget": lbl_custom_pid, "key": "kill_custom_pid_label"})
     
-    entry_custom_pid = ttk.Entry(custom_pid_frame, textvariable=custom_pid_entry_var, width=8)
+    entry_custom_pid = ttk.Entry(kill_custom_frame, textvariable=custom_pid_entry_var, width=6)
     entry_custom_pid.grid(row=0, column=1, padx=2, pady=2, sticky="ew")
     
-    btn_kill_custom_pid = ttk.Button(btn_frame, text="", command=kill_custom_pid_gui)
-    btn_kill_custom_pid.grid(row=2, column=0, padx=5, pady=5, sticky="ew")
+    btn_kill_custom_pid = ttk.Button(kill_custom_frame, text="", command=kill_custom_pid_gui, width=10)
+    btn_kill_custom_pid.grid(row=0, column=2, padx=5, pady=2, sticky="e")
     widgets_to_translate.append({"widget": btn_kill_custom_pid, "key": "kill_custom_pid_btn"})
     
-    # 设置pid_frame行的权重，但不要太大，保持紧凑
-    main_frame.rowconfigure(current_row, weight=1)
+    left_current_row += 1
     
-    current_row += 1
-    
-    # 启动选项部分
-    launch_options_frame = ttk.LabelFrame(main_frame, text="")
-    launch_options_frame.grid(row=current_row, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
+    # 移动启动选项部分到左侧底部
+    launch_options_frame = ttk.LabelFrame(left_frame, text="")
+    launch_options_frame.grid(row=left_current_row, column=0, padx=5, pady=5, sticky="ew")
     widgets_to_translate.append({"widget": launch_options_frame, "key": "launch_options_label", "property": "text"})
     
-    lbl_launch_options_note = ttk.Label(launch_options_frame, text="", wraplength=580)
+    lbl_launch_options_note = ttk.Label(launch_options_frame, text="", wraplength=300)
     lbl_launch_options_note.pack(fill=tk.X, padx=5, pady=(5, 8))
     widgets_to_translate.append({"widget": lbl_launch_options_note, "key": "launch_options_note_revised"})
-
-    btn_headed = ttk.Button(launch_options_frame, text="", command=start_headed_interactive_gui)
-    btn_headed.pack(fill=tk.X, padx=5, pady=3)
+    
+    # 自适应换行长度
+    def update_options_note_wraplength(event=None):
+        if lbl_launch_options_note.winfo_exists():
+            width = launch_options_frame.winfo_width() - 20
+            if width > 100:
+                lbl_launch_options_note.config(wraplength=width)
+    
+    launch_options_frame.bind("<Configure>", update_options_note_wraplength)
+    
+    # 水平排列启动按钮
+    launch_buttons_frame = ttk.Frame(launch_options_frame)
+    launch_buttons_frame.pack(fill=tk.X, padx=5, pady=3)
+    launch_buttons_frame.columnconfigure(0, weight=1)
+    launch_buttons_frame.columnconfigure(1, weight=1)
+    
+    btn_headed = ttk.Button(launch_buttons_frame, text="", command=start_headed_interactive_gui)
+    btn_headed.grid(row=0, column=0, padx=5, pady=3, sticky="ew")
     widgets_to_translate.append({"widget": btn_headed, "key": "launch_headed_interactive_btn"})
 
-    btn_headless_independent = ttk.Button(launch_options_frame, text="", command=start_headless_independent_gui)
-    btn_headless_independent.pack(fill=tk.X, padx=5, pady=3)
+    btn_headless_independent = ttk.Button(launch_buttons_frame, text="", command=start_headless_independent_gui)
+    btn_headless_independent.grid(row=0, column=1, padx=5, pady=3, sticky="ew")
     widgets_to_translate.append({"widget": btn_headless_independent, "key": "launch_headless_independent_btn"})
     
-    current_row += 1
-
     # 停止服务按钮
-    btn_stop_service = ttk.Button(main_frame, text="", command=stop_managed_service_gui)
-    btn_stop_service.grid(row=current_row, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
+    btn_stop_service = ttk.Button(launch_options_frame, text="", command=stop_managed_service_gui)
+    btn_stop_service.pack(fill=tk.X, padx=5, pady=3)
     widgets_to_translate.append({"widget": btn_stop_service, "key": "stop_gui_service_btn"})
     
-    current_row += 1
-
+    left_current_row += 1
+    
+    # 设置左侧栏中PID列表的权重较小
+    left_frame.rowconfigure(1, weight=1)  # PID列表行权重保持为1
+    
+    # === 右侧栏 ===
+    right_current_row = 0
+    
     # 状态区域
-    status_area_frame = ttk.LabelFrame(main_frame, text="")
-    status_area_frame.grid(row=current_row, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
+    status_area_frame = ttk.LabelFrame(right_frame, text="")
+    status_area_frame.grid(row=right_current_row, column=0, padx=5, pady=5, sticky="ew")
     widgets_to_translate.append({"widget": status_area_frame, "key": "status_label", "property": "text"})
     
-    lbl_status_val = ttk.Label(status_area_frame, textvariable=process_status_text_var, wraplength=550)
+    lbl_status_val = ttk.Label(status_area_frame, textvariable=process_status_text_var, wraplength=180)
     lbl_status_val.pack(fill=tk.X, padx=5, pady=5)
     
     # 动态调整状态标签的自动换行宽度
@@ -743,29 +802,23 @@ def build_gui(root: tk.Tk):
     
     status_area_frame.bind("<Configure>", rewrap_status_label)
     
-    current_row += 1
+    right_current_row += 1
 
-    # 输出日志区域 - 应该能够根据窗口大小调整
-    output_log_area_frame = ttk.LabelFrame(main_frame, text="")
-    output_log_area_frame.grid(row=current_row, column=0, columnspan=2, padx=5, pady=5, sticky="nsew")
+    # 输出日志区域 - 占据右侧主要空间
+    output_log_area_frame = ttk.LabelFrame(right_frame, text="")
+    output_log_area_frame.grid(row=right_current_row, column=0, padx=5, pady=5, sticky="nsew")
     widgets_to_translate.append({"widget": output_log_area_frame, "key": "output_label", "property": "text"})
     
     # 让输出日志区域可以扩展
     output_log_area_frame.columnconfigure(0, weight=1)
     output_log_area_frame.rowconfigure(0, weight=1)
     
-    output_scrolled_text = scrolledtext.ScrolledText(output_log_area_frame, height=10, wrap=tk.WORD, state=tk.DISABLED)
+    output_scrolled_text = scrolledtext.ScrolledText(output_log_area_frame, height=15, width=20, wrap=tk.WORD, state=tk.DISABLED)
     output_scrolled_text.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
     managed_process_info["output_area"] = output_scrolled_text
     
-    current_row += 1
-    
-    # 输出日志区域应该随窗口大小变化而变化，所以这行需要较大的权重
-    main_frame.rowconfigure(current_row - 1, weight=3)
-    
-    # 设置主框架各列的权重
-    main_frame.columnconfigure(0, weight=1)
-    main_frame.columnconfigure(1, weight=0)
+    # 设置右侧输出区域权重较大，使其占据主要空间
+    right_frame.rowconfigure(right_current_row, weight=5)
 
     update_all_ui_texts_gui() # 设置初始文本
 
