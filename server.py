@@ -111,14 +111,14 @@ model_list_fetch_event = asyncio.Event() # 用于指示模型列表是否已获�
 
 # 新增: 模型切换相关的全局变量
 current_ai_studio_model_id: Optional[str] = None  # 当前在AI Studio页面上设置的模型ID (可以是名称或ID)
-model_switching_lock: Lock = Lock()  # 模型切换操作的锁
+model_switching_lock: Optional[Lock] = None  # 模型切换操作的锁
 
 # 新增: 模型排除列表
 excluded_model_ids: Set[str] = set()
 EXCLUDED_MODELS_FILENAME = "excluded_models.txt" # 排除列表文件名
 
-request_queue: Queue = Queue()
-processing_lock: Lock = Lock()
+request_queue: Optional[Queue] = None
+processing_lock: Optional[Lock] = None
 worker_task: Optional[Task] = None
 
 logger = logging.getLogger("AIStudioProxyServer") # server.py 使用的 logger
@@ -974,10 +974,12 @@ async def lifespan(app_param: FastAPI): # app_param 未使用
     global playwright_manager, browser_instance, page_instance, worker_task
     global is_playwright_ready, is_browser_connected, is_page_ready, is_initializing
     global logger, log_ws_manager, model_list_fetch_event, current_ai_studio_model_id, excluded_model_ids
+    global request_queue, processing_lock, model_switching_lock # 将这些也声明为 global 以便赋值
 
     true_original_stdout, true_original_stderr = sys.stdout, sys.stderr
     initial_stdout_before_redirect, initial_stderr_before_redirect = sys.stdout, sys.stderr
 
+    # 确保 log_ws_manager 在日志设置前初始化
     if log_ws_manager is None:
         log_ws_manager = WebSocketConnectionManager()
 
@@ -988,6 +990,12 @@ async def lifespan(app_param: FastAPI): # app_param 未使用
         log_level_name=log_level_env,
         redirect_print_str=redirect_print_env
     )
+
+    # 在此处初始化 asyncio 同步原语，以确保它们绑定到正确的事件循环
+    request_queue = asyncio.Queue()
+    processing_lock = asyncio.Lock()
+    model_switching_lock = asyncio.Lock()
+    model_list_fetch_event = asyncio.Event()
 
     if PLAYWRIGHT_PROXY_SETTINGS:
         logger.info(f"--- 代理配置检测到 (由 server.py 的 lifespan 记录) ---")
@@ -2106,13 +2114,13 @@ async def _process_request_refactored(
             proceed_with_clear_clicks = False
             try:
                 # Direct call with timeout
-                await expect_async(clear_chat_button).to_be_enabled(timeout=5000) # Increased timeout slightly
+                await expect_async(clear_chat_button).to_be_enabled(timeout=3000) # Increased timeout slightly
                 proceed_with_clear_clicks = True
             except Exception as e:
                 is_new_chat_url = '/prompts/new_chat' in page.url.rstrip('/')
                 if is_new_chat_url:
                     # print(f"[{req_id}] Info: 清空按钮在新聊天页未就绪 (预期)。")
-                    logger.info(f"[{req_id}] 清空按钮在新聊天页未就绪 (预期)。") # logger
+                    logger.info(f"[{req_id}] 清空按钮不可用 (预期)。") # logger
                 else:
                     # print(f"[{req_id}] ⚠️ 警告: 等待清空按钮失败: {e}。跳过点击。")
                     logger.warning(f"[{req_id}] 等待清空按钮失败: {e}。跳过点击。") # logger

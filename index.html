@@ -10,31 +10,36 @@
     <style>
         /* --- Modernized M3-Inspired Styles --- */
         :root {
-            /* Material 3 基础调色板 */
-            --primary-rgb: 52, 110, 248;  /* #346EF8 - 主色调 */
+            /* Material 3 宇宙极光主题 - 亮色调色板 (更柔和版) */
+            --primary-rgb: 85, 77, 175;  /* #554DAF - 柔和深蓝紫色 */
             --on-primary-rgb: 255, 255, 255;  /* 在主色上的文本 */
-            --primary-container-rgb: 216, 226, 255;  /* #D8E2FF - 主色容器 */
-            --on-primary-container-rgb: 0, 26, 66;  /* #001A42 - 主色容器上的文本 */
+            --primary-container-rgb: 231, 229, 252;  /* #E7E5FC - 柔和淡紫色容器 */
+            --on-primary-container-rgb: 31, 26, 70;  /* #1F1A46 - 主色容器上的文本 */
             
-            --secondary-rgb: 88, 94, 113;  /* #585E71 - 次要色 */
+            --secondary-rgb: 105, 81, 146;  /* #695192 - 柔和紫罗兰色 */
             --on-secondary-rgb: 255, 255, 255;  /* 次色上的文本 */
-            --secondary-container-rgb: 221, 226, 249;  /* #DDE2F9 - 次色容器 */
-            --on-secondary-container-rgb: 21, 27, 44;  /* #151B2C - 次色容器上的文本 */
+            --secondary-container-rgb: 238, 230, 255;  /* #EEE6FF - 更淡的紫色容器 */
+            --on-secondary-container-rgb: 45, 32, 70;  /* #2D2046 - 次色容器上的文本 */
             
-            --surface-rgb: 254, 251, 255;  /* #FEFBFF - 表面 */
-            --on-surface-rgb: 26, 28, 30;  /* #1A1C1E - 表面上的文本 */
-            --surface-variant-rgb: 225, 226, 236;  /* #E1E2EC - 表面变体 */
-            --on-surface-variant-rgb: 68, 71, 79;  /* #44474F - 表面变体上的文本 */
+            --tertiary-rgb: 76, 173, 188;  /* #4CADBC - 柔和青蓝色 */
+            --on-tertiary-rgb: 0, 55, 62;  /* #00373E - 第三色上的文本 */
+            --tertiary-container-rgb: 220, 242, 246;  /* #DCF2F6 - 淡青蓝色容器 */
+            --on-tertiary-container-rgb: 8, 76, 84;  /* #084C54 - 第三色容器上的文本 */
             
-            --error-rgb: 186, 26, 26;  /* #BA1A1A - 错误色 */
+            --surface-rgb: 249, 249, 252;  /* #F9F9FC - 更中性的表面 */
+            --on-surface-rgb: 28, 30, 34;  /* #1C1E22 - 表面上的文本 */
+            --surface-variant-rgb: 232, 231, 242;  /* #E8E7F2 - 更柔和的表面变体 */
+            --on-surface-variant-rgb: 73, 74, 90;  /* #494A5A - 表面变体上的文本 */
+            
+            --error-rgb: 178, 69, 122;  /* #B2457A - 柔和的错误色 */
             --on-error-rgb: 255, 255, 255;  /* 错误色上的文本 */
-            --error-container-rgb: 255, 218, 214;  /* #FFDAD6 - 错误容器 */
-            --on-error-container-rgb: 65, 0, 2;  /* #410002 - 错误容器上的文本 */
+            --error-container-rgb: 255, 228, 238;  /* #FFE4EE - 更淡的错误容器 */
+            --on-error-container-rgb: 75, 13, 49;  /* #4B0D31 - 错误容器上的文本 */
             
-            --outline-rgb: 116, 119, 127;  /* #74777F - 轮廓线 */
+            --outline-rgb: 128, 127, 147;  /* #807F93 - 柔和轮廓线 */
             
             /* 亮色主题变量 */
-            --bg-color: #f7f9fc;  /* 中性浅色背景 */
+            --bg-color: #f5f5fa;  /* 更中性的淡色背景 */
             --container-bg: rgb(var(--surface-rgb));  /* 表面 */
             --text-color: rgb(var(--on-surface-rgb));  /* 文本颜色 */
             
@@ -62,21 +67,21 @@
             --error-msg-bg: var(--error-container);
             --error-msg-text: var(--on-error-container);
             
-            --border-color: rgba(var(--outline-rgb), 0.8);  /* 边框颜色 */
+            --border-color: rgba(var(--outline-rgb), 0.7);  /* 边框颜色 */
             --input-bg: var(--container-bg);  /* 输入框背景 */
-            --input-border: rgba(var(--outline-rgb), 0.5);  /* 输入框边框 */
+            --input-border: rgba(var(--outline-rgb), 0.4);  /* 输入框边框 */
             --input-focus-border: var(--primary-color);  /* 输入框聚焦边框 */
             --input-focus-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.1);  /* 聚焦阴影 */
             
             --button-bg: var(--primary-color);  /* 按钮背景 */
             --button-text: var(--on-primary);  /* 按钮文本 */
-            --button-hover-bg: rgb(28, 85, 230);  /* 按钮悬停背景 */
+            --button-hover-bg: rgb(71, 64, 150);  /* 按钮悬停背景 - 深蓝色 */
             --button-disabled-bg: rgba(var(--on-surface-rgb), 0.12);  /* 禁用按钮背景 */
             --button-disabled-text: rgba(var(--on-surface-rgb), 0.38);  /* 禁用按钮文本 */
             
             --clear-button-bg: rgba(var(--secondary-rgb), 0.9);  /* 清除按钮背景 */
             --clear-button-text: var(--on-secondary);  /* 清除按钮文本 */
-            --clear-button-hover-bg: rgb(70, 76, 95);  /* 清除按钮悬停背景 */
+            --clear-button-hover-bg: rgb(92, 71, 128);  /* 清除按钮悬停背景 - 深紫色 */
             
             --sidebar-bg: rgba(var(--surface-rgb), 0.95);  /* 侧边栏背景 */
             --sidebar-border: rgba(var(--outline-rgb), 0.3);  /* 侧边栏边框 */
@@ -85,8 +90,8 @@
             --icon-button-hover-bg: rgba(var(--primary-rgb), 0.08);
             --icon-button-color: rgb(var(--on-surface-variant-rgb));
             
-            --log-terminal-bg: #1e1e1e;  /* 日志终端背景 */
-            --log-terminal-text: #d4d4d4;  /* 日志终端文本 */
+            --log-terminal-bg: #232043;  /* 日志终端背景 - 深蓝紫色但更柔和 */
+            --log-terminal-text: #d8d8e8;  /* 日志终端文本 - 更柔和的淡紫白色 */
             
             --theme-toggle-hover-bg: rgba(var(--secondary-rgb), 0.08);
             --theme-toggle-color: var(--icon-button-color);
@@ -103,9 +108,9 @@
             --border-radius-xl: 28px;
             
             /* 阴影 */
-            --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
-            --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.05), 0 2px 4px rgba(0, 0, 0, 0.08);
-            --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.03), 0 4px 6px rgba(0, 0, 0, 0.05);
+            --shadow-sm: 0 1px 3px rgba(85, 77, 175, 0.08), 0 1px 2px rgba(85, 77, 175, 0.04);
+            --shadow-md: 0 4px 6px rgba(85, 77, 175, 0.06), 0 2px 4px rgba(85, 77, 175, 0.06);
+            --shadow-lg: 0 10px 15px rgba(85, 77, 175, 0.04), 0 4px 6px rgba(85, 77, 175, 0.03);
             
             /* 尺寸变量 */
             --sidebar-width: 380px;
@@ -118,32 +123,37 @@
 
         /* 深色模式调色板 */
         html.dark-mode {
-            /* 深色主题 Material 3 调色板 */
-            --primary-rgb: 173, 198, 255;
-            --on-primary-rgb: 0, 46, 104;
-            --primary-container-rgb: 24, 83, 181;
-            --on-primary-container-rgb: 216, 226, 255;
+            /* 深色主题 宇宙极光 调色板 (更柔和版) */
+            --primary-rgb: 161, 153, 219;  /* #A199DB - 柔和紫蓝色 */
+            --on-primary-rgb: 38, 33, 80;  /* #262150 - 深蓝紫色 */
+            --primary-container-rgb: 60, 53, 113;  /* #3C3571 - 柔和深蓝紫色容器 */
+            --on-primary-container-rgb: 231, 229, 252;  /* #E7E5FC - 柔和淡紫色 */
             
-            --secondary-rgb: 188, 194, 217;
-            --on-secondary-rgb: 42, 48, 66;
-            --secondary-container-rgb: 64, 70, 89;
-            --on-secondary-container-rgb: 221, 226, 249;
+            --secondary-rgb: 184, 171, 216;  /* #B8ABD8 - 柔和的淡紫蓝色 */
+            --on-secondary-rgb: 47, 36, 71;  /* #2F2447 - 深紫色 */
+            --secondary-container-rgb: 70, 57, 98;  /* #463962 - 中深紫色 */
+            --on-secondary-container-rgb: 238, 230, 255;  /* #EEE6FF - 更淡的紫色 */
             
-            --surface-rgb: 28, 28, 30;
-            --on-surface-rgb: 227, 226, 230;
-            --surface-variant-rgb: 68, 71, 79;
-            --on-surface-variant-rgb: 196, 198, 207;
+            --tertiary-rgb: 130, 200, 211;  /* #82C8D3 - 柔和青蓝色 */
+            --on-tertiary-rgb: 10, 73, 82;  /* #0A4952 - 深青色 */
+            --tertiary-container-rgb: 15, 86, 96;  /* #0F5660 - 中深青色 */
+            --on-tertiary-container-rgb: 195, 241, 252;  /* #C3F1FC - 淡青色 */
             
-            --error-rgb: 255, 180, 171;
-            --on-error-rgb: 105, 0, 5;
-            --error-container-rgb: 147, 0, 10;
-            --on-error-container-rgb: 255, 218, 214;
+            --surface-rgb: 28, 26, 46;  /* #1C1A2E - 更柔和的深蓝紫黑色 */
+            --on-surface-rgb: 231, 230, 245;  /* #E7E6F5 - 淡紫白色 */
+            --surface-variant-rgb: 68, 66, 86;  /* #444256 - 柔和的中深紫色 */
+            --on-surface-variant-rgb: 214, 212, 232;  /* #D6D4E8 - 柔和的淡紫色 */
             
-            --outline-rgb: 142, 144, 153;
+            --error-rgb: 231, 162, 195;  /* #E7A2C3 - 更柔和的淡粉色 */
+            --on-error-rgb: 72, 19, 50;  /* #481332 - 深粉色 */
+            --error-container-rgb: 97, 32, 67;  /* #612043 - 中深粉色 */
+            --on-error-container-rgb: 255, 228, 238;  /* #FFE4EE - 更淡的粉色 */
+            
+            --outline-rgb: 147, 145, 169;  /* #9391A9 - 柔和的中灰紫色 */
             
             /* 深色主题变量 */
-            --bg-color: #121212;  /* 深色背景 */
-            --container-bg: #1c1c1e;  /* 表面 */
+            --bg-color: #18172a;  /* 更柔和的深蓝紫黑色背景 */
+            --container-bg: #1c1a2e;  /* 更柔和的深蓝紫色表面 */
             --text-color: rgb(var(--on-surface-rgb));
             
             --primary-color: rgb(var(--primary-rgb));
@@ -172,11 +182,19 @@
             --input-bg: rgba(var(--surface-rgb), 0.8);
             --input-border: rgba(var(--outline-rgb), 0.3);
             
-            --button-hover-bg: rgb(190, 210, 255);
+            --button-hover-bg: rgb(178, 171, 228);  /* 更柔和的淡紫蓝色 */
             
-            --sidebar-bg: #1e1e1e;
+            --sidebar-bg: #201e36;  /* 更柔和的深蓝紫色 */
             
-            --card-shadow: 0 4px 6px rgba(0, 0, 0, 0.25), 0 5px 7px rgba(0, 0, 0, 0.22);
+            --log-terminal-bg: #16152c;  /* 更柔和的深蓝紫黑色 */
+            --log-terminal-text: #d8d7ee;  /* 更柔和的淡紫色文本 */
+            
+            --card-shadow: 0 4px 6px rgba(0, 0, 0, 0.25), 0 5px 7px rgba(0, 0, 0, 0.18);
+            
+            /* 阴影 */
+            --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(161, 153, 219, 0.05);
+            --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.22), 0 2px 4px rgba(161, 153, 219, 0.06);
+            --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.25), 0 4px 6px rgba(161, 153, 219, 0.08);
         }
 
         *, *::before, *::after {
@@ -729,6 +747,27 @@
             border-color: var(--primary-color);
         }
 
+        #themeToggleButton .theme-icon {
+            width: 16px;
+            height: 16px;
+        }
+
+        html:not(.dark-mode) #darkModeIcon {
+            display: block;
+        }
+
+        html:not(.dark-mode) #lightModeIcon {
+            display: none;
+        }
+
+        html.dark-mode #darkModeIcon {
+            display: none;
+        }
+
+        html.dark-mode #lightModeIcon {
+            display: block;
+        }
+
         /* --- 日志区域样式增强 --- */
         #log-area {
             flex-grow: 1;
@@ -1181,14 +1220,7 @@
             position: relative;
         }
 
-        #themeToggleButton::before {
-            content: '🌙'; /* Default for light mode button (to switch to dark) */
-            font-size: 0.9em;
-        }
-
-        html.dark-mode #themeToggleButton::before {
-            content: '☀️'; /* For dark mode button (to switch to light) */
-        }
+        /* 删除之前使用emoji的样式，使用SVG图标替代 */
     </style>
 </head>
 <body>
@@ -1220,7 +1252,25 @@
                     </svg>
                     服务器信息
                 </button>
-                <button id="themeToggleButton" title="切换主题">深色</button>
+                <button id="themeToggleButton" title="切换主题">
+                    <svg id="darkModeIcon" class="theme-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M12 3a1 1 0 0 1 1 1v1a1 1 0 1 1-2 0V4a1 1 0 0 1 1-1Z" fill="currentColor"/>
+                        <path d="M12 19a1 1 0 0 1 1 1v1a1 1 0 1 1-2 0v-1a1 1 0 0 1 1-1Z" fill="currentColor"/>
+                        <path d="M20 12a1 1 0 0 1 1 1 1 1 0 1 1-2 0 1 1 0 0 1 1-1Z" fill="currentColor"/>
+                        <path d="M4 12a1 1 0 0 1 1 1 1 1 0 1 1-2 0 1 1 0 0 1 1-1Z" fill="currentColor"/>
+                        <path d="M17.7 6.3a1 1 0 0 1 1.4 0 1 1 0 0 1 0 1.4l-.7.7a1 1 0 0 1-1.4-1.4l.7-.7Z" fill="currentColor"/>
+                        <path d="M6.3 17.7a1 1 0 0 1 1.4 0 1 1 0 0 1 0 1.4l-.7.7a1 1 0 0 1-1.4-1.4l.7-.7Z" fill="currentColor"/>
+                        <path d="M17.7 17.7a1 1 0 0 1 0 1.4l-.7.7a1 1 0 0 1-1.4-1.4l.7-.7a1 1 0 0 1 1.4 0Z" fill="currentColor"/>
+                        <path d="M6.3 6.3a1 1 0 0 1 0 1.4l-.7.7A1 1 0 0 1 4.2 7l.7-.7a1 1 0 0 1 1.4 0Z" fill="currentColor"/>
+                        <path d="M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10Z" fill="currentColor"/>
+                    </svg>
+                    <svg id="lightModeIcon" class="theme-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M12 18.5c3.59 0 6.5-2.91 6.5-6.5S15.59 5.5 12 5.5 5.5 8.41 5.5 12s2.91 6.5 6.5 6.5Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" fill="currentColor"/>
+                    </svg>
+                    <span class="theme-text">深色</span>
+                </button>
             </div>
 
             <!-- View Container -->
@@ -1440,11 +1490,11 @@
         function applyTheme(theme) {
             if (theme === 'dark') {
                 htmlRoot.classList.add('dark-mode');
-                themeToggleButton.textContent = '浅色';
+                document.querySelector('#themeToggleButton .theme-text').textContent = '浅色';
                 themeToggleButton.title = '切换到亮色模式';
             } else {
                 htmlRoot.classList.remove('dark-mode');
-                themeToggleButton.textContent = '深色';
+                document.querySelector('#themeToggleButton .theme-text').textContent = '深色';
                 themeToggleButton.title = '切换到暗色模式';
             }
         }
