@@ -92,6 +92,8 @@
             
             --log-terminal-bg: #232043;  /* 日志终端背景 - 深蓝紫色但更柔和 */
             --log-terminal-text: #d8d8e8;  /* 日志终端文本 - 更柔和的淡紫白色 */
+            --log-status-text: #f0f0ff;  /* 日志状态文本 - 浅色模式下使用更亮的白色 */
+            --log-status-error: #ff9db3;  /* 日志状态错误文本 - 浅色模式下的错误颜色 */
             
             --theme-toggle-hover-bg: rgba(var(--secondary-rgb), 0.08);
             --theme-toggle-color: var(--icon-button-color);
@@ -188,6 +190,8 @@
             
             --log-terminal-bg: #16152c;  /* 更柔和的深蓝紫黑色 */
             --log-terminal-text: #d8d7ee;  /* 更柔和的淡紫色文本 */
+            --log-status-text: #a8a7c8;  /* 日志状态文本 - 深色模式下使用中等亮度的紫色 */
+            --log-status-error: #ff8aa5;  /* 日志状态错误文本 - 深色模式下的错误颜色 */
             
             --card-shadow: 0 4px 6px rgba(0, 0, 0, 0.25), 0 5px 7px rgba(0, 0, 0, 0.18);
             
@@ -841,11 +845,15 @@
             font-size: 0.85em;
             margin-top: 0;
             padding: 10px;
-            color: var(--system-msg-text);
+            color: var(--log-status-text); /* 使用主题相关的变量 */
             flex-shrink: 0;
             background-color: var(--log-terminal-bg);
             border-top: 1px solid rgba(var(--outline-rgb), 0.3);
             text-align: center;
+        }
+
+        .log-status.error-status {
+            color: var(--log-status-error);
         }
 
         /* --- View Container for Chat/Server Info --- */
@@ -1618,7 +1626,12 @@
         function updateLogStatus(message, isError = false) {
             if (logStatusElement) {
                 logStatusElement.textContent = `[Log Status] ${message}`;
-                logStatusElement.style.color = isError ? 'var(--error-msg-text)' : 'var(--system-msg-text)';
+                // 移除内联样式设置，改用CSS类控制颜色
+                if (isError) {
+                    logStatusElement.classList.add('error-status');
+                } else {
+                    logStatusElement.classList.remove('error-status');
+                }
             }
             console.log(`Log Status: ${message}`);
         }
