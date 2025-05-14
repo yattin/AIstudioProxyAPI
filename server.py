@@ -126,6 +126,10 @@ request_queue: Optional[Queue] = None
 processing_lock: Optional[Lock] = None
 worker_task: Optional[Task] = None
 
+# 新增: 页面参数缓存及其锁
+page_params_cache: Dict[str, Any] = {}
+params_cache_lock: Optional[Lock] = None
+
 logger = logging.getLogger("AIStudioProxyServer") # server.py 使用的 logger
 log_ws_manager = None # 将在 lifespan 中初始化
 
@@ -1026,7 +1030,7 @@ async def lifespan(app_param: FastAPI): # app_param 未使用
     global playwright_manager, browser_instance, page_instance, worker_task
     global is_playwright_ready, is_browser_connected, is_page_ready, is_initializing
     global logger, log_ws_manager, model_list_fetch_event, current_ai_studio_model_id, excluded_model_ids
-    global request_queue, processing_lock, model_switching_lock # 将这些也声明为 global 以便赋值
+    global request_queue, processing_lock, model_switching_lock, page_params_cache, params_cache_lock # 将这些也声明为 global 以便赋值
 
     true_original_stdout, true_original_stderr = sys.stdout, sys.stderr
     initial_stdout_before_redirect, initial_stderr_before_redirect = sys.stdout, sys.stderr
@@ -1048,6 +1052,7 @@ async def lifespan(app_param: FastAPI): # app_param 未使用
     processing_lock = asyncio.Lock()
     model_switching_lock = asyncio.Lock()
     model_list_fetch_event = asyncio.Event()
+    params_cache_lock = asyncio.Lock() # 初始化参数缓存锁
 
     if PLAYWRIGHT_PROXY_SETTINGS:
         logger.info(f"--- 代理配置检测到 (由 server.py 的 lifespan 记录) ---")
@@ -1985,6 +1990,7 @@ async def _process_request_refactored(
     result_future: Future
 ) -> Optional[Event]: # Return completion event only for streaming
     """Refactored core logic for processing a single request."""
+    model_actually_switched_in_current_api_call = False # Flag to track if model was switched in this specific API call
     logger.info(f"[{req_id}] (Refactored Process) 开始处理请求...") # logger
     logger.info(f"[{req_id}]   请求参数 - Model: {request.model}, Stream: {request.stream}")
     logger.info(f"[{req_id}]   请求参数 - Temperature: {request.temperature}")
@@ -2080,8 +2086,10 @@ async def _process_request_refactored(
                     
                     if switch_success:
                         current_ai_studio_model_id = model_id_to_use # 更新全局为目标模型 ID
+                        model_actually_switched_in_current_api_call = True #  记录模型切换发生
                         logger.info(f"[{req_id}] ✅ 模型切换成功。全局模型状态已更新为: {current_ai_studio_model_id}")
                     else:
+                        # model_actually_switched_in_current_api_call 保持 False
                         logger.warning(f"[{req_id}] ❌ 模型切换至 {model_id_to_use} 失败 (AI Studio 未接受或覆盖了更改)。")
                         
                         # 确定切换失败后 localStorage 中的实际模型
@@ -2113,6 +2121,27 @@ async def _process_request_refactored(
                         )
                 else:
                     logger.info(f"[{req_id}] 获取锁后发现模型已是目标模型 {current_ai_studio_model_id}，无需切换")
+
+        # --- Parameter Cache Invalidation (after model switching, before param adjustments) ---
+        async with params_cache_lock:
+            cached_model_for_params = page_params_cache.get("last_known_model_id_for_params")
+            # Invalidate if:
+            # 1. A model switch successfully occurred in *this specific API call*.
+            # 2. Or, the current model on the page (current_ai_studio_model_id) doesn't match what the cache has stored
+            #    (and current_ai_studio_model_id is not None, meaning we know what the current model is).
+            if model_actually_switched_in_current_api_call or \
+               (current_ai_studio_model_id is not None and current_ai_studio_model_id != cached_model_for_params):
+                
+                action_taken = "Invalidating" if page_params_cache else "Initializing" # More descriptive log
+                logger.info(f"[{req_id}] {action_taken} parameter cache. Reason: Model context changed (switched this call: {model_actually_switched_in_current_api_call}, current model: {current_ai_studio_model_id}, cache model: {cached_model_for_params}).")
+                
+                page_params_cache.clear() # Clear all previous parameter entries
+                if current_ai_studio_model_id: # If we have a definite current model ID
+                    page_params_cache["last_known_model_id_for_params"] = current_ai_studio_model_id
+                # If current_ai_studio_model_id is None here, the cache remains fully empty, including last_known_model_id_for_params.
+                # This implies next parameter settings will fetch fresh values from the page.
+            else:
+                logger.debug(f"[{req_id}] Parameter cache for model '{cached_model_for_params}' remains valid (current model: '{current_ai_studio_model_id}', switched this call: {model_actually_switched_in_current_api_call}).")
 
         # --- 1. Validation & Prompt Prep --- (Use logger for validation message)
         try: validate_chat_request(request.messages, req_id)
@@ -2189,218 +2218,213 @@ async def _process_request_refactored(
             await save_error_snapshot(f"clear_chat_unexpected_{req_id}")
         check_client_disconnected("After Clear Chat Logic: ")
 
-        # --- 新增: 调整温度设置 ---
+        # --- 新增: 调整温度设置 (集成参数缓存) ---
         if request.temperature is not None and page and not page.is_closed():
-            logger.info(f"[{req_id}] (Refactored Process) 检查并调整温度设置...")
-            requested_temp = request.temperature
-            
-            # 将温度限制在 [0.0, 2.0] 范围内
-            clamped_temp = max(0.0, min(2.0, requested_temp))
-            if clamped_temp != requested_temp:
-                logger.warning(f"[{req_id}] 请求的温度 {requested_temp} 超出范围 [0, 2]，已调整为 {clamped_temp}")
-            
-            temp_input_locator = page.locator(TEMPERATURE_INPUT_SELECTOR)
-            try:
-                await expect_async(temp_input_locator).to_be_visible(timeout=5000)
-                check_client_disconnected("温度调整 - 输入框可见后: ")
-                
-                current_temp_str = await temp_input_locator.input_value(timeout=3000)
-                check_client_disconnected("温度调整 - 读取输入框值后: ")
-                
-                current_temp_float = float(current_temp_str)
-                logger.info(f"[{req_id}] 页面当前温度: {current_temp_float}, 请求调整后温度: {clamped_temp}")
+            async with params_cache_lock:
+                logger.info(f"[{req_id}] (Refactored Process) 检查并调整温度设置...")
+                requested_temp = request.temperature
+                clamped_temp = max(0.0, min(2.0, requested_temp)) # 温度限制在 [0.0, 2.0]
+                if clamped_temp != requested_temp:
+                    logger.warning(f"[{req_id}] 请求的温度 {requested_temp} 超出范围 [0, 2]，已调整为 {clamped_temp}")
 
-                # 使用容差比较浮点数
-                if abs(current_temp_float - clamped_temp) > 0.001: 
-                    logger.info(f"[{req_id}] 页面温度 ({current_temp_float}) 与请求温度 ({clamped_temp}) 不同，正在更新...")
-                    await temp_input_locator.fill(str(clamped_temp), timeout=5000)
-                    check_client_disconnected("温度调整 - 填充输入框后: ")
-                    
-                    # 验证更改 (可选但推荐)
-                    await asyncio.sleep(0.1) # 短暂等待值更新
-                    new_temp_str = await temp_input_locator.input_value(timeout=3000)
-                    new_temp_float = float(new_temp_str)
-                    if abs(new_temp_float - clamped_temp) < 0.001:
-                        logger.info(f"[{req_id}] ✅ 温度已成功更新为: {new_temp_float}")
-                    else:
-                        logger.warning(f"[{req_id}] ⚠️ 温度更新后验证失败。页面显示: {new_temp_float}, 期望: {clamped_temp}")
+                cached_temp = page_params_cache.get("temperature")
+                if cached_temp is not None and abs(cached_temp - clamped_temp) < 0.001:
+                    logger.info(f"[{req_id}] 温度 ({clamped_temp}) 与缓存值 ({cached_temp}) 一致。跳过页面交互。")
                 else:
-                    logger.info(f"[{req_id}] 页面温度 ({current_temp_float}) 与请求温度 ({clamped_temp}) 一致或在容差范围内，无需更改。")
+                    logger.info(f"[{req_id}] 请求温度 ({clamped_temp}) 与缓存值 ({cached_temp}) 不一致或缓存中无值。需要与页面交互。")
+                    temp_input_locator = page.locator(TEMPERATURE_INPUT_SELECTOR)
+                    try:
+                        await expect_async(temp_input_locator).to_be_visible(timeout=5000)
+                        check_client_disconnected("温度调整 - 输入框可见后: ")
+                        
+                        current_temp_str = await temp_input_locator.input_value(timeout=3000)
+                        check_client_disconnected("温度调整 - 读取输入框值后: ")
+                        current_temp_float = float(current_temp_str)
+                        logger.info(f"[{req_id}] 页面当前温度: {current_temp_float}, 请求调整后温度: {clamped_temp}")
 
-            except ValueError as ve:
-                logger.error(f"[{req_id}] 转换温度值为浮点数时出错: '{current_temp_str if 'current_temp_str' in locals() else '未知值'}'. 错误: {ve}")
-                await save_error_snapshot(f"temperature_value_error_{req_id}")
-            except PlaywrightAsyncError as pw_err:
-                logger.error(f"[{req_id}] ❌ 操作温度输入框时发生Playwright错误: {pw_err}")
-                await save_error_snapshot(f"temperature_playwright_error_{req_id}")
-                # 此处可以选择是否将此视为请求的致命错误并抛出HTTPException
-            except ClientDisconnectedError:
-                logger.info(f"[{req_id}] 客户端在调整温度时断开连接。")
-                raise # 重新抛出以确保被外部捕获
-            except Exception as e_temp:
-                logger.exception(f"[{req_id}] ❌ 调整温度时发生未知错误")
-                await save_error_snapshot(f"temperature_unknown_error_{req_id}")
-            
+                        if abs(current_temp_float - clamped_temp) < 0.001:
+                            logger.info(f"[{req_id}] 页面当前温度 ({current_temp_float}) 与请求温度 ({clamped_temp}) 一致。更新缓存并跳过写入。")
+                            page_params_cache["temperature"] = current_temp_float
+                        else:
+                            logger.info(f"[{req_id}] 页面温度 ({current_temp_float}) 与请求温度 ({clamped_temp}) 不同，正在更新...")
+                            await temp_input_locator.fill(str(clamped_temp), timeout=5000)
+                            check_client_disconnected("温度调整 - 填充输入框后: ")
+                            
+                            await asyncio.sleep(0.1) # 短暂等待值更新
+                            new_temp_str = await temp_input_locator.input_value(timeout=3000)
+                            new_temp_float = float(new_temp_str)
+                            if abs(new_temp_float - clamped_temp) < 0.001:
+                                logger.info(f"[{req_id}] ✅ 温度已成功更新为: {new_temp_float}。更新缓存。")
+                                page_params_cache["temperature"] = new_temp_float
+                            else:
+                                logger.warning(f"[{req_id}] ⚠️ 温度更新后验证失败。页面显示: {new_temp_float}, 期望: {clamped_temp}。清除缓存中的温度。")
+                                page_params_cache.pop("temperature", None)
+                                await save_error_snapshot(f"temperature_verify_fail_{req_id}")
+
+
+                    except ValueError as ve:
+                        logger.error(f"[{req_id}] 转换温度值为浮点数时出错: '{current_temp_str if 'current_temp_str' in locals() else '未知值'}'. 错误: {ve}。清除缓存中的温度。")
+                        page_params_cache.pop("temperature", None)
+                        await save_error_snapshot(f"temperature_value_error_{req_id}")
+                    except PlaywrightAsyncError as pw_err:
+                        logger.error(f"[{req_id}] ❌ 操作温度输入框时发生Playwright错误: {pw_err}。清除缓存中的温度。")
+                        page_params_cache.pop("temperature", None)
+                        await save_error_snapshot(f"temperature_playwright_error_{req_id}")
+                    except ClientDisconnectedError:
+                        logger.info(f"[{req_id}] 客户端在调整温度时断开连接。")
+                        # 不修改缓存，因为操作未完成
+                        raise
+                    except Exception as e_temp:
+                        logger.exception(f"[{req_id}] ❌ 调整温度时发生未知错误。清除缓存中的温度。")
+                        page_params_cache.pop("temperature", None)
+                        await save_error_snapshot(f"temperature_unknown_error_{req_id}")
+                    
             check_client_disconnected("温度调整 - 逻辑完成后: ")
         # --- 结束调整温度设置 ---
 
-        # --- 新增: 调整最大输出Token设置 ---
+        # --- 新增: 调整最大输出Token设置 (集成参数缓存) ---
         if request.max_output_tokens is not None and page and not page.is_closed():
-            logger.info(f"[{req_id}] (Refactored Process) 检查并调整最大输出 Token 设置...")
-            requested_max_tokens = request.max_output_tokens
-            
-            min_val_for_tokens = 1
-            # 默认上限，如果模型数据中没有提供
-            max_val_for_tokens_from_model = 65536 # 一个较高的通用值
+            async with params_cache_lock:
+                logger.info(f"[{req_id}] (Refactored Process) 检查并调整最大输出 Token 设置...")
+                requested_max_tokens = request.max_output_tokens
+                
+                min_val_for_tokens = 1
+                max_val_for_tokens_from_model = 65536 # 默认值，会被模型数据覆盖
+                # (model_id_to_use and parsed_model_list logic to get max_val_for_tokens_from_model remains the same)
+                if model_id_to_use and parsed_model_list:
+                    current_model_data = next((m for m in parsed_model_list if m.get("id") == model_id_to_use), None)
+                    if current_model_data and current_model_data.get("supported_max_output_tokens") is not None:
+                        try:
+                            supported_tokens = int(current_model_data["supported_max_output_tokens"])
+                            if supported_tokens > 0: max_val_for_tokens_from_model = supported_tokens
+                            else: logger.warning(f"[{req_id}] 模型 {model_id_to_use} supported_max_output_tokens 无效: {supported_tokens}")
+                        except (ValueError, TypeError): logger.warning(f"[{req_id}] 模型 {model_id_to_use} supported_max_output_tokens 解析失败: {current_model_data['supported_max_output_tokens']}")
+                    else: logger.warning(f"[{req_id}] 未找到模型 {model_id_to_use} 的 supported_max_output_tokens 数据。")
+                else: logger.warning(f"[{req_id}] model_id_to_use ('{model_id_to_use}') 或 parsed_model_list 不可用，使用默认 tokens 上限。")
 
-            # model_id_to_use 应该在模型切换逻辑后被正确设置
-            if model_id_to_use and parsed_model_list:
-                current_model_data = next((m for m in parsed_model_list if m.get("id") == model_id_to_use), None)
-                if current_model_data and current_model_data.get("supported_max_output_tokens") is not None:
-                    # 确保取出的值是有效的数字
+                clamped_max_tokens = max(min_val_for_tokens, min(max_val_for_tokens_from_model, requested_max_tokens))
+                if clamped_max_tokens != requested_max_tokens:
+                    logger.warning(f"[{req_id}] 请求的最大输出 Tokens {requested_max_tokens} 超出模型范围 [{min_val_for_tokens}, {max_val_for_tokens_from_model}]，已调整为 {clamped_max_tokens}")
+
+                cached_max_tokens = page_params_cache.get("max_output_tokens")
+                if cached_max_tokens is not None and cached_max_tokens == clamped_max_tokens:
+                    logger.info(f"[{req_id}] 最大输出 Tokens ({clamped_max_tokens}) 与缓存值 ({cached_max_tokens}) 一致。跳过页面交互。")
+                else:
+                    logger.info(f"[{req_id}] 请求最大输出 Tokens ({clamped_max_tokens}) 与缓存值 ({cached_max_tokens}) 不一致或缓存中无值。需要与页面交互。")
+                    max_tokens_input_locator = page.locator(MAX_OUTPUT_TOKENS_SELECTOR)
                     try:
-                        supported_tokens = int(current_model_data["supported_max_output_tokens"])
-                        if supported_tokens > 0:
-                            max_val_for_tokens_from_model = supported_tokens
-                            logger.info(f"[{req_id}] 模型 {model_id_to_use} 支持的最大输出Tokens: {max_val_for_tokens_from_model}")
+                        await expect_async(max_tokens_input_locator).to_be_visible(timeout=5000)
+                        check_client_disconnected("最大输出Token调整 - 输入框可见后: ")
+                        
+                        current_max_tokens_str = await max_tokens_input_locator.input_value(timeout=3000)
+                        check_client_disconnected("最大输出Token调整 - 读取输入框值后: ")
+                        current_max_tokens_int = int(current_max_tokens_str)
+                        logger.info(f"[{req_id}] 页面当前最大输出 Tokens: {current_max_tokens_int}, 请求调整后最大输出 Tokens: {clamped_max_tokens}")
+
+                        if current_max_tokens_int == clamped_max_tokens:
+                            logger.info(f"[{req_id}] 页面当前最大输出 Tokens ({current_max_tokens_int}) 与请求值 ({clamped_max_tokens}) 一致。更新缓存并跳过写入。")
+                            page_params_cache["max_output_tokens"] = current_max_tokens_int
                         else:
-                            logger.warning(f"[{req_id}] 模型 {model_id_to_use} 的 supported_max_output_tokens 值 ({current_model_data['supported_max_output_tokens']}) 无效，将使用默认上限 {max_val_for_tokens_from_model}。")
-                    except (ValueError, TypeError):
-                        logger.warning(f"[{req_id}] 模型 {model_id_to_use} 的 supported_max_output_tokens 值 ({current_model_data['supported_max_output_tokens']}) 不是有效整数，将使用默认上限 {max_val_for_tokens_from_model}。")
-                else:
-                    logger.warning(f"[{req_id}] 未在parsed_model_list中找到模型 {model_id_to_use} 的supported_max_output_tokens数据，或值为None，将使用默认上限 {max_val_for_tokens_from_model}。")
-            else:
-                logger.warning(f"[{req_id}] model_id_to_use ('{model_id_to_use}') 未设置或 parsed_model_list 为空，无法获取模型特定上限，将使用默认上限 {max_val_for_tokens_from_model}。")
+                            logger.info(f"[{req_id}] 页面最大输出 Tokens ({current_max_tokens_int}) 与请求值 ({clamped_max_tokens}) 不同，正在更新...")
+                            await max_tokens_input_locator.fill(str(clamped_max_tokens), timeout=5000)
+                            check_client_disconnected("最大输出Token调整 - 填充输入框后: ")
+                            
+                            await asyncio.sleep(0.1)
+                            new_max_tokens_str = await max_tokens_input_locator.input_value(timeout=3000)
+                            new_max_tokens_int = int(new_max_tokens_str)
+                            if new_max_tokens_int == clamped_max_tokens:
+                                logger.info(f"[{req_id}] ✅ 最大输出 Tokens 已成功更新为: {new_max_tokens_int}。更新缓存。")
+                                page_params_cache["max_output_tokens"] = new_max_tokens_int
+                            else:
+                                logger.warning(f"[{req_id}] ⚠️ 最大输出 Tokens 更新后验证失败。页面显示: {new_max_tokens_int}, 期望: {clamped_max_tokens}。清除缓存中的此参数。")
+                                page_params_cache.pop("max_output_tokens", None)
+                                await save_error_snapshot(f"max_tokens_verify_fail_{req_id}")
 
-            # 使用从模型数据获取的上限（或后备值）进行钳制
-            clamped_max_tokens = max(min_val_for_tokens, min(max_val_for_tokens_from_model, requested_max_tokens))
-            
-            if clamped_max_tokens != requested_max_tokens:
-                logger.warning(f"[{req_id}] 请求的最大输出 Tokens {requested_max_tokens} 超出模型范围 [{min_val_for_tokens}, {max_val_for_tokens_from_model}]，已调整为 {clamped_max_tokens}")
-            
-            max_tokens_input_locator = page.locator(MAX_OUTPUT_TOKENS_SELECTOR)
-            try:
-                await expect_async(max_tokens_input_locator).to_be_visible(timeout=5000)
-                check_client_disconnected("最大输出Token调整 - 输入框可见后: ")
-                
-                current_max_tokens_str = await max_tokens_input_locator.input_value(timeout=3000)
-                check_client_disconnected("最大输出Token调整 - 读取输入框值后: ")
-                
-                current_max_tokens_int = int(current_max_tokens_str) # 转换为整数
-                logger.info(f"[{req_id}] 页面当前最大输出 Tokens: {current_max_tokens_int}, 请求调整后最大输出 Tokens: {clamped_max_tokens}")
-
-                if current_max_tokens_int != clamped_max_tokens: 
-                    logger.info(f"[{req_id}] 页面最大输出 Tokens ({current_max_tokens_int}) 与请求最大输出 Tokens ({clamped_max_tokens}) 不同，正在更新...")
-                    await max_tokens_input_locator.fill(str(clamped_max_tokens), timeout=5000)
-                    check_client_disconnected("最大输出Token调整 - 填充输入框后: ")
-                    
-                    # 验证更改 (可选但推荐)
-                    await asyncio.sleep(0.1) # 短暂等待值更新
-                    new_max_tokens_str = await max_tokens_input_locator.input_value(timeout=3000)
-                    new_max_tokens_int = int(new_max_tokens_str)
-                    if new_max_tokens_int == clamped_max_tokens:
-                        logger.info(f"[{req_id}] ✅ 最大输出 Tokens 已成功更新为: {new_max_tokens_int}")
-                    else:
-                        logger.warning(f"[{req_id}] ⚠️ 最大输出 Tokens 更新后验证失败。页面显示: {new_max_tokens_int}, 期望: {clamped_max_tokens}")
-                else:
-                    logger.info(f"[{req_id}] 页面最大输出 Tokens ({current_max_tokens_int}) 与请求最大输出 Tokens ({clamped_max_tokens}) 一致，无需更改。")
-
-            except ValueError as ve:
-                logger.error(f"[{req_id}] 转换最大输出 Tokens 值为整数时出错: '{current_max_tokens_str if 'current_max_tokens_str' in locals() else '未知值'}'. 错误: {ve}")
-                await save_error_snapshot(f"max_tokens_value_error_{req_id}")
-            except PlaywrightAsyncError as pw_err:
-                logger.error(f"[{req_id}] ❌ 操作最大输出 Tokens 输入框时发生Playwright错误: {pw_err}")
-                await save_error_snapshot(f"max_tokens_playwright_error_{req_id}")
-            except ClientDisconnectedError:
-                logger.info(f"[{req_id}] 客户端在调整最大输出 Tokens 时断开连接。")
-                raise 
-            except Exception as e_max_tokens:
-                logger.exception(f"[{req_id}] ❌ 调整最大输出 Tokens 时发生未知错误")
-                await save_error_snapshot(f"max_tokens_unknown_error_{req_id}")
+                    except ValueError as ve:
+                        logger.error(f"[{req_id}] 转换最大输出 Tokens 值为整数时出错: '{current_max_tokens_str if 'current_max_tokens_str' in locals() else '未知值'}'. 错误: {ve}。清除缓存中的此参数。")
+                        page_params_cache.pop("max_output_tokens", None)
+                        await save_error_snapshot(f"max_tokens_value_error_{req_id}")
+                    except PlaywrightAsyncError as pw_err:
+                        logger.error(f"[{req_id}] ❌ 操作最大输出 Tokens 输入框时发生Playwright错误: {pw_err}。清除缓存中的此参数。")
+                        page_params_cache.pop("max_output_tokens", None)
+                        await save_error_snapshot(f"max_tokens_playwright_error_{req_id}")
+                    except ClientDisconnectedError:
+                        logger.info(f"[{req_id}] 客户端在调整最大输出 Tokens 时断开连接。")
+                        raise
+                    except Exception as e_max_tokens:
+                        logger.exception(f"[{req_id}] ❌ 调整最大输出 Tokens 时发生未知错误。清除缓存中的此参数。")
+                        page_params_cache.pop("max_output_tokens", None)
+                        await save_error_snapshot(f"max_tokens_unknown_error_{req_id}")
             
             check_client_disconnected("最大输出Token调整 - 逻辑完成后: ")
         # --- 结束调整最大输出Token ---
 
-        # --- 新增: 设置停止序列 ---
+        # --- 新增: 设置停止序列 (集成参数缓存) ---
         if request.stop is not None and page and not page.is_closed():
-            logger.info(f"[{req_id}] (Refactored Process) 检查并设置停止序列...")
-            
-            stop_sequences = []
-            if isinstance(request.stop, str):
-                stop_sequences = [request.stop]
-            elif isinstance(request.stop, list):
-                stop_sequences = [s for s in request.stop if isinstance(s, str) and s.strip()] # 过滤空字符串
-
-            if not stop_sequences and request.stop is not None: # 如果原始 stop 不为 None 但处理后为空列表
-                 logger.info(f"[{req_id}] 请求的停止序列为空或只包含无效条目，将尝试清空页面上的停止序列。")
-            
-            stop_input_locator = page.locator(STOP_SEQUENCE_INPUT_SELECTOR)
-            remove_chip_buttons_locator = page.locator(MAT_CHIP_REMOVE_BUTTON_SELECTOR)
-
-            try:
-                # 1. 清空已有的停止序列
-                # 点击页面上已有的 stop sequence chip 的移除按钮
-                # 从最后一个开始移除，避免因 DOM 变化导致定位问题
-                logger.info(f"[{req_id}] 尝试清空已有的停止序列...")
-                initial_chip_count = await remove_chip_buttons_locator.count()
-                logger.debug(f"[{req_id}] 发现 {initial_chip_count} 个可移除的停止序列标签。")
+            async with params_cache_lock:
+                logger.info(f"[{req_id}] (Refactored Process) 检查并设置停止序列...")
                 
-                # 增加一个循环计数器和最大移除次数，防止无限循环
-                removed_count = 0
-                max_removals = initial_chip_count + 5 # 允许一些动态添加/移除的余地
+                requested_stop_sequences_raw = []
+                if isinstance(request.stop, str):
+                    requested_stop_sequences_raw = [request.stop]
+                elif isinstance(request.stop, list):
+                    requested_stop_sequences_raw = [s for s in request.stop if isinstance(s, str) and s.strip()]
                 
-                while await remove_chip_buttons_locator.count() > 0 and removed_count < max_removals:
-                    check_client_disconnected("停止序列清除 - 循环开始: ")
-                    try:
-                        # 总是点击第一个找到的移除按钮，因为 DOM 会在点击后更新
-                        await remove_chip_buttons_locator.first.click(timeout=2000)
-                        removed_count += 1
-                        logger.debug(f"[{req_id}] 已移除一个停止序列标签 (已移除 {removed_count} 个)。")
-                        await asyncio.sleep(0.15) # 短暂等待UI更新
-                    except PlaywrightAsyncError as pe_remove_inner:
-                        logger.warning(f"[{req_id}] 移除一个停止序列标签时出错 (可能是最后一个或不可见): {pe_remove_inner}。退出清除循环。")
-                        break # 如果点击失败，可能已经没有可见/可交互的移除了
-                    except Exception as e_remove_inner:
-                        logger.error(f"[{req_id}] 移除停止序列标签时发生意外错误: {e_remove_inner}。退出清除循环。")
-                        break
-                logger.info(f"[{req_id}] 已有停止序列清空完成 (或尝试清空)。实际移除 {removed_count} 个。")
+                # Normalize: use a set of non-empty unique strings for comparison and for cache
+                normalized_requested_stops = set(s.strip() for s in requested_stop_sequences_raw if s.strip())
 
-                check_client_disconnected("停止序列清除 - 完成后: ")
+                cached_stops_set = page_params_cache.get("stop_sequences") # This will be a set if cached
 
-                # 2. 添加新的停止序列
-                if stop_sequences: # 只有当提供了有效的停止序列时才添加
-                    logger.info(f"[{req_id}] 添加 {len(stop_sequences)} 个新的停止序列: {stop_sequences}")
-                    await expect_async(stop_input_locator).to_be_visible(timeout=5000)
-                    check_client_disconnected("停止序列添加 - 输入框可见后: ")
-
-                    for seq in stop_sequences:
-                        if not seq.strip(): continue # 再次确保不添加空字符串
-                        logger.debug(f"[{req_id}] 正在添加停止序列: '{seq}'")
-                        await stop_input_locator.fill(seq, timeout=3000)
-                        check_client_disconnected(f"停止序列添加 - 输入框填充 '{seq}' 后: ")
-                        await stop_input_locator.press("Enter", timeout=3000)
-                        check_client_disconnected(f"停止序列添加 - 为 '{seq}' 按下 Enter 后: ")
-                        # 等待输入框清空或 chip 出现 (简单延时作为替代)
-                        await asyncio.sleep(0.2) 
-                        # 验证输入框是否清空
-                        current_input_value = await stop_input_locator.input_value(timeout=1000)
-                        if current_input_value:
-                            logger.warning(f"[{req_id}] 添加停止序列 '{seq}' 后，输入框未完全清空 (值为: '{current_input_value}')。可能未成功添加为 chip。")
-                        else:
-                            logger.debug(f"[{req_id}] 停止序列 '{seq}' 已通过 Enter 提交。")
-                    logger.info(f"[{req_id}] ✅ 新停止序列添加完成。")
+                if cached_stops_set is not None and cached_stops_set == normalized_requested_stops:
+                    logger.info(f"[{req_id}] 请求的停止序列 ({normalized_requested_stops}) 与缓存值 ({cached_stops_set}) 一致。跳过页面交互。")
                 else:
-                    logger.info(f"[{req_id}] 没有提供新的有效停止序列来添加。")
+                    logger.info(f"[{req_id}] 请求停止序列 ({normalized_requested_stops}) 与缓存值 ({cached_stops_set}) 不一致或缓存中无值。需要与页面交互。")
+                    stop_input_locator = page.locator(STOP_SEQUENCE_INPUT_SELECTOR)
+                    remove_chip_buttons_locator = page.locator(MAT_CHIP_REMOVE_BUTTON_SELECTOR)
+                    interaction_successful = False
+                    try:
+                        logger.info(f"[{req_id}] 尝试清空已有的停止序列...")
+                        initial_chip_count = await remove_chip_buttons_locator.count()
+                        removed_count = 0
+                        max_removals = initial_chip_count + 5
+                        while await remove_chip_buttons_locator.count() > 0 and removed_count < max_removals:
+                            check_client_disconnected("停止序列清除 - 循环开始: ")
+                            try:
+                                await remove_chip_buttons_locator.first.click(timeout=2000)
+                                removed_count += 1; await asyncio.sleep(0.15)
+                            except Exception: break # Simplified break
+                        logger.info(f"[{req_id}] 已有停止序列清空尝试完成。移除 {removed_count} 个。")
+                        check_client_disconnected("停止序列清除 - 完成后: ")
 
-            except PlaywrightAsyncError as pw_err:
-                logger.error(f"[{req_id}] ❌ 操作停止序列时发生Playwright错误: {pw_err}")
-                await save_error_snapshot(f"stop_sequence_playwright_error_{req_id}")
-            except ClientDisconnectedError:
-                logger.info(f"[{req_id}] 客户端在调整停止序列时断开连接。")
-                raise
-            except Exception as e_stop_seq:
-                logger.exception(f"[{req_id}] ❌ 设置停止序列时发生未知错误")
-                await save_error_snapshot(f"stop_sequence_unknown_error_{req_id}")
+                        if normalized_requested_stops: # Only add if there are sequences to add
+                            logger.info(f"[{req_id}] 添加新的停止序列: {normalized_requested_stops}")
+                            await expect_async(stop_input_locator).to_be_visible(timeout=5000)
+                            for seq in normalized_requested_stops: # Iterate over the normalized set
+                                await stop_input_locator.fill(seq, timeout=3000)
+                                await stop_input_locator.press("Enter", timeout=3000)
+                                await asyncio.sleep(0.2)
+                                current_input_val = await stop_input_locator.input_value(timeout=1000)
+                                if current_input_val: # Log if not cleared, but proceed
+                                     logger.warning(f"[{req_id}] 添加停止序列 '{seq}' 后输入框未清空 (值为: '{current_input_val}')。")
+                            logger.info(f"[{req_id}] ✅ 新停止序列添加操作完成。")
+                        else:
+                            logger.info(f"[{req_id}] 没有提供新的有效停止序列来添加 (请求清空)。")
+                        
+                        interaction_successful = True # Assume success if no exceptions by this point
+                        page_params_cache["stop_sequences"] = normalized_requested_stops # Cache the requested (normalized) state
+                        logger.info(f"[{req_id}] 停止序列缓存已更新为: {normalized_requested_stops}")
+
+                    except PlaywrightAsyncError as pw_err:
+                        logger.error(f"[{req_id}] ❌ 操作停止序列时发生Playwright错误: {pw_err}。清除缓存中的此参数。")
+                        page_params_cache.pop("stop_sequences", None)
+                        await save_error_snapshot(f"stop_sequence_playwright_error_{req_id}")
+                    except ClientDisconnectedError:
+                        logger.info(f"[{req_id}] 客户端在调整停止序列时断开连接。")
+                        raise
+                    except Exception as e_stop_seq:
+                        logger.exception(f"[{req_id}] ❌ 设置停止序列时发生未知错误。清除缓存中的此参数。")
+                        page_params_cache.pop("stop_sequences", None)
+                        await save_error_snapshot(f"stop_sequence_unknown_error_{req_id}")
             
             check_client_disconnected("停止序列调整 - 逻辑完成后: ")
         # --- 结束设置停止序列 ---
@@ -2467,8 +2491,19 @@ async def _process_request_refactored(
             # Direct calls with timeout
             await expect_async(input_field).to_be_visible(timeout=5000)
             check_client_disconnected("After Input Visible: ")
-            await input_field.fill(prepared_prompt, timeout=90000)
-            check_client_disconnected("After Input Fill: ")
+
+            # 使用 evaluate 方法优化大文本填充
+            logger.info(f"[{req_id}]   - 使用 JavaScript evaluate 填充提示文本...")
+            await input_field.evaluate("""
+                (element, text) => {
+                    element.value = text;
+                    element.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+                    element.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+                }
+            """, prepared_prompt)
+            logger.info(f"[{req_id}]   - JavaScript evaluate 填充完成。")
+            
+            check_client_disconnected("After Input Fill (evaluate): ")
             await expect_async(submit_button).to_be_enabled(timeout=10000)
             check_client_disconnected("After Submit Enabled: ")
             await asyncio.sleep(0.2) # Use asyncio.sleep
