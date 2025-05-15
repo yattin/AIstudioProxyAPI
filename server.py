@@ -83,6 +83,7 @@ DEFAULT_FALLBACK_MODEL_ID = "gemini-pro" # 如果无法获取列表，使用的�
 
 # --- Selectors ---
 INPUT_SELECTOR = 'ms-prompt-input-wrapper textarea'
+INPUT_SELECTOR2 = 'ms-prompt-input-wrapper textarea[aria-label="Start typing a prompt"]'
 SUBMIT_BUTTON_SELECTOR = 'button[aria-label="Run"]'
 RESPONSE_CONTAINER_SELECTOR = 'ms-chat-turn .chat-turn-container.model'
 RESPONSE_TEXT_SELECTOR = 'ms-cmark-node.cmark-node'
@@ -1686,6 +1687,7 @@ async def _wait_for_response_completion(
     start_time_ns = time.time()
     spinner_locator = page.locator(LOADING_SPINNER_SELECTOR)
     input_field = page.locator(INPUT_SELECTOR)
+    input_field2 = page.locator(INPUT_SELECTOR2)
     submit_button = page.locator(SUBMIT_BUTTON_SELECTOR)
     edit_button = page.locator(EDIT_MESSAGE_BUTTON_SELECTOR)
 
@@ -2486,6 +2488,7 @@ async def _process_request_refactored(
         # --- 3. Fill & Submit Prompt --- (Use logger)
         logger.info(f"[{req_id}] (Refactored Process) 填充并提交提示 ({len(prepared_prompt)} chars)...") # logger
         input_field = page.locator(INPUT_SELECTOR)
+        input_field2 = page.locator(INPUT_SELECTOR2)
         submit_button = page.locator(SUBMIT_BUTTON_SELECTOR)
         try:
             # Direct calls with timeout
@@ -2520,7 +2523,8 @@ async def _process_request_refactored(
                 await page.keyboard.press(f'{shortcut_key}+Enter')
                 check_client_disconnected("After Keyboard Press: ")
                 # Check input cleared (direct call)
-                await expect_async(input_field).to_have_value('', timeout=1000)
+                await expect_async(input_field2).to_have_value('', timeout=1000)
+                # await expect_async(input_field).to_have_value('', timeout=1000)
                 submitted_successfully = True
                 logger.info(f"[{req_id}]   - 快捷键提交成功。") # logger
             except Exception as shortcut_err:
@@ -2938,6 +2942,7 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
         
         # 5. 等待页面重新加载完成 (核心元素可见)
         input_field = page.locator(INPUT_SELECTOR)
+        input_field2 = page.locator(INPUT_SELECTOR2)
         await expect_async(input_field).to_be_visible(timeout=30000)
         logger.info(f"[{req_id}] 页面已导航到新聊天并加载完成，输入框可见")
         
