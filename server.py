@@ -79,26 +79,27 @@ if PROXY_SERVER_ENV:
 MODEL_NAME = 'AI-Studio_Camoufox-Proxy'
 CHAT_COMPLETION_ID_PREFIX = 'chatcmpl-'
 MODELS_ENDPOINT_URL_CONTAINS = "MakerSuiteService/ListModels" # 目标请求URL的一部分
-DEFAULT_FALLBACK_MODEL_ID = "gemini-pro" # 如果无法获取列表，使用的默认模型
+DEFAULT_FALLBACK_MODEL_ID = "no model list" # 如果无法获取列表，使用的默认模型
 
 # --- Selectors ---
-INPUT_SELECTOR = 'ms-prompt-input-wrapper textarea'
-INPUT_SELECTOR2 = 'ms-prompt-input-wrapper textarea[aria-label="Start typing a prompt"]'
-SUBMIT_BUTTON_SELECTOR = 'button[aria-label="Run"]'
+PROMPT_TEXTAREA_SELECTOR = 'ms-prompt-input-wrapper ms-autosize-textarea textarea'
+INPUT_SELECTOR = PROMPT_TEXTAREA_SELECTOR
+INPUT_SELECTOR2 = PROMPT_TEXTAREA_SELECTOR
+SUBMIT_BUTTON_SELECTOR = 'button[aria-label="Run"].run-button' # 增加了 .run-button 类
 RESPONSE_CONTAINER_SELECTOR = 'ms-chat-turn .chat-turn-container.model'
 RESPONSE_TEXT_SELECTOR = 'ms-cmark-node.cmark-node'
-LOADING_SPINNER_SELECTOR = 'button[aria-label="Run"] svg .stoppable-spinner'
+LOADING_SPINNER_SELECTOR = 'button[aria-label="Run"].run-button svg .stoppable-spinner' # 增加了 .run-button 类
 ERROR_TOAST_SELECTOR = 'div.toast.warning, div.toast.error'
-CLEAR_CHAT_BUTTON_SELECTOR = 'button[aria-label="Clear chat"][data-test-clear="outside"]:has(span.material-symbols-outlined:has-text("refresh"))'
+CLEAR_CHAT_BUTTON_SELECTOR = 'button[data-test-clear="outside"][aria-label="Clear chat"]'
 CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR = 'button.mdc-button:has-text("Continue")'
 MORE_OPTIONS_BUTTON_SELECTOR = 'div.actions-container div ms-chat-turn-options div > button'
 COPY_MARKDOWN_BUTTON_SELECTOR = 'div[class*="mat-menu"] div > button:nth-child(4)'
 COPY_MARKDOWN_BUTTON_SELECTOR_ALT = 'div[role="menu"] button:has-text("Copy Markdown")'
-TEMPERATURE_INPUT_SELECTOR = 'div[data-test-id="temperatureSliderContainer"] input[type="number"].slider-input'
-MAX_OUTPUT_TOKENS_SELECTOR = '#mat-input-0' # 新增: 最大输出Token输入框选择器
-STOP_SEQUENCE_INPUT_SELECTOR = '#mat-mdc-chip-list-input-0' # 新增: 停止序列输入框选择器
+MAX_OUTPUT_TOKENS_SELECTOR = 'input[aria-label="Maximum output tokens"]'
+STOP_SEQUENCE_INPUT_SELECTOR = 'input[aria-label="Add stop token"]'
 MAT_CHIP_REMOVE_BUTTON_SELECTOR = 'mat-chip-set mat-chip-row button[aria-label*="Remove"]' # 新增: Material Chip 移除按钮通用选择器
 TOP_P_INPUT_SELECTOR = 'div.settings-item-column:has(h3:text-is("Top P")) input[type="number"].slider-input'
+TEMPERATURE_INPUT_SELECTOR = 'div[data-test-id="temperatureSliderContainer"] input[type="number"].slider-input' # 新增: 温度输入选择器
 
 
 # --- Global State (由 lifespan 管理初始化和清理) ---
@@ -774,10 +775,17 @@ async def _initialize_page_logic(browser: AsyncBrowser):
             await expect_async(found_page.locator(INPUT_SELECTOR)).to_be_visible(timeout=10000)
             logger.info("-> ✅ 核心输入区域可见。")
 
-            model_wrapper_locator = found_page.locator('#mat-select-value-0 mat-select-trigger').first
-            model_name_on_page = await model_wrapper_locator.inner_text(timeout=5000) # 增加超时
-            logger.info(f"-> 🤖 页面检测到的当前模型: {model_name_on_page}")
-            
+            model_name_locator = found_page.locator('mat-select[data-test-ms-model-selector] div.model-option-content span.gmat-body-medium')
+            try:
+                model_name_on_page = await model_name_locator.first.inner_text(timeout=5000)
+                logger.info(f"-> 🤖 页面检测到的当前模型: {model_name_on_page}")
+            except PlaywrightAsyncError as e:
+                logger.error(f"获取模型名称时出错 (model_name_locator): {e}")
+                # 重新抛出原始的 Playwright 错误，让上层处理 (如果这是在 _initialize_page_logic 的主 try 块之外，可能需要不同的错误处理)
+                # 根据上下文，这里是在一个 try 块内，外层有 except Exception as input_visible_err
+                # 所以重新抛出，会被 input_visible_err 捕获
+                raise
+
             result_page_instance = found_page
             result_page_ready = True
             logger.info(f"✅ 页面逻辑初始化成功。")
@@ -789,9 +797,14 @@ async def _initialize_page_logic(browser: AsyncBrowser):
 
     except Exception as e_init_page: # 捕获 _initialize_page_logic 内部所有未处理的异常
         logger.critical(f"❌ 页面逻辑初始化期间发生严重意外错误: {e_init_page}", exc_info=True)
-        if temp_context and not temp_context.is_closed(): # 确保上下文存在且未关闭
-            try: await temp_context.close()
-            except Exception: pass # 忽略关闭时的错误
+        if temp_context: # BrowserContext 没有 is_closed() 方法
+            try:
+                # logger.info(f"   尝试关闭临时的浏览器上下文 (ID: {temp_context.guid if hasattr(temp_context, 'guid') else 'N/A'}) due to initialization error.") # 之前的建议，简化日志
+                logger.info(f"   尝试关闭临时的浏览器上下文 due to initialization error.")
+                await temp_context.close()
+                logger.info("   ✅ 临时浏览器上下文已关闭。")
+            except Exception as close_err: # 忽略关闭时的错误
+                 logger.warning(f"   ⚠️ 关闭临时浏览器上下文时出错: {close_err}")
         await save_error_snapshot("init_unexpected_error") # 尝试保存快照
         raise RuntimeError(f"页面初始化意外错误: {e_init_page}") from e_init_page
     # temp_context 在成功时不关闭，因为 result_page_instance 属于它。
@@ -1446,8 +1459,7 @@ async def save_error_snapshot(error_name: str = 'error'):
             logger.error(f"{log_prefix}   获取页面内容失败 ({base_error_name}): {html_err}") # logger
     except Exception as dir_err:
         # print(f"{log_prefix}   创建错误目录或保存快照时出错: {dir_err}")
-            print(f"{log_prefix}   获取页面内容失败 ({base_error_name}): {html_err}")
-    except Exception as dir_err: print(f"{log_prefix}   创建错误目录或保存快照时出错: {dir_err}")
+        logger.error(f"{log_prefix}   创建错误目录或保存快照时发生其他错误 ({base_error_name}): {dir_err}")
 
 # --- V4: New Helper - Get response via Edit Button ---
 async def get_response_via_edit_button(
@@ -1455,104 +1467,108 @@ async def get_response_via_edit_button(
     req_id: str,
     check_client_disconnected: Callable
 ) -> Optional[str]:
-    """Attempts to get the response content using the edit button.
-       Implementation mirrors original stream logic closely.
-    """
-    logger.info(f"[{req_id}] (Helper) 尝试通过编辑按钮获取响应...") # logger
-    edit_button = page.locator(EDIT_MESSAGE_BUTTON_SELECTOR)
-    textarea = page.locator(MESSAGE_TEXTAREA_SELECTOR)
-    finish_edit_button = page.locator(FINISH_EDIT_BUTTON_SELECTOR)
+    logger.info(f"[{req_id}] (Helper) 尝试通过编辑按钮获取响应...")
+
+    last_message_container = page.locator('ms-chat-turn').last
+    edit_button = last_message_container.get_by_label("Edit")
+    finish_edit_button = last_message_container.get_by_label("Stop editing")
+    
+    # 定位 <ms-autosize-textarea> 和其内部的 <textarea>
+    autosize_textarea_locator = last_message_container.locator('ms-autosize-textarea')
+    actual_textarea_locator = autosize_textarea_locator.locator('textarea') # 如果需要 input_value
 
     try:
-        # 1. Click the Edit button
-        logger.info(f"[{req_id}]   - 定位并点击编辑按钮...") # logger
+        # --- 点击初始的 "Edit" 按钮 ---
+        # ... (这部分逻辑不变) ...
+        logger.info(f"[{req_id}]   - 定位并点击 'Edit' 按钮...")
         try:
-            # Direct Playwright calls with timeout
             await expect_async(edit_button).to_be_visible(timeout=CLICK_TIMEOUT_MS)
-            check_client_disconnected("编辑响应 - 编辑按钮可见后: ")
+            check_client_disconnected("编辑响应 - 'Edit' 按钮可见后: ")
             await edit_button.click(timeout=CLICK_TIMEOUT_MS)
-            logger.info(f"[{req_id}]   - 编辑按钮已点击。") # logger
+            logger.info(f"[{req_id}]   - 'Edit' 按钮已点击。")
         except Exception as edit_btn_err:
-            logger.error(f"[{req_id}]   - 编辑按钮不可见或点击失败: {edit_btn_err}") # logger
+            logger.error(f"[{req_id}]   - 'Edit' 按钮不可见或点击失败: {edit_btn_err}")
             await save_error_snapshot(f"edit_response_edit_button_failed_{req_id}")
             return None
-
-        check_client_disconnected("编辑响应 - 点击编辑按钮后: ")
+        
+        check_client_disconnected("编辑响应 - 点击 'Edit' 按钮后: ")
         await asyncio.sleep(0.3) # Use asyncio.sleep
-        check_client_disconnected("编辑响应 - 点击编辑按钮后延时后: ")
+        check_client_disconnected("编辑响应 - 点击 'Edit' 按钮后延时后: ")
 
-        # 2. Get content from textarea
-        logger.info(f"[{req_id}]   - 从文本区域获取内容...") # logger
+        # --- 从文本区域获取内容 (优化后) ---
+        logger.info(f"[{req_id}]   - 从文本区域获取内容...")
         response_content = None
-        textarea_failed = False # Flag to track if textarea read failed
+        textarea_failed = False
         try:
-            # Direct Playwright call with timeout
-            await expect_async(textarea).to_be_visible(timeout=CLICK_TIMEOUT_MS)
-            check_client_disconnected("编辑响应 - 文本区域可见后: ")
+            # 等待 <ms-autosize-textarea> 元素可见，因为它包含了 data-value
+            await expect_async(autosize_textarea_locator).to_be_visible(timeout=CLICK_TIMEOUT_MS)
+            check_client_disconnected("编辑响应 - autosize-textarea 可见后: ")
 
-            # Try getting content from data-value attribute first
+            # 1. 优先尝试从 <ms-autosize-textarea> 的 data-value 获取
             try:
-                # Direct evaluate call (no specific timeout in Playwright evaluate)
-                data_value_content = await textarea.evaluate('el => el.getAttribute("data-value")')
-                check_client_disconnected("编辑响应 - evaluate data-value 后: ")
-                if data_value_content is not None:
+                data_value_content = await autosize_textarea_locator.get_attribute("data-value")
+                check_client_disconnected("编辑响应 - get_attribute data-value 后: ")
+                if data_value_content is not None: # data-value 可能为空字符串，这也是有效内容
                     response_content = str(data_value_content)
+                    logger.info(f"[{req_id}]   - 从 data-value 获取内容成功。")
             except Exception as data_val_err:
-                logger.warning(f"[{req_id}]   - 获取 data-value 失败: {data_val_err}") # logger warning
-                check_client_disconnected("编辑响应 - evaluate data-value 错误后: ")
+                logger.warning(f"[{req_id}]   - 获取 data-value 失败: {data_val_err}")
+                check_client_disconnected("编辑响应 - get_attribute data-value 错误后: ")
 
-            # If data-value failed or returned empty, try input_value
-            if not response_content:
+            # 2. 如果 data-value 获取失败 (为 None)，才尝试 input_value
+            if response_content is None:
+                logger.info(f"[{req_id}]   - data-value 获取失败或为None，尝试从内部 textarea 获取 input_value...")
                 try:
-                    # Direct input_value call with timeout
-                    input_val_content = await textarea.input_value(timeout=CLICK_TIMEOUT_MS)
+                    # 确保内部 textarea 也可见
+                    await expect_async(actual_textarea_locator).to_be_visible(timeout=CLICK_TIMEOUT_MS/2) # 较短超时，因为它应该已经存在
+                    input_val_content = await actual_textarea_locator.input_value(timeout=CLICK_TIMEOUT_MS/2)
                     check_client_disconnected("编辑响应 - input_value 后: ")
                     if input_val_content is not None:
                         response_content = str(input_val_content)
+                        logger.info(f"[{req_id}]   - 从 input_value 获取内容成功。")
                 except Exception as input_val_err:
-                     logger.warning(f"[{req_id}]   - 获取 input_value 失败: {input_val_err}") # logger warning
+                     logger.warning(f"[{req_id}]   - 获取 input_value 也失败: {input_val_err}")
                      check_client_disconnected("编辑响应 - input_value 错误后: ")
-
-            # Now check the final result from either method
-            if response_content is not None and response_content.strip():
-                response_content = response_content.strip()
+            
+            # 检查最终获取的内容
+            if response_content is not None: # 允许空字符串作为有效内容
+                response_content = response_content.strip() # 清理首尾空格
                 content_preview = response_content[:100].replace('\\n', '\\\\n')
-                logger.info(f"[{req_id}]   - ✅ 最终成功获取内容 (长度={len(response_content)}): '{content_preview}...'") # logger
-            else:
-                if response_content is None:
-                    logger.warning(f"[{req_id}]   - 所有方法 (data-value, input_value) 内容获取均失败或返回 None。") # logger
-                else:
-                    logger.warning(f"[{req_id}]   - 所有方法 (data-value, input_value) 内容获取返回空字符串。") # logger
+                logger.info(f"[{req_id}]   - ✅ 最终获取内容 (长度={len(response_content)}): '{content_preview}...'")
+            else: # response_content 仍然是 None
+                logger.warning(f"[{req_id}]   - 所有方法 (data-value, input_value) 内容获取均失败或返回 None。")
                 textarea_failed = True
-                response_content = None
+                # response_content 保持为 None
 
         except Exception as textarea_err:
-            logger.error(f"[{req_id}]   - 定位或处理文本区域时失败: {textarea_err}") # logger
+            logger.error(f"[{req_id}]   - 定位或处理文本区域时失败: {textarea_err}")
             textarea_failed = True
-            response_content = None
+            response_content = None # 确保是 None
             check_client_disconnected("编辑响应 - 获取文本区域错误后: ")
 
-        # 3. Click the Finish Editing button
+        # --- 点击 "Stop editing" 按钮 ---
+        # ... (这部分逻辑不变，但在 textarea_failed 时跳过) ...
         if not textarea_failed:
-            logger.info(f"[{req_id}]   - 定位并点击完成编辑按钮...") # logger
+            logger.info(f"[{req_id}]   - 定位并点击 'Stop editing' 按钮...") # logger
             try:
                 # Direct Playwright calls with timeout
                 await expect_async(finish_edit_button).to_be_visible(timeout=CLICK_TIMEOUT_MS)
-                check_client_disconnected("编辑响应 - 完成按钮可见后: ")
+                check_client_disconnected("编辑响应 - 'Stop editing' 按钮可见后: ")
                 await finish_edit_button.click(timeout=CLICK_TIMEOUT_MS)
-                logger.info(f"[{req_id}]   - 完成编辑按钮已点击。") # logger
+                logger.info(f"[{req_id}]   - 'Stop editing' 按钮已点击。") # logger
             except Exception as finish_btn_err:
-                logger.warning(f"[{req_id}]   - 完成编辑按钮不可见或点击失败: {finish_btn_err}") # logger
+                logger.warning(f"[{req_id}]   - 'Stop editing' 按钮不可见或点击失败: {finish_btn_err}") # logger
                 await save_error_snapshot(f"edit_response_finish_button_failed_{req_id}")
 
-            check_client_disconnected("编辑响应 - 点击完成编辑后: ")
+            check_client_disconnected("编辑响应 - 点击 'Stop editing' 后: ")
             await asyncio.sleep(0.2) # Use asyncio.sleep
-            check_client_disconnected("编辑响应 - 点击完成编辑后延时后: ")
+            check_client_disconnected("编辑响应 - 点击 'Stop editing' 后延时后: ")
         else:
-             logger.info(f"[{req_id}]   - 跳过点击完成编辑按钮，因为文本区域读取失败。") # logger
+             logger.info(f"[{req_id}]   - 跳过点击 'Stop editing' 按钮，因为文本区域读取失败。")
 
-        return response_content if not textarea_failed else None
+        return response_content # 返回获取到的内容，即使 "Stop editing" 失败
 
+    # ... (异常处理不变) ...
     except ClientDisconnectedError:
         logger.info(f"[{req_id}] (Helper Edit) 客户端断开连接。") # logger
         raise
@@ -1567,107 +1583,87 @@ async def get_response_via_copy_button(
     req_id: str,
     check_client_disconnected: Callable
 ) -> Optional[str]:
-    """Attempts to get the response content using the copy markdown button.
-       Implementation mirrors original stream logic closely.
-    """
-    logger.info(f"[{req_id}] (Helper) 尝试通过复制按钮获取响应...") # logger
-    more_options_button = page.locator(MORE_OPTIONS_BUTTON_SELECTOR).last # Target last message
-    copy_button_primary = page.locator(COPY_MARKDOWN_BUTTON_SELECTOR)
-    copy_button_alt = page.locator(COPY_MARKDOWN_BUTTON_SELECTOR_ALT)
+    logger.info(f"[{req_id}] (Helper) 尝试通过复制按钮获取响应...")
+    
+    # 新的、更健壮的定位方式
+    last_message_container = page.locator('ms-chat-turn').last
+    more_options_button = last_message_container.get_by_label("Open options")
+    
+    copy_markdown_button = page.get_by_role("menuitem", name="Copy markdown")
 
     try:
-        # 1. Hover over the last message to reveal options
-        logger.info(f"[{req_id}]   - 尝试悬停最后一条消息以显示选项...") # logger
-        last_message_container = page.locator('ms-chat-turn').last
-        try:
-            # Direct hover call with timeout
-            await last_message_container.hover(timeout=CLICK_TIMEOUT_MS)
-            check_client_disconnected("复制响应 - 悬停后: ")
-            await asyncio.sleep(0.5) # Use asyncio.sleep
-            check_client_disconnected("复制响应 - 悬停后延时后: ")
-            logger.info(f"[{req_id}]   - 已悬停。") # logger
-        except Exception as hover_err:
-            logger.warning(f"[{req_id}]   - 悬停失败: {hover_err}。尝试直接查找按钮...") # logger
-            check_client_disconnected("复制响应 - 悬停失败后: ")
-            # Continue, maybe buttons are already visible
+        # 1. Hover over the last message to reveal options (这部分逻辑可能仍然需要)
+        logger.info(f"[{req_id}]   - 尝试悬停最后一条消息以显示选项...")
+        await last_message_container.hover(timeout=CLICK_TIMEOUT_MS)
+        check_client_disconnected("复制响应 - 悬停后: ")
+        await asyncio.sleep(0.5)
+        check_client_disconnected("复制响应 - 悬停后延时后: ")
+        logger.info(f"[{req_id}]   - 已悬停。")
 
         # 2. Click "More options" button
-        logger.info(f"[{req_id}]   - 定位并点击 '更多选项' 按钮...") # logger
+        logger.info(f"[{req_id}]   - 定位并点击 '更多选项' 按钮...")
         try:
-            # Direct Playwright calls with timeout
             await expect_async(more_options_button).to_be_visible(timeout=CLICK_TIMEOUT_MS)
             check_client_disconnected("复制响应 - 更多选项按钮可见后: ")
             await more_options_button.click(timeout=CLICK_TIMEOUT_MS)
-            logger.info(f"[{req_id}]   - '更多选项' 已点击。") # logger
+            logger.info(f"[{req_id}]   - '更多选项' 已点击 (通过 get_by_label)。")
         except Exception as more_opts_err:
-            logger.error(f"[{req_id}]   - '更多选项' 按钮不可见或点击失败: {more_opts_err}") # logger
+            logger.error(f"[{req_id}]   - '更多选项' 按钮 (通过 get_by_label) 不可见或点击失败: {more_opts_err}")
             await save_error_snapshot(f"copy_response_more_options_failed_{req_id}")
             return None
 
         check_client_disconnected("复制响应 - 点击更多选项后: ")
-        await asyncio.sleep(0.5) # Use asyncio.sleep
+        await asyncio.sleep(0.5)
         check_client_disconnected("复制响应 - 点击更多选项后延时后: ")
 
-        # 3. Find and click "Copy Markdown" button (try primary, then alt)
-        logger.info(f"[{req_id}]   - 定位并点击 '复制 Markdown' 按钮...") # logger
+        # 3. Find and click "Copy Markdown" button
+        logger.info(f"[{req_id}]   - 定位并点击 '复制 Markdown' 按钮...")
         copy_success = False
         try:
-            # Try primary selector
-            await expect_async(copy_button_primary).to_be_visible(timeout=CLICK_TIMEOUT_MS)
-            check_client_disconnected("复制响应 - 主复制按钮可见后: ")
-            await copy_button_primary.click(timeout=CLICK_TIMEOUT_MS, force=True)
+            await expect_async(copy_markdown_button).to_be_visible(timeout=CLICK_TIMEOUT_MS)
+            check_client_disconnected("复制响应 - 复制按钮可见后: ")
+            await copy_markdown_button.click(timeout=CLICK_TIMEOUT_MS, force=True)
             copy_success = True
-            logger.info(f"[{req_id}]   - 已点击 '复制 Markdown' (主选择器)。") # logger
-        except Exception as primary_copy_err:
-            logger.warning(f"[{req_id}]   - 主复制按钮选择器失败 ({primary_copy_err})，尝试备选...") # logger
-            check_client_disconnected("复制响应 - 主复制按钮失败后: ")
-            try:
-                # Try alternative selector
-                await expect_async(copy_button_alt).to_be_visible(timeout=CLICK_TIMEOUT_MS)
-                check_client_disconnected("复制响应 - 备选复制按钮可见后: ")
-                await copy_button_alt.click(timeout=CLICK_TIMEOUT_MS, force=True)
-                copy_success = True
-                logger.info(f"[{req_id}]   - 已点击 '复制 Markdown' (备选选择器)。") # logger
-            except Exception as alt_copy_err:
-                logger.error(f"[{req_id}]   - 备选 '复制 Markdown' 按钮失败: {alt_copy_err}") # logger
-                await save_error_snapshot(f"copy_response_copy_button_failed_{req_id}")
-                return None
+            logger.info(f"[{req_id}]   - 已点击 '复制 Markdown' (通过 get_by_role)。")
+        except Exception as copy_err:
+            logger.error(f"[{req_id}]   - '复制 Markdown' 按钮 (通过 get_by_role) 点击失败: {copy_err}")
+            await save_error_snapshot(f"copy_response_copy_button_failed_{req_id}")
+            return None
 
         if not copy_success:
-             logger.error(f"[{req_id}]   - 未能点击任何 '复制 Markdown' 按钮。") # logger
+             logger.error(f"[{req_id}]   - 未能点击 '复制 Markdown' 按钮。")
              return None
-
+        
         check_client_disconnected("复制响应 - 点击复制按钮后: ")
-        await asyncio.sleep(0.5) # Use asyncio.sleep
+        await asyncio.sleep(0.5)
         check_client_disconnected("复制响应 - 点击复制按钮后延时后: ")
 
         # 4. Read clipboard content
-        logger.info(f"[{req_id}]   - 正在读取剪贴板内容...") # logger
+        logger.info(f"[{req_id}]   - 正在读取剪贴板内容...")
         try:
-            # Direct evaluate call (no specific timeout needed)
             clipboard_content = await page.evaluate('navigator.clipboard.readText()')
             check_client_disconnected("复制响应 - 读取剪贴板后: ")
 
             if clipboard_content:
                 content_preview = clipboard_content[:100].replace('\n', '\\\\n')
-                logger.info(f"[{req_id}]   - ✅ 成功获取剪贴板内容 (长度={len(clipboard_content)}): '{content_preview}...'") # logger
+                logger.info(f"[{req_id}]   - ✅ 成功获取剪贴板内容 (长度={len(clipboard_content)}): '{content_preview}...'")
                 return clipboard_content
             else:
-                logger.error(f"[{req_id}]   - 剪贴板内容为空。") # logger
+                logger.error(f"[{req_id}]   - 剪贴板内容为空。")
                 return None
         except Exception as clipboard_err:
             if "clipboard-read" in str(clipboard_err):
-                 logger.error(f"[{req_id}]   - 读取剪贴板失败: 可能是权限问题。错误: {clipboard_err}") # logger
+                 logger.error(f"[{req_id}]   - 读取剪贴板失败: 可能是权限问题。错误: {clipboard_err}")
             else:
-                 logger.error(f"[{req_id}]   - 读取剪贴板失败: {clipboard_err}") # logger
+                 logger.error(f"[{req_id}]   - 读取剪贴板失败: {clipboard_err}")
             await save_error_snapshot(f"copy_response_clipboard_read_failed_{req_id}")
             return None
 
     except ClientDisconnectedError:
-        logger.info(f"[{req_id}] (Helper Copy) 客户端断开连接。") # logger
+        logger.info(f"[{req_id}] (Helper Copy) 客户端断开连接。")
         raise
     except Exception as e:
-        logger.exception(f"[{req_id}] 复制响应过程中发生意外错误") # logger
+        logger.exception(f"[{req_id}] 复制响应过程中发生意外错误")
         await save_error_snapshot(f"copy_response_unexpected_error_{req_id}")
         return None
 
@@ -1720,8 +1716,28 @@ async def _wait_for_response_completion(
 
                  # Check Input empty
                  try:
-                     await expect_async(input_field).to_have_value('', timeout=FINAL_STATE_CHECK_TIMEOUT_MS)
-                     input_empty = True
+                     # await expect_async(input_field).to_have_value('', timeout=FINAL_STATE_CHECK_TIMEOUT_MS) # 旧方法
+                    
+                     # 新方法：检查 data-value
+                     autosize_wrapper_locator = page.locator('ms-prompt-input-wrapper ms-autosize-textarea')
+                     current_data_value = await autosize_wrapper_locator.get_attribute("data-value")
+                    
+                     # 判断是否有效为空，取决于页面上下文
+                     # 在响应完成后，我们期望输入框恢复到其"初始空"状态
+                     expected_empty_data_value = "" # 对于 new_chat 页面是 ""
+                     if "prompts/new_chat" not in page.url: # 如果不是 new_chat 页面（即已有会话）
+                         # 这里的 "Start typing a prompt" 需要确认是否是固定的，或者是否有其他方式判断
+                         expected_empty_data_value = "Start typing a prompt" 
+                         # 或者，如果清空后 data-value 也会变成 ""，那么统一判断 "" 即可
+
+                     if current_data_value == expected_empty_data_value or current_data_value == "": # 增加对空字符串的判断
+                         input_empty = True
+                     else:
+                         input_empty = False
+                         if DEBUG_LOGS_ENABLED: # 仅在 DEBUG 模式下记录此详细日志
+                             logger.debug(f"[{req_id}] (Helper Wait) 输入框 data-value 不为空: '{current_data_value}', 期望: '{expected_empty_data_value}' 或 ''")
+                         state_check_error = AssertionError(f"Input data-value not empty: '{current_data_value}'")
+
                  except (PlaywrightAsyncError, asyncio.TimeoutError, AssertionError) as e:
                       input_empty = False
                       state_check_error = e
@@ -2186,31 +2202,39 @@ async def _process_request_refactored(
                 await clear_chat_button.click(timeout=5000)
                 check_client_disconnected("After Clear Button Click: ")
 
-                # ** ADDED: Wait for confirm button AND wait for overlay to disappear BEFORE clicking confirm **
+                # 直接等待确认按钮出现并可点击
+                confirm_button_locator = page.locator(CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR) # 'button.mdc-button:has-text("Continue")'
                 try:
-                    # logger.debug(f"[{req_id}] Waiting for confirm button and overlay disappearance...")
-                    await expect_async(confirm_button).to_be_visible(timeout=5000)
-                    # logger.debug(f"[{req_id}] Confirm button visible and overlay hidden. Proceeding to click confirm.")
-                except Exception as confirm_wait_err:
-                    # Modify error message to be more accurate
-                    logger.error(f"[{req_id}] Error waiting for confirm button visibility: {confirm_wait_err}")
-                    await save_error_snapshot(f"clear_chat_confirm_wait_error_{req_id}")
-                    raise PlaywrightAsyncError(f"Confirm button wait failed: {confirm_wait_err}") from confirm_wait_err
+                    logger.info(f"[{req_id}] 等待清空确认按钮 '{CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR}' 可见并可点击...")
+                    await expect_async(confirm_button_locator).to_be_enabled(timeout=10000) # 增加超时并等待可点击
+                    logger.info(f"[{req_id}] ✅ 清空确认按钮已准备好。")
 
-                check_client_disconnected("After Confirm Button/Overlay Wait: ")
-                await confirm_button.click(timeout=5000)
-                check_client_disconnected("After Confirm Button Click: ")
-                logger.info(f"[{req_id}] 清空确认按钮已点击。") # logger
+                    check_client_disconnected("After Confirm Button Enabled: ")
+                    await confirm_button_locator.click(timeout=5000)
+                    check_client_disconnected("After Confirm Button Click: ")
+                    logger.info(f"[{req_id}] 清空确认按钮已点击。")
 
-                last_response_container = page.locator(RESPONSE_CONTAINER_SELECTOR).last
-                await asyncio.sleep(0.5) # Use asyncio.sleep
-                check_client_disconnected("After Clear Post-Delay: ")
-                try:
-                    # Direct call with timeout
-                    await expect_async(last_response_container).to_be_hidden(timeout=CLEAR_CHAT_VERIFY_TIMEOUT_MS - 500)
-                    logger.info(f"[{req_id}] ✅ 聊天已成功清空 (验证通过)。") # logger
-                except Exception as verify_err:
-                    logger.warning(f"[{req_id}] ⚠️ 警告: 清空聊天验证失败: {verify_err}") # logger
+                    # 后续验证
+                    last_response_container = page.locator(RESPONSE_CONTAINER_SELECTOR).last
+                    await asyncio.sleep(0.5) # Use asyncio.sleep
+                    check_client_disconnected("After Clear Post-Delay: ")
+                    try:
+                        # Direct call with timeout
+                        await expect_async(last_response_container).to_be_hidden(timeout=CLEAR_CHAT_VERIFY_TIMEOUT_MS - 500)
+                        logger.info(f"[{req_id}] ✅ 聊天已成功清空 (验证通过)。") # logger
+                    except Exception as verify_err:
+                        logger.warning(f"[{req_id}] ⚠️ 警告: 清空聊天验证失败: {verify_err}") # logger
+                except (PlaywrightAsyncError, asyncio.TimeoutError, ClientDisconnectedError) as confirm_err: # Capturing more specific errors too
+                    if isinstance(confirm_err, ClientDisconnectedError): raise
+                    logger.error(f"[{req_id}] ❌ 等待或点击清空确认按钮时出错: {confirm_err}")
+                    await save_error_snapshot(f"clear_chat_confirm_button_error_{req_id}")
+                    raise PlaywrightAsyncError(f"Clear chat confirm button interaction failed: {confirm_err}") from confirm_err
+                except Exception as clear_exc: # General exception for any other unexpected issues in this block
+                    logger.exception(f"[{req_id}] ❌ 错误: 清空聊天确认阶段意外错误") # logger
+                    await save_error_snapshot(f"clear_chat_confirm_unexpected_{req_id}")
+                    raise PlaywrightAsyncError(f"Unexpected error during clear chat confirmation: {clear_exc}") from clear_exc
+                check_client_disconnected("After Clear Chat Logic: ")
+
         except (PlaywrightAsyncError, asyncio.TimeoutError, ClientDisconnectedError) as clear_err:
             if isinstance(clear_err, ClientDisconnectedError): raise
             logger.error(f"[{req_id}] ❌ 错误: 清空聊天阶段出错: {clear_err}") # logger
@@ -2485,74 +2509,212 @@ async def _process_request_refactored(
             check_client_disconnected("Top P 调整 - 逻辑完成后: ")
         # --- 结束调整 Top P ---
 
-        # --- 3. Fill & Submit Prompt --- (Use logger)
-        logger.info(f"[{req_id}] (Refactored Process) 填充并提交提示 ({len(prepared_prompt)} chars)...") # logger
-        input_field = page.locator(INPUT_SELECTOR)
-        input_field2 = page.locator(INPUT_SELECTOR2)
-        submit_button = page.locator(SUBMIT_BUTTON_SELECTOR)
+        # --- 3. Fill & Submit Prompt ---
+        logger.info(f"[{req_id}] (Refactored Process) 填充并提交提示 ({len(prepared_prompt)} chars)...")
+        prompt_textarea_locator = page.locator(PROMPT_TEXTAREA_SELECTOR)
+        # submit_button_locator 仍然需要，但主要用于状态检查，而不是点击
+        autosize_wrapper_locator = page.locator('ms-prompt-input-wrapper ms-autosize-textarea')
+
         try:
-            # Direct calls with timeout
-            await expect_async(input_field).to_be_visible(timeout=5000)
+            await expect_async(prompt_textarea_locator).to_be_visible(timeout=5000)
             check_client_disconnected("After Input Visible: ")
 
-            # 使用 evaluate 方法优化大文本填充
             logger.info(f"[{req_id}]   - 使用 JavaScript evaluate 填充提示文本...")
-            await input_field.evaluate("""
+            await prompt_textarea_locator.evaluate(
+                '''
                 (element, text) => {
                     element.value = text;
                     element.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
                     element.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
                 }
-            """, prepared_prompt)
-            logger.info(f"[{req_id}]   - JavaScript evaluate 填充完成。")
-            
+                ''',
+                prepared_prompt
+            )
+            await autosize_wrapper_locator.evaluate('(element, text) => { element.setAttribute("data-value", text); }', prepared_prompt)
+            logger.info(f"[{req_id}]   - JavaScript evaluate 填充完成，data-value 已尝试更新。")
             check_client_disconnected("After Input Fill (evaluate): ")
-            await expect_async(submit_button).to_be_enabled(timeout=10000)
-            check_client_disconnected("After Submit Enabled: ")
-            await asyncio.sleep(0.2) # Use asyncio.sleep
-            check_client_disconnected("After Submit Pre-Delay: ")
 
-            # Try shortcut submit
-            submitted_successfully = False
+            # 等待 Run 按钮变为启用状态 (基于 data-value 更新后的状态)
+            # 这一步仍然重要，以确认页面已准备好接受提交操作
+            await expect_async(submit_button_locator).to_be_enabled(timeout=10000)
+            check_client_disconnected("After Submit Button Enabled: ")
+            
+            # 短暂延时，确保事件传播
+            await asyncio.sleep(0.3) # 增加一点延时确保UI更新
+            check_client_disconnected("After Submit Pre-Shortcut-Delay: ")
+
+            # 模拟键盘快捷键提交
+            submitted_successfully_via_shortcut = False
+            # 使用更精确的选择器定位用户输入区域的 ms-autosize-textarea
+            # 策略1: 使用 nth(1) - 假设用户输入框总是第二个匹配项
+            user_prompt_autosize_locator = page.locator('ms-prompt-input-wrapper ms-autosize-textarea').nth(1)
+            # 策略2: 基于 aria-label (如果可靠且存在)
+            # user_prompt_autosize_locator = page.locator('ms-prompt-input-wrapper ms-autosize-textarea:has(textarea[aria-label="Start typing a prompt"])')
+            # 策略3: 排除系统指令区域 (如果系统指令区域有特定标识，如父级 ms-zero-state)
+            # user_prompt_autosize_locator = page.locator('ms-prompt-input-wrapper:not(:has(ms-zero-state)) ms-autosize-textarea')
+            logger.info(f"[{req_id}]   - 用于快捷键后验证的用户输入区域选择器: nth(1) of 'ms-prompt-input-wrapper ms-autosize-textarea'")
+
+
             try:
-                navigator_platform = await page.evaluate("navigator.platform")
-                is_mac = "mac" in navigator_platform.lower()
-                shortcut_key = "Meta" if is_mac else "Control"
-                await input_field.focus(timeout=5000)
+                # 获取浏览器运行的操作系统平台信息
+                host_os_from_launcher = os.environ.get('HOST_OS_FOR_SHORTCUT')
+                is_mac_determined = False # 明确初始化
+
+                if host_os_from_launcher:
+                    logger.info(f"[{req_id}]   - 从启动器环境变量 HOST_OS_FOR_SHORTCUT 获取到操作系统提示: '{host_os_from_launcher}'")
+                    if host_os_from_launcher == "Darwin":
+                        is_mac_determined = True
+                    elif host_os_from_launcher in ["Windows", "Linux"]:
+                        is_mac_determined = False
+                    else:
+                        logger.warning(f"[{req_id}]   - 未知的 HOST_OS_FOR_SHORTCUT 值: '{host_os_from_launcher}'。将回退到浏览器检测。")
+                        # 如果值未知，则清除它，强制浏览器检测
+                        host_os_from_launcher = None 
+                
+                if not host_os_from_launcher: # 如果环境变量未设置或值未知
+                    # 这部分浏览器检测逻辑暂时保持原样或后续再精修
+                    if host_os_from_launcher is None: # 确保日志只在真正需要检测时打印
+                        logger.info(f"[{req_id}]   - HOST_OS_FOR_SHORTCUT 未设置或值未知，将进行浏览器内部操作系统检测。")
+                    
+                    user_agent_data_platform = None
+                    try:
+                        # 首先尝试使用更现代的 userAgentData.platform API
+                        user_agent_data_platform = await page.evaluate("() => navigator.userAgentData?.platform || ''")
+                    except Exception as e_ua_data:
+                        logger.warning(f"[{req_id}]   - navigator.userAgentData.platform 读取失败 ({e_ua_data})，尝试 navigator.userAgent。")
+                        # 如果失败，回退到 userAgent
+                        user_agent_string = await page.evaluate("() => navigator.userAgent || ''")
+                        user_agent_string_lower = user_agent_string.lower()
+                        if "macintosh" in user_agent_string_lower or "mac os x" in user_agent_string_lower or "macintel" in user_agent_string_lower:
+                            user_agent_data_platform = "macOS" # 模拟一个macOS的值
+                        elif "windows" in user_agent_string_lower:
+                            user_agent_data_platform = "Windows" # 模拟一个Windows的值
+                        elif "linux" in user_agent_string_lower:
+                            user_agent_data_platform = "Linux"
+                        else:
+                            user_agent_data_platform = "Other" # 其他平台
+                    
+                    if user_agent_data_platform and user_agent_data_platform != "Other":
+                        user_agent_data_platform_lower = user_agent_data_platform.lower()
+                        # 再次确认 platform 是否包含 mac 相关字符串
+                        is_mac_determined = "mac" in user_agent_data_platform_lower or "macos" in user_agent_data_platform_lower or "macintel" in user_agent_data_platform_lower
+                        logger.info(f"[{req_id}]   - 浏览器内部检测到平台: '{user_agent_data_platform}', 推断 is_mac: {is_mac_determined}")
+                    else:
+                        logger.warning(f"[{req_id}]   - 浏览器平台信息获取失败、为空或为'Other' ('{user_agent_data_platform}')。默认使用非Mac快捷键。")
+                        is_mac_determined = False # 默认行为
+                
+                shortcut_modifier = "Meta" if is_mac_determined else "Control"
+                shortcut_key = "Enter"
+                logger.info(f"[{req_id}]   - 最终选择快捷键: {shortcut_modifier}+{shortcut_key} (基于 is_mac_determined: {is_mac_determined})")
+
+                # 改进版本：添加焦点前后的日志和短暂延迟
+                logger.info(f"[{req_id}]   - 尝试将焦点设置到输入框...")
+                await prompt_textarea_locator.focus(timeout=5000)
                 check_client_disconnected("After Input Focus (Shortcut): ")
-                await page.keyboard.press(f'{shortcut_key}+Enter')
+                
+                # 短暂等待确保焦点设置完成
+                await asyncio.sleep(0.1)
+                logger.info(f"[{req_id}]   - 焦点设置完成，准备按下快捷键...")
+                
+                # 更可靠的按键顺序实现：分开按下修饰键和主键
+                try:
+                    # 方式1：使用组合键方式
+                    await page.keyboard.press(f'{shortcut_modifier}+{shortcut_key}')
+                    logger.info(f"[{req_id}]   - 已使用组合键方式模拟按下: {shortcut_modifier}+{shortcut_key}")
+                except Exception as combo_err:
+                    # 如果组合键方式失败，尝试分步按键方式
+                    logger.warning(f"[{req_id}]   - 组合键方式失败: {combo_err}，尝试分步按键...")
+                    try:
+                        # 方式2：按下修饰键，按下主键，释放所有键
+                        await page.keyboard.down(shortcut_modifier)
+                        await asyncio.sleep(0.05)
+                        await page.keyboard.down(shortcut_key)
+                        await asyncio.sleep(0.05)
+                        await page.keyboard.up(shortcut_key)
+                        await asyncio.sleep(0.05)
+                        await page.keyboard.up(shortcut_modifier)
+                        logger.info(f"[{req_id}]   - 已使用分步按键方式模拟: {shortcut_modifier}+{shortcut_key}")
+                    except Exception as step_err:
+                        logger.error(f"[{req_id}]   - 分步按键也失败: {step_err}")
+                        # 继续流程，让验证步骤判断是否成功
+                
                 check_client_disconnected("After Keyboard Press: ")
-                # Check input cleared (direct call)
-                await expect_async(input_field2).to_have_value('', timeout=1000)
-                # await expect_async(input_field).to_have_value('', timeout=1000)
-                submitted_successfully = True
-                logger.info(f"[{req_id}]   - 快捷键提交成功。") # logger
+                
+                # 验证提交是否成功：检查用户输入 textarea 的 value 是否按预期清空
+                # 定位用户输入的 textarea (需要一个精确的选择器)
+                # 沿用旧版的 input_field2 (ms-prompt-input-wrapper textarea[aria-label="Start typing a prompt"])
+                user_prompt_actual_textarea_locator = page.locator(
+                    'ms-prompt-input-wrapper textarea[aria-label="Start typing a prompt"]'
+                )
+                # 如果没有 aria-label，并且上面的选择器失效，可以考虑备用方案，例如更依赖结构的：
+                # user_prompt_actual_textarea_locator = page.locator('ms-prompt-input-wrapper:not(:has(ms-zero-state)) ms-autosize-textarea textarea').nth(0) # 或者根据实际情况调整 nth
+                selector_string = 'ms-prompt-input-wrapper textarea[aria-label="Start typing a prompt"]'
+                logger.info(f"[{req_id}]   - 用于快捷键后验证的用户输入 textarea 选择器: '{selector_string}'")
+
+                validation_attempts = 7 
+                validation_interval = 0.2 
+                # submitted_successfully_via_shortcut = False # 已在 try 块外部定义
+
+                for i in range(validation_attempts):
+                    try:
+                        # 尝试获取 textarea 的 value
+                        current_value = await user_prompt_actual_textarea_locator.input_value(timeout=500) # 短超时获取值
+                        if current_value == "":
+                            submitted_successfully_via_shortcut = True
+                            logger.info(f"[{req_id}]   - ✅ 快捷键提交成功确认 (用户输入 textarea value 已清空 after {i+1} attempts)。")
+                            break
+                        else:
+                            if DEBUG_LOGS_ENABLED:
+                                logger.debug(f"[{req_id}]   - 用户输入 textarea value 验证尝试 {i+1}/{validation_attempts}: 当前='{current_value}', 期望=''")
+                    except PlaywrightAsyncError as e_val:
+                        # 如果元素找不到或不可见，input_value 会报错
+                        if DEBUG_LOGS_ENABLED:
+                            logger.debug(f"[{req_id}]   - 获取用户输入 textarea value 时出错 (尝试 {i+1}): {e_val.message.splitlines()[0]}")
+                        # 如果是超时错误，说明元素可能暂时不可操作
+                        if "timeout" in e_val.message.lower():
+                            pass # 继续尝试
+                        else: # 其他错误，可能选择器有问题
+                            logger.warning(f"[{req_id}]   - 获取用户输入 textarea value 时 Playwright 错误 (尝试 {i+1}): {e_val.message.splitlines()[0]}")
+                            # 如果选择器本身就有问题（例如严格模式，虽然这里 input_value 通常不会直接触发，但错误可能暗示），则中断
+                            if "strict mode violation" in e_val.message.lower():
+                                await save_error_snapshot(f"shortcut_submit_textarea_value_strict_error_{req_id}")
+                                break
+                            # 对于其他非超时错误，也考虑中断，因为可能意味着元素状态不对
+                            break 
+                    except Exception as e_gen:
+                        logger.warning(f"[{req_id}]   - 获取用户输入 textarea value 时发生其他错误 (尝试 {i+1}): {e_gen}")
+                        break # 停止尝试
+                    
+                    if i < validation_attempts - 1: # 如果不是最后一次尝试
+                        await asyncio.sleep(validation_interval)
+
+                if not submitted_successfully_via_shortcut:
+                    final_value_for_log = "(无法获取或未清空)"
+                    try:
+                        # 最后尝试获取一次用于日志
+                        final_value_for_log = await user_prompt_actual_textarea_locator.input_value(timeout=300)
+                    except: 
+                        pass
+                    logger.warning(f"[{req_id}]   - ⚠️ 快捷键提交后用户输入 textarea value ('{final_value_for_log}') 未在预期时间内 ({validation_attempts * validation_interval:.1f}s) 清空。")
+                    # submitted_successfully_via_shortcut 保持 False，后续逻辑会回退到点击提交按钮
+
             except Exception as shortcut_err:
-                logger.warning(f"[{req_id}]   - 快捷键提交失败或未确认: {shortcut_err}。回退到点击。") # logger
+                logger.error(f"[{req_id}]   - ❌ 快捷键提交过程中发生错误: {shortcut_err}", exc_info=True)
+                await save_error_snapshot(f"shortcut_submit_error_{req_id}")
+                raise PlaywrightAsyncError(f"Failed to submit prompt via keyboard shortcut: {shortcut_err}") from shortcut_err
 
-            check_client_disconnected("After Shortcut Attempt Logic: ")
+            if not submitted_successfully_via_shortcut: 
+                 logger.error(f"[{req_id}] 严重错误: 未能通过快捷键确认提交。") # 理论上不会到达这里
+                 raise PlaywrightAsyncError("Failed to confirm prompt submission via shortcut.")
 
-            # Fallback to click
-            if not submitted_successfully:
-                # Direct calls with timeout
-                await submit_button.scroll_into_view_if_needed(timeout=5000)
-                check_client_disconnected("After Scroll Fallback: ")
-                await submit_button.click(timeout=10000, force=True)
-                check_client_disconnected("After Click Fallback: ")
-                await expect_async(input_field).to_have_value('', timeout=3000)
-                submitted_successfully = True
-                logger.info(f"[{req_id}]   - 点击提交成功。") # logger
-
-            if not submitted_successfully:
-                 raise PlaywrightAsyncError("Failed to submit prompt via shortcut or click.")
-
+        # </END OF MODIFIED SUBMIT LOGIC>
         except (PlaywrightAsyncError, asyncio.TimeoutError, ClientDisconnectedError) as submit_err:
             if isinstance(submit_err, ClientDisconnectedError): raise
-            logger.error(f"[{req_id}] ❌ 错误: 填充或提交提示时出错: {submit_err}") # logger
+            logger.error(f"[{req_id}] ❌ 错误: 填充或提交提示时出错: {submit_err}", exc_info=True)
             await save_error_snapshot(f"submit_prompt_error_{req_id}")
             raise HTTPException(status_code=502, detail=f"[{req_id}] Failed to submit prompt to AI Studio: {submit_err}")
         except Exception as submit_exc:
-            logger.exception(f"[{req_id}] ❌ 错误: 填充或提交提示时意外错误") # logger
+            logger.exception(f"[{req_id}] ❌ 错误: 填充或提交提示时意外错误")
             await save_error_snapshot(f"submit_prompt_unexpected_{req_id}")
             raise HTTPException(status_code=500, detail=f"[{req_id}] Unexpected error during prompt submission: {submit_exc}")
         check_client_disconnected("After Submit Logic: ")
@@ -2578,30 +2740,100 @@ async def _process_request_refactored(
             raise HTTPException(status_code=500, detail=f"[{req_id}] Unexpected error locating response element: {locate_exc}")
         check_client_disconnected("After Locate Response: ")
 
-        # --- 5. Wait for Completion --- (Uses helper, which was reverted internally)
-        logger.info(f"[{req_id}] (Refactored Process) 等待响应生成完成...") # logger
-        completion_detected = await _wait_for_response_completion(
-            page, req_id, response_element, None, check_client_disconnected, None # Pass None for unused helpers
+        # --- 5. 等待响应生成完成 或 检测到模型错误 ---
+        logger.info(f"[{req_id}] (Refactored Process) 等待响应生成完成或检测模型错误...")
+        
+        # 定义模型错误的选择器
+        MODEL_ERROR_CONTAINER_SELECTOR = 'ms-chat-turn:last-child div.model-error' # 定位最后一个聊天轮次中的 model-error div
+        # MODEL_ERROR_ICON_SELECTOR = f'{MODEL_ERROR_CONTAINER_SELECTOR} mat-icon:has-text("error")' # 可选，更精确
+        
+        completion_detected_via_edit_button = False
+        page_model_error_message: Optional[str] = None
+
+        # 首先，运行 _wait_for_response_completion，但要意识到它可能因为等待编辑按钮而返回 False
+        # 即使 _wait_for_response_completion 返回 False (因为编辑按钮超时)，我们仍然需要检查是否是模型错误导致的
+        completion_detected_via_edit_button = await _wait_for_response_completion(
+            page, req_id, response_element, None, check_client_disconnected, None
         )
-        if not completion_detected:
-            raise HTTPException(status_code=504, detail=f"[{req_id}] AI Studio response generation timed out.")
-        check_client_disconnected("After Wait Completion: ")
+        check_client_disconnected("After _wait_for_response_completion attempt: ")
 
-        # --- 6. Check for Page Errors --- (Use logger)
-        logger.info(f"[{req_id}] (Refactored Process) 检查页面错误提示...") # logger
-        page_error = await detect_and_extract_page_error(page, req_id)
-        if page_error:
-            logger.error(f"[{req_id}] ❌ 错误: AI Studio 页面返回错误: {page_error}") # logger
-            await save_error_snapshot(f"page_error_detected_{req_id}")
-            raise HTTPException(status_code=502, detail=f"[{req_id}] AI Studio Error: {page_error}")
-        check_client_disconnected("After Page Error Check: ")
+        if not completion_detected_via_edit_button:
+            logger.info(f"[{req_id}] _wait_for_response_completion 未通过编辑按钮确认完成，检查是否存在模型错误...")
+            try:
+                error_container_locator = page.locator(MODEL_ERROR_CONTAINER_SELECTOR)
+                # 尝试等待错误容器在短时间内可见
+                await expect_async(error_container_locator).to_be_visible(timeout=2000) # 短暂等待，因为它应该在加载结束后很快出现
+                
+                # 如果错误容器可见，提取错误文本
+                # 优先尝试从特定结构提取，如果失败则取整个容器的文本
+                specific_error_text_locator = error_container_locator.locator('*:not(mat-icon)') # 尝试获取非图标的文本内容
+                
+                try:
+                    page_model_error_message = await specific_error_text_locator.first.text_content(timeout=500)
+                    if page_model_error_message: page_model_error_message = page_model_error_message.strip()
+                except PlaywrightAsyncError: # 如果特定文本提取失败
+                    page_model_error_message = await error_container_locator.text_content(timeout=500)
+                    if page_model_error_message: page_model_error_message = page_model_error_message.strip()
 
-        # --- 7. Get Final Content --- (Uses helpers, which were reverted internally)
-        logger.info(f"[{req_id}] (Refactored Process) 获取最终响应内容...") # logger
+                if page_model_error_message:
+                    logger.error(f"[{req_id}] ❌ 检测到 AI Studio 模型返回的错误信息: {page_model_error_message}")
+                    await save_error_snapshot(f"model_returned_error_{req_id}")
+                    # 将此视为一种"完成"，但结果是错误
+                    # 不需要再调用 _get_final_response_content，直接抛出异常
+                    raise HTTPException(status_code=502, detail=f"[{req_id}] AI Studio Model Error: {page_model_error_message}")
+                else:
+                    logger.warning(f"[{req_id}] 检测到 model-error 容器，但未能提取具体错误文本。")
+                    # 即使未能提取文本，出现 model-error 容器本身也表明有问题
+                    await save_error_snapshot(f"model_error_container_no_text_{req_id}")
+                    raise HTTPException(status_code=502, detail=f"[{req_id}] AI Studio returned an unspecified model error (error container found).")
+
+            except (PlaywrightAsyncError, asyncio.TimeoutError) as e_model_err_check:
+                # 如果在2秒内没有找到 model-error 容器，那么可能确实是其他原因的超时
+                logger.info(f"[{req_id}] 未检测到明确的 model-error 容器 (或检查超时: {type(e_model_err_check).__name__})。继续按原超时逻辑处理。")
+                # 此时，如果 completion_detected_via_edit_button 仍然是 False，则会按原计划抛出超时异常
+                if not completion_detected_via_edit_button:
+                     raise HTTPException(status_code=504, detail=f"[{req_id}] AI Studio response generation timed out (and no specific model error detected).")
+        
+        # 如果到这里，意味着 completion_detected_via_edit_button 为 True，或者虽然它为 False 但没有检测到 model-error
+        # 但如果 completion_detected_via_edit_button 为 True，我们就不应该再检查下面的 page_error 了，因为那是一个不同的错误机制（toast）
+        # 所以，如果 completion_detected_via_edit_button 为 True，就跳过 detect_and_extract_page_error
+        
+        # --- 6. 检查页面 Toast 错误 (仅当未通过编辑按钮确认完成，且未检测到模型内部错误时) ---
+        # 这个检查现在变得有些冗余，因为上面的模型错误检查更具体
+        # 但可以保留作为一种后备，或者考虑其适用场景
+        if not completion_detected_via_edit_button: # 理论上，如果上面没有抛异常，这里不应该执行
+            logger.info(f"[{req_id}] (Refactored Process) 检查页面 Toast 错误提示...")
+            page_toast_error = await detect_and_extract_page_error(page, req_id)
+            if page_toast_error:
+                logger.error(f"[{req_id}] ❌ 错误: AI Studio 页面返回 Toast 错误: {page_toast_error}")
+                await save_error_snapshot(f"page_toast_error_detected_{req_id}")
+                raise HTTPException(status_code=502, detail=f"[{req_id}] AI Studio Page Error: {page_toast_error}")
+            check_client_disconnected("After Page Toast Error Check: ")
+        else:
+            logger.info(f"[{req_id}] 已通过编辑按钮确认完成，跳过 Toast 错误检查。")
+
+
+        # --- 7. 获取最终内容 (仅当 completion_detected_via_edit_button 为 True 时) ---
+        if not completion_detected_via_edit_button:
+            # 如果因为其他原因（不是模型错误，也不是编辑按钮超时后的模型错误）导致未完成
+            # 这种情况理论上已经被上面的 HTTPException(504) 覆盖了
+            logger.error(f"[{req_id}] 逻辑异常：响应未完成，也未检测到模型错误，但不应到达此处获取内容。")
+            raise HTTPException(status_code=500, detail=f"[{req_id}] Internal logic error in response processing.")
+
+        logger.info(f"[{req_id}] (Refactored Process) 获取最终响应内容...")
         final_content = await _get_final_response_content(
-            page, req_id, check_client_disconnected # Pass only needed args
+            page, req_id, check_client_disconnected
         )
-        if final_content is None:
+        if final_content is None: # 如果获取内容失败
+            # 检查此时是否出现了延迟的 model-error (不太可能，但作为防御)
+            try:
+                error_container_locator = page.locator(MODEL_ERROR_CONTAINER_SELECTOR)
+                if await error_container_locator.is_visible(timeout=500): # 短暂检查
+                    late_error_message = await error_container_locator.text_content(timeout=300) or "Unknown model error after content fetch attempt."
+                    logger.error(f"[{req_id}] 获取内容失败后，检测到延迟出现的模型错误: {late_error_message.strip()}")
+                    raise HTTPException(status_code=502, detail=f"[{req_id}] AI Studio Model Error (detected after content fetch failure): {late_error_message.strip()}")
+            except: # 忽略检查错误
+                pass
             raise HTTPException(status_code=500, detail=f"[{req_id}] Failed to extract final response content from AI Studio.")
         check_client_disconnected("After Get Content: ")
 
@@ -2629,13 +2861,13 @@ async def _process_request_refactored(
                         await asyncio.sleep(PSEUDO_STREAM_DELAY) # Use asyncio.sleep
 
                     yield generate_sse_stop_chunk(req_id, MODEL_NAME)
-                    yield "data: [DONE]\n\n"
+                    yield "data: [DONE]\\n\\n"
                     logger.info(f"[{req_id}] (Stream Gen) ✅ 伪流式响应发送完毕。") # logger
                 except asyncio.CancelledError:
                     logger.info(f"[{req_id}] (Stream Gen) 流生成器被取消。") # logger
                 except Exception as e:
                     logger.exception(f"[{req_id}] (Stream Gen) ❌ 伪流式生成过程中出错") # logger
-                    try: yield generate_sse_error_chunk(f"Stream generation error: {e}", req_id); yield "data: [DONE]\n\n"
+                    try: yield generate_sse_error_chunk(f"Stream generation error: {e}", req_id); yield "data: [DONE]\\n\\n"
                     except: pass
                 finally:
                     logger.info(f"[{req_id}] (Stream Gen) 设置完成事件。") # logger
@@ -2974,8 +3206,8 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
                 page_display_match = True 
             else:
                 try:
-                    model_wrapper_locator = page.locator('#mat-select-value-0 mat-select-trigger').first
-                    actual_displayed_model_name_on_page_raw = await model_wrapper_locator.inner_text(timeout=5000)
+                    model_name_locator = page.locator('mat-select[data-test-ms-model-selector] div.model-option-content span.gmat-body-medium') # 更新的选择器
+                    actual_displayed_model_name_on_page_raw = await model_name_locator.first.inner_text(timeout=5000) # 使用 .first
                     actual_displayed_model_name_on_page = actual_displayed_model_name_on_page_raw.strip()
 
                     normalized_actual_display = actual_displayed_model_name_on_page.lower()
@@ -3001,8 +3233,8 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
         current_displayed_name_for_revert_raw = "无法读取"
         current_displayed_name_for_revert_stripped = "无法读取"
         try:
-            model_wrapper_locator_for_revert = page.locator('#mat-select-value-0 mat-select-trigger').first
-            current_displayed_name_for_revert_raw = await model_wrapper_locator_for_revert.inner_text(timeout=5000)
+            model_name_locator_revert = page.locator('mat-select[data-test-ms-model-selector] div.model-option-content span.gmat-body-medium') # 更新的选择器
+            current_displayed_name_for_revert_raw = await model_name_locator_revert.first.inner_text(timeout=5000) # 使用 .first
             current_displayed_name_for_revert_stripped = current_displayed_name_for_revert_raw.strip()
             logger.info(f"[{req_id}] 恢复：页面当前显示的模型名称 (原始: '{current_displayed_name_for_revert_raw}', 清理后: '{current_displayed_name_for_revert_stripped}')")
         except Exception as e_read_disp_revert:
@@ -3185,8 +3417,8 @@ async def _set_model_from_page_display(page: AsyncPage, set_storage: bool = Fals
     global current_ai_studio_model_id, logger, parsed_model_list, model_list_fetch_event
     try:
         logger.info("   尝试从页面显示元素读取当前模型名称...")
-        model_wrapper_locator = page.locator('#mat-select-value-0 mat-select-trigger').first
-        displayed_model_name_from_page_raw = await model_wrapper_locator.inner_text(timeout=7000)
+        model_name_locator = page.locator('mat-select[data-test-ms-model-selector] div.model-option-content span.gmat-body-medium') # 更新的选择器
+        displayed_model_name_from_page_raw = await model_name_locator.first.inner_text(timeout=7000) # 使用 .first
         
         # 新增：去除首尾空格
         displayed_model_name = displayed_model_name_from_page_raw.strip()
