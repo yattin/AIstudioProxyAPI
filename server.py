@@ -358,13 +358,26 @@ def restore_original_streams(original_stdout, original_stderr):
 
 
 # --- Pydantic Models ---
+
+class FunctionCall(BaseModel):
+    name: str
+    arguments: str # 通常是 JSON 字符串
+
+class ToolCall(BaseModel):
+    id: str # 每个 tool_call 都有一个唯一的 ID
+    type: str = "function" # 目前主要是 "function"
+    function: FunctionCall
+
 class MessageContentItem(BaseModel):
     type: str
     text: Optional[str] = None
 
 class Message(BaseModel):
-    role: str
-    content: Union[str, List[MessageContentItem]]
+    role: str # "system", "user", "assistant", "tool"
+    content: Union[str, List[MessageContentItem], None] = None # 对于 assistant 发起 tool_calls，content 可以为 null
+    name: Optional[str] = None # 对于 role="tool"，name 是被调用函数的名称
+    tool_calls: Optional[List[ToolCall]] = None # 助手角色可能包含这个
+    tool_call_id: Optional[str] = None # tool 角色必须包含这个，关联到 assistant 的 tool_calls[i].id
 
 class ChatCompletionRequest(BaseModel):
     messages: List[Message]
@@ -381,84 +394,139 @@ class ClientDisconnectedError(Exception):
 
 # --- Helper Functions ---
 def prepare_combined_prompt(messages: List[Message], req_id: str) -> str:
-    # logger.info(f"[{req_id}] (准备提示) 正在从 {len(messages)} 条消息准备组合提示 (包括历史)。")
-    # 使用 print 是因为这个函数可能在日志系统完全配置好之前被调用，或者 print 重定向状态未知
-    # 如果 SERVER_REDIRECT_PRINT 为 true, print 会进入日志；否则进入控制台。
-    # 这是一个设计权衡。如果严格要求所有输出都通过 logger，则此函数内部的 print 也应改为 logger.info。
-    # 但考虑到它在请求处理流程中，且其输出对调试重要，保留 print 并依赖 SERVER_REDIRECT_PRINT 控制其去向。
     print(f"[{req_id}] (准备提示) 正在从 {len(messages)} 条消息准备组合提示 (包括历史)。", flush=True)
-    combined_parts = []
-    system_prompt_content = None
-    processed_indices = set()
 
-    first_system_msg_index = -1
+    combined_parts = []
+    system_prompt_content: Optional[str] = None
+    processed_system_message_indices: Set[int] = set()
+
+    # 1. 提取并置顶第一个有效的系统提示
     for i, msg in enumerate(messages):
         if msg.role == 'system':
             if isinstance(msg.content, str) and msg.content.strip():
                 system_prompt_content = msg.content.strip()
-                processed_indices.add(i)
-                first_system_msg_index = i
-                print(f"[{req_id}] (准备提示) 在索引 {i} 找到系统提示: '{system_prompt_content[:80]}...'")
+                processed_system_message_indices.add(i)
+                print(f"[{req_id}] (准备提示) 在索引 {i} 找到并使用系统提示: '{system_prompt_content[:80]}...'")
+                # 立即将系统提示添加到 combined_parts
+                system_instr_prefix = "系统指令:\n" # 或者 "System:\n"
+                combined_parts.append(f"{system_instr_prefix}{system_prompt_content}")
             else:
-                 print(f"[{req_id}] (准备提示) 在索引 {i} 忽略非字符串或空的系统消息。")
-                 processed_indices.add(i)
-            break
+                print(f"[{req_id}] (准备提示) 在索引 {i} 忽略非字符串或空的系统消息。")
+                processed_system_message_indices.add(i) # 即使忽略也标记为已处理
+            break # 只处理第一个系统消息
 
-    if system_prompt_content:
-        separator = "\\n\\n" if any(idx not in processed_indices for idx in range(len(messages))) else ""
-        system_instr_prefix = "系统指令:\\n" # 中文
-        combined_parts.append(f"{system_instr_prefix}{system_prompt_content}{separator}")
-    else:
-        print(f"[{req_id}] (准备提示) 未找到有效的系统提示，继续处理其他消息。")
+    # 2. 处理用户、助手和工具（function call）消息
+    role_map_ui = {"user": "用户", "assistant": "助手", "system": "系统", "tool": "工具"}
+    turn_separator = "\n---\n" # 对话轮次分隔符
 
-    turn_separator = "\\n---\\n"
-    is_first_turn_after_system = True
     for i, msg in enumerate(messages):
-        if i in processed_indices:
+        if i in processed_system_message_indices:
             continue
-        role = msg.role.capitalize()
-        if role == 'System': # 后续的 System 消息被忽略
+
+        if msg.role == 'system': # 后续的系统消息被忽略
             print(f"[{req_id}] (准备提示) 跳过在索引 {i} 的后续系统消息。")
             continue
+
+        # 如果 combined_parts 不为空 (即已有系统提示或之前的对话轮次)，则添加分隔符
+        if combined_parts:
+            combined_parts.append(turn_separator)
+
+        role_prefix_ui = f"{role_map_ui.get(msg.role, msg.role.capitalize())}:\n"
+        current_turn_parts = [role_prefix_ui]
+
+        # 处理消息内容 (content)
         content_str = ""
         if isinstance(msg.content, str):
-            content_str = msg.content
-        elif isinstance(msg.content, list):
+            content_str = msg.content.strip()
+        elif isinstance(msg.content, list): # 处理多部分内容
             text_parts = []
             for item_model in msg.content:
-                 if isinstance(item_model, MessageContentItem):
-                     if item_model.type == 'text' and isinstance(item_model.text, str):
-                          text_parts.append(item_model.text)
-                     else:
-                           print(f"[{req_id}] (准备提示) 警告: 在索引 {i} 的消息中忽略非文本部分: 类型={item_model.type}")
-                 else: # Pydantic 应该已经转换了，但作为后备
-                      item_dict = dict(item_model)
-                      if item_dict.get('type') == 'text' and isinstance(item_dict.get('text'), str):
-                           text_parts.append(item_dict['text'])
-                      else:
-                           print(f"[{req_id}] (准备提示) 警告: 在索引 {i} 的消息列表中遇到意外的项目格式。项目: {item_model}")
-            content_str = "\\n".join(text_parts)
-        else:
-            print(f"[{req_id}] (准备提示) 警告: 角色 {role} 在索引 {i} 的内容类型意外 ({type(msg.content)})。将转换为字符串。")
-            content_str = str(msg.content)
+                if isinstance(item_model, dict): # 假设 MessageContentItem 被 Pydantic 转为 dict
+                    item_type = item_model.get('type')
+                    if item_type == 'text' and isinstance(item_model.get('text'), str):
+                        text_parts.append(item_model['text'])
+                    # 此处可以扩展处理其他类型，如 image_url，但对于AI Studio的文本框，主要关注text
+                    else:
+                        print(f"[{req_id}] (准备提示) 警告: 在索引 {i} 的消息中忽略非文本或未知类型的 content item: 类型={item_type}")
+                elif isinstance(item_model, MessageContentItem): # 如果是 Pydantic 模型实例
+                    if item_model.type == 'text' and isinstance(item_model.text, str):
+                        text_parts.append(item_model.text)
+                    else:
+                        print(f"[{req_id}] (准备提示) 警告: 在索引 {i} 的消息中忽略非文本或未知类型的 content item: 类型={item_model.type}")
 
-        content_str = content_str.strip()
-        if content_str:
-            if not is_first_turn_after_system:
-                 combined_parts.append(turn_separator)
-            # 根据角色添加中文前缀
-            role_map = {"User": "用户", "Assistant": "助手", "System": "系统"} # System 理论上不会到这里
-            role_prefix_zh = f"{role_map.get(role, role)}:\\n"
-            combined_parts.append(f"{role_prefix_zh}{content_str}")
-            is_first_turn_after_system = False
+            content_str = "\n".join(text_parts).strip()
+        elif msg.content is None and msg.role == 'assistant' and hasattr(msg, 'tool_calls') and msg.tool_calls:
+            # 助手消息 content 为 None，但有 tool_calls，这是正常的
+            pass
+        elif msg.content is None and msg.role == 'tool':
+             # tool role 的消息 content 通常是函数执行结果，应该是字符串
+             print(f"[{req_id}] (准备提示) 警告: 角色 'tool' 在索引 {i} 的 content 为 None，这通常不符合预期。")
         else:
-            print(f"[{req_id}] (准备提示) 跳过角色 {role} 在索引 {i} 的空消息。")
+            print(f"[{req_id}] (准备提示) 警告: 角色 {msg.role} 在索引 {i} 的内容类型意外 ({type(msg.content)}) 或为 None。将尝试转换为空字符串。")
+            content_str = str(msg.content or "").strip() # 确保 msg.content 不是 None
+
+        if content_str:
+            current_turn_parts.append(content_str)
+        
+        # --- 新增: 处理 Function Call (Tool Calls) ---
+        # 场景1: 助手 (Assistant) 发起函数调用请求
+        if msg.role == 'assistant' and hasattr(msg, 'tool_calls') and msg.tool_calls:
+            if content_str: # 如果助手既有文本回复，又有工具调用
+                current_turn_parts.append("\n") # 文本和工具调用之间加个换行
+            
+            tool_call_visualizations = []
+            if msg.tool_calls: # Ensure tool_calls is not None before iterating
+                for tool_call in msg.tool_calls:
+                    if isinstance(tool_call, dict) and tool_call.get('type') == 'function':
+                        function_call = tool_call.get('function')
+                        if isinstance(function_call, dict):
+                            func_name = function_call.get('name')
+                            func_args_str = function_call.get('arguments') # 通常是 JSON 字符串
+                            try:
+                                parsed_args = json.loads(func_args_str if func_args_str else '{}')
+                                formatted_args = json.dumps(parsed_args, indent=2, ensure_ascii=False)
+                            except (json.JSONDecodeError, TypeError):
+                                formatted_args = func_args_str if func_args_str is not None else "{}"
+
+
+                            tool_call_visualizations.append(
+                                f"请求调用函数: {func_name}\n参数:\n{formatted_args}"
+                            )
+            if tool_call_visualizations:
+                current_turn_parts.append("\n".join(tool_call_visualizations))
+
+        # 场景2: 工具 (Tool) 返回函数执行结果
+        if msg.role == 'tool' and hasattr(msg, 'tool_call_id') and msg.tool_call_id:
+            # content_str 此时应该是函数执行的结果
+            # 如果希望在提示中包含函数名 (msg.name)，可以这样做：
+            if hasattr(msg, 'name') and msg.name and content_str:
+                #  修改 role_prefix_ui 或 current_turn_parts[0] 来包含函数名
+                #  例如: current_turn_parts[0] = f"{role_map_ui.get(msg.role, msg.role.capitalize())} ({msg.name}):\n"
+                #  或者，如果 content_str 已经很明确，或者AI Studio对此不敏感，则无需修改
+                pass # 当前实现中，content_str 已在上面处理并加入 current_turn_parts
+            elif not content_str:
+                 print(f"[{req_id}] (准备提示) 警告: 角色 'tool' (ID: {msg.tool_call_id}, Name: {getattr(msg, 'name', 'N/A')}) 在索引 {i} 的 content 为空，这通常表示函数执行无字符串输出或结果未提供。")
+
+
+        # 将当前轮次的所有部分合并，并添加到总的 combined_parts
+        # 只有当 current_turn_parts 不仅仅包含 role_prefix 时才添加 (即有实际内容或工具调用)
+        if len(current_turn_parts) > 1 or (msg.role == 'assistant' and hasattr(msg, 'tool_calls') and msg.tool_calls):
+            combined_parts.append("".join(current_turn_parts))
+        elif not combined_parts and not current_turn_parts: # 如果是第一条消息且为空，则跳过
+            print(f"[{req_id}] (准备提示) 跳过角色 {msg.role} 在索引 {i} 的空消息 (且无工具调用)。")
+        elif len(current_turn_parts) == 1 and not combined_parts: # 只有role_prefix, 且是第一条消息
+             print(f"[{req_id}] (准备提示) 跳过角色 {msg.role} 在索引 {i} 的空消息 (只有前缀)。")
+
 
     final_prompt = "".join(combined_parts)
-    preview_text = final_prompt[:200].replace('\\n', '\\\\n')
+
+    if final_prompt:
+        final_prompt += "\n" # 末尾加一个换行符，可能有助于模型识别轮到它生成
+
+    preview_text = final_prompt[:300].replace('\n', '\\n') # 预览时 \n 转义
     print(f"[{req_id}] (准备提示) 组合提示长度: {len(final_prompt)}。预览: '{preview_text}...'")
-    final_newline = "\\n"
-    return final_prompt + final_newline if final_prompt else ""
+
+    return final_prompt
 
 def validate_chat_request(messages: List[Message], req_id: str) -> Dict[str, Optional[str]]:
     if not messages:
