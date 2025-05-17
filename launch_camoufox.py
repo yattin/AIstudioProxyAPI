@@ -379,9 +379,11 @@ if __name__ == "__main__":
     parser.add_argument('--internal-debug', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--internal-auth-file', type=str, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--server-port", type=int, default=DEFAULT_SERVER_PORT, help=f"FastAPI 服务器监听的端口号 (默认: {DEFAULT_SERVER_PORT})")
+    parser.add_argument("--helper", type=str, default=None, help=f"helper 服务器的getStreamResponse端点地址(例如: http://127.0.0.1:3121/getStreamResponse)")
     mode_selection_group = parser.add_mutually_exclusive_group()
     mode_selection_group.add_argument("--debug", action="store_true", help="启动调试模式 (浏览器界面可见，允许交互式认证)")
     mode_selection_group.add_argument("--headless", action="store_true", help="启动无头模式 (浏览器无界面，需要预先保存的认证文件)")
+
     args = parser.parse_args()
 
     if args.internal_launch:
@@ -500,51 +502,62 @@ if __name__ == "__main__":
         logger.info("--- 步骤 3: 内部启动 Camoufox (调试模式)... ---")
         # 新增: 调试模式下的认证文件选择逻辑
         logger.info(f"  调试模式: 检查可用的认证文件...")
-        available_profiles = []
-        for profile_dir_path_str, dir_label in [(ACTIVE_AUTH_DIR, "active"), (SAVED_AUTH_DIR, "saved")]:
-            profile_dir_path = os.path.join(os.path.dirname(__file__), profile_dir_path_str) # 确保是绝对或相对工作区的正确路径
-            if os.path.exists(profile_dir_path):
-                try:
-                    for filename in os.listdir(profile_dir_path):
-                        if filename.lower().endswith(".json"):
-                            full_path = os.path.join(profile_dir_path, filename)
-                            # 使用 dir_label 来区分来源，例如 "active/auth.json" 或 "saved/auth.json"
-                            available_profiles.append({"name": f"{dir_label}/{filename}", "path": full_path})
-                except OSError as e:
-                    logger.warning(f"   ⚠️ 警告: 无法读取目录 '{profile_dir_path}': {e}")
 
-        if available_profiles:
-            print('-'*60 + "\n   找到以下可用的认证文件:", flush=True)
-            for i, profile in enumerate(available_profiles):
-                print(f"     {i+1}: {profile['name']}", flush=True)
-            print("     N: 不加载任何文件 (使用浏览器当前状态)\n" + '-'*60, flush=True)
-
-            choice_prompt = "   请选择要加载的认证文件编号 (输入 N 或直接回车则不加载): "
-            choice = input_with_timeout(choice_prompt, 30) # 使用已有的带超时输入函数
-
-            if choice.strip().lower() not in ['n', '']:
-                try:
-                    choice_index = int(choice.strip()) - 1
-                    if 0 <= choice_index < len(available_profiles):
-                        selected_profile = available_profiles[choice_index]
-                        auth_file_for_server_lifespan = selected_profile["path"] # 存储选择的文件
-                        logger.info(f"   已选择加载认证文件: {selected_profile['name']}")
-                        print(f"   已选择加载: {selected_profile['name']}", flush=True)
-                    else:
-                        logger.info("   无效的选择编号。将不加载认证文件。")
-                        print("   无效的选择编号。将不加载认证文件。", flush=True)
-                except ValueError:
-                    logger.info("   无效的输入。将不加载认证文件。")
-                    print("   无效的输入。将不加载认证文件。", flush=True)
-            else:
-                logger.info("   好的，不加载认证文件。")
-                print("   好的，不加载认证文件。", flush=True)
-            print('-'*60, flush=True)
+        # 如果给了 --internal-auth-file 参数，直接使用它
+        if args.internal_auth_file is not None:
+            full_path = os.path.join(AUTH_PROFILES_DIR, args.internal_auth_file)
+            if not os.path.exists(full_path):
+                logger.error(f"   ❌ 错误: 指定的认证文件不存在: {full_path}")
+                sys.exit()
+            auth_file_for_server_lifespan = full_path
+            logger.info(f"  ✅ 使用命令行指定的认证文件: {full_path}")
         else:
-            logger.info("   未找到认证文件。将使用浏览器当前状态。")
-            print("   未找到认证文件。将使用浏览器当前状态。", flush=True)
-        # 结束: 调试模式下的认证文件选择逻辑
+            available_profiles = []
+            for profile_dir_path_str, dir_label in [(ACTIVE_AUTH_DIR, "active"), (SAVED_AUTH_DIR, "saved")]:
+                profile_dir_path = os.path.join(os.path.dirname(__file__), profile_dir_path_str) # 确保是绝对或相对工作区的正确路径
+                if os.path.exists(profile_dir_path):
+                    try:
+                        for filename in os.listdir(profile_dir_path):
+                            if filename.lower().endswith(".json"):
+                                full_path = os.path.join(profile_dir_path, filename)
+                                # 使用 dir_label 来区分来源，例如 "active/auth.json" 或 "saved/auth.json"
+                                available_profiles.append({"name": f"{dir_label}/{filename}", "path": full_path})
+                    except OSError as e:
+                        logger.warning(f"   ⚠️ 警告: 无法读取目录 '{profile_dir_path}': {e}")
 
+            if available_profiles:
+                print('-'*60 + "\n   找到以下可用的认证文件:", flush=True)
+                for i, profile in enumerate(available_profiles):
+                    print(f"     {i+1}: {profile['name']}", flush=True)
+                print("     N: 不加载任何文件 (使用浏览器当前状态)\n" + '-'*60, flush=True)
+
+                choice_prompt = "   请选择要加载的认证文件编号 (输入 N 或直接回车则不加载): "
+                choice = input_with_timeout(choice_prompt, 30) # 使用已有的带超时输入函数
+
+                if choice.strip().lower() not in ['n', '']:
+                    try:
+                        choice_index = int(choice.strip()) - 1
+                        if 0 <= choice_index < len(available_profiles):
+                            selected_profile = available_profiles[choice_index]
+                            auth_file_for_server_lifespan = selected_profile["path"] # 存储选择的文件
+                            logger.info(f"   已选择加载认证文件: {selected_profile['name']}")
+                            print(f"   已选择加载: {selected_profile['name']}", flush=True)
+                        else:
+                            logger.info("   无效的选择编号。将不加载认证文件。")
+                            print("   无效的选择编号。将不加载认证文件。", flush=True)
+                    except ValueError:
+                        logger.info("   无效的输入。将不加载认证文件。")
+                        print("   无效的输入。将不加载认证文件。", flush=True)
+                else:
+                    logger.info("   好的，不加载认证文件。")
+                    print("   好的，不加载认证文件。", flush=True)
+                print('-'*60, flush=True)
+            else:
+                logger.info("   未找到认证文件。将使用浏览器当前状态。")
+                print("   未找到认证文件。将使用浏览器当前状态。", flush=True)
+            # 结束: 调试模式下的认证文件选择逻辑
+            logger.info(auth_file_for_server_lifespan)
+        logger.info(auth_file_for_server_lifespan)
         camoufox_internal_full_cmd = camoufox_internal_base_cmd + ['--internal-debug']
         if auth_file_for_server_lifespan: # 如果在调试模式下选择了文件
             camoufox_internal_full_cmd.extend(['--internal-auth-file', auth_file_for_server_lifespan])
@@ -621,6 +634,26 @@ if __name__ == "__main__":
     except Exception as e_launch_camoufox_internal:
         logger.critical(f"  ❌ 在内部启动 Camoufox 或捕获其 WebSocket 端点时发生致命错误: {e_launch_camoufox_internal}", exc_info=True)
         sys.exit(1)
+
+    if args.helper is not None and auth_file_for_server_lifespan is not None:
+        logger.info("  检查 helper 模式...")
+        sapisid = ""
+        try:
+            with open(auth_file_for_server_lifespan, 'r') as file:
+                auth_file_data = json.load(file)
+                for cookie in auth_file_data["cookies"]:
+                    if cookie["name"] == "SAPISID" and cookie["domain"] == ".google.com":
+                        sapisid = cookie["value"]
+        except:
+            pass
+
+        if sapisid == "":
+            logger.error(f"  ❌ 认证信息中没有SAPISID，无法使用helper模式")
+        else:
+            logger.error(f"  ✅ 成功从认证信息加载SAPISID，可以使用helper模式")
+            os.environ['HELPER_ENDPOINT'] = args.helper
+            os.environ['HELPER_SAPISID'] = sapisid
+
 
     if captured_ws_endpoint:
         logger.info("-------------------------------------------------")

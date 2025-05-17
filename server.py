@@ -22,6 +22,7 @@ from playwright.async_api import async_playwright
 from urllib.parse import urljoin, urlparse
 import uuid
 import datetime
+import aiohttp
 
 # --- 全局添加标记常量 ---
 # 这些标记主要用于 server.py 内部 print 和 input 的协调。
@@ -1028,6 +1029,7 @@ async def signal_camoufox_shutdown():
 # --- Lifespan Context Manager (负责初始化和清理) ---
 @asynccontextmanager
 async def lifespan(app_param: FastAPI): # app_param 未使用
+    global STREAM_HELPER
     global playwright_manager, browser_instance, page_instance, worker_task
     global is_playwright_ready, is_browser_connected, is_page_ready, is_initializing
     global logger, log_ws_manager, model_list_fetch_event, current_ai_studio_model_id, excluded_model_ids
@@ -1984,6 +1986,40 @@ async def queue_worker():
     print("--- 队列 Worker 已停止 ---", flush=True)
 
 
+async def use_helper_get_response(helper_endpoint, helper_sapisid):
+    headers = {
+        'Cookie': f'SAPISID={helper_sapisid}',
+        'Accept': 'text/event-stream'
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(helper_endpoint, headers=headers) as response:
+                if response.status != 200:
+                    print(f"Error: HTTP {response.status}", file=sys.stderr)
+                    yield "[ERROR]"
+
+                # 异步读取事件流
+                async for line in response.content:
+                    decoded_line = line.decode('utf-8').strip()
+                    # 跳过空行和事件流控制行
+                    if decoded_line and not decoded_line.startswith(':'):
+                        # 如果是data:开头，提取数据部分
+                        if decoded_line.startswith('data:'):
+                            data = decoded_line[5:].strip()
+                            if data:
+                                yield data
+                        else:
+                            yield decoded_line
+
+    except aiohttp.ClientError as e:
+        logger.error(f"Error connecting to server: {e}")
+        yield "[ERROR]"
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        yield "[ERROR]"
+
+
 # --- V5: Refactored Core Request Processing Logic --- (Called by Worker)
 async def _process_request_refactored(
     req_id: str,
@@ -2580,94 +2616,124 @@ async def _process_request_refactored(
 
         # --- 5. Wait for Completion --- (Uses helper, which was reverted internally)
         logger.info(f"[{req_id}] (Refactored Process) 等待响应生成完成...") # logger
-        completion_detected = await _wait_for_response_completion(
-            page, req_id, response_element, None, check_client_disconnected, None # Pass None for unused helpers
-        )
-        if not completion_detected:
-            raise HTTPException(status_code=504, detail=f"[{req_id}] AI Studio response generation timed out.")
-        check_client_disconnected("After Wait Completion: ")
 
-        # --- 6. Check for Page Errors --- (Use logger)
-        logger.info(f"[{req_id}] (Refactored Process) 检查页面错误提示...") # logger
-        page_error = await detect_and_extract_page_error(page, req_id)
-        if page_error:
-            logger.error(f"[{req_id}] ❌ 错误: AI Studio 页面返回错误: {page_error}") # logger
-            await save_error_snapshot(f"page_error_detected_{req_id}")
-            raise HTTPException(status_code=502, detail=f"[{req_id}] AI Studio Error: {page_error}")
-        check_client_disconnected("After Page Error Check: ")
+        use_helper = True
+        helper_endpoint = os.environ.get('HELPER_ENDPOINT', None)
+        helper_sapisid = os.environ.get('HELPER_SAPISID', None)
+        if helper_endpoint is None or helper_sapisid is None:
+            use_helper = False
 
-        # --- 7. Get Final Content --- (Uses helpers, which were reverted internally)
-        logger.info(f"[{req_id}] (Refactored Process) 获取最终响应内容...") # logger
-        final_content = await _get_final_response_content(
-            page, req_id, check_client_disconnected # Pass only needed args
-        )
-        if final_content is None:
-            raise HTTPException(status_code=500, detail=f"[{req_id}] Failed to extract final response content from AI Studio.")
-        check_client_disconnected("After Get Content: ")
-
-        # --- 8. Format and Return Result --- (Use logger)
-        logger.info(f"[{req_id}] (Refactored Process) 格式化并设置结果 (模式: {'流式' if is_streaming else '非流式'})...") # logger
-        if is_streaming:
-            completion_event = Event() # Create event for streaming
-
-            async def create_stream_generator(event_to_set: Event, content_to_stream: str) -> AsyncGenerator[str, None]:
-                """Closure to generate SSE stream from final content."""
-                logger.info(f"[{req_id}] (Stream Gen) 开始伪流式输出 ({len(content_to_stream)} chars)...") # logger
-                try:
-                    char_count = 0
-                    total_chars = len(content_to_stream)
-                    for i in range(0, total_chars):
-                        if client_disconnected_event.is_set():
-                            logger.info(f"[{req_id}] (Stream Gen) 断开连接，停止。") # logger
+        if use_helper:
+            completion_event = Event()  # Create event for streaming
+            if is_streaming:
+                async def create_stream_generator(event_to_set: Event) -> AsyncGenerator[str, None]:
+                    async for data in use_helper_get_response(helper_endpoint, helper_sapisid):
+                        if data == "[DONE]":
                             break
-                        delta = content_to_stream[i]
-                        yield generate_sse_chunk(delta, req_id, MODEL_NAME)
-                        char_count += 1
-                        if char_count % 100 == 0 or char_count == total_chars:
-                            if DEBUG_LOGS_ENABLED:
-                                pass # Keep the structure, but no log needed here now
-                        await asyncio.sleep(PSEUDO_STREAM_DELAY) # Use asyncio.sleep
-
-                    yield generate_sse_stop_chunk(req_id, MODEL_NAME)
+                        elif data == "[ERROR]":
+                            break
+                        yield f"data: {data}\n\n"
                     yield "data: [DONE]\n\n"
-                    logger.info(f"[{req_id}] (Stream Gen) ✅ 伪流式响应发送完毕。") # logger
-                except asyncio.CancelledError:
-                    logger.info(f"[{req_id}] (Stream Gen) 流生成器被取消。") # logger
-                except Exception as e:
-                    logger.exception(f"[{req_id}] (Stream Gen) ❌ 伪流式生成过程中出错") # logger
-                    try: yield generate_sse_error_chunk(f"Stream generation error: {e}", req_id); yield "data: [DONE]\n\n"
-                    except: pass
-                finally:
-                    logger.info(f"[{req_id}] (Stream Gen) 设置完成事件。") # logger
                     if not event_to_set.is_set(): event_to_set.set()
 
-            stream_generator_func = create_stream_generator(completion_event, final_content)
-            if not result_future.done():
-                result_future.set_result(StreamingResponse(stream_generator_func, media_type="text/event-stream"))
-                logger.info(f"[{req_id}] (Refactored Process) 流式响应生成器已设置。") # logger
+                stream_generator_func = create_stream_generator(completion_event)
+                if not result_future.done():
+                    result_future.set_result(StreamingResponse(stream_generator_func, media_type="text/event-stream"))
+                else:
+                    if not completion_event.is_set(): completion_event.set()
+                return completion_event
             else:
-                logger.warning(f"[{req_id}] (Refactored Process) Future 已完成/取消，无法设置流式结果。") # logger
-                if not completion_event.is_set(): completion_event.set()
-            return completion_event
-        else: # Non-streaming
-            response_payload = {
-                "id": f"{CHAT_COMPLETION_ID_PREFIX}{req_id}-{int(time.time())}",
-                "object": "chat.completion",
-                "created": int(time.time()),
-                "model": MODEL_NAME,
-                "choices": [{
-                    "index": 0,
-                    "message": {"role": "assistant", "content": final_content},
-                    "finish_reason": "stop"
-                }],
-                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-            }
-            if not result_future.done():
-                result_future.set_result(JSONResponse(content=response_payload))
-                logger.info(f"[{req_id}] (Refactored Process) 非流式 JSON 响应已设置。") # logger
-            else:
-                logger.warning(f"[{req_id}] (Refactored Process) Future 已完成/取消，无法设置 JSON 结果。") # logger
-            return None
+                logger.info(f"[{req_id}]   - 跳过等待响应生成完成，因为未配置助手。") # logger
+
+        if not use_helper:
+            completion_detected = await _wait_for_response_completion(
+                page, req_id, response_element, None, check_client_disconnected, None # Pass None for unused helpers
+            )
+            if not completion_detected:
+                raise HTTPException(status_code=504, detail=f"[{req_id}] AI Studio response generation timed out.")
+            check_client_disconnected("After Wait Completion: ")
+
+            # --- 6. Check for Page Errors --- (Use logger)
+            logger.info(f"[{req_id}] (Refactored Process) 检查页面错误提示...") # logger
+            page_error = await detect_and_extract_page_error(page, req_id)
+            if page_error:
+                logger.error(f"[{req_id}] ❌ 错误: AI Studio 页面返回错误: {page_error}") # logger
+                await save_error_snapshot(f"page_error_detected_{req_id}")
+                raise HTTPException(status_code=502, detail=f"[{req_id}] AI Studio Error: {page_error}")
+            check_client_disconnected("After Page Error Check: ")
+
+            # --- 7. Get Final Content --- (Uses helpers, which were reverted internally)
+            logger.info(f"[{req_id}] (Refactored Process) 获取最终响应内容...") # logger
+            final_content = await _get_final_response_content(
+                page, req_id, check_client_disconnected # Pass only needed args
+            )
+            if final_content is None:
+                raise HTTPException(status_code=500, detail=f"[{req_id}] Failed to extract final response content from AI Studio.")
+            check_client_disconnected("After Get Content: ")
+
+            # --- 8. Format and Return Result --- (Use logger)
+            logger.info(f"[{req_id}] (Refactored Process) 格式化并设置结果 (模式: {'流式' if is_streaming else '非流式'})...") # logger
+            if is_streaming:
+                completion_event = Event() # Create event for streaming
+
+                async def create_stream_generator(event_to_set: Event, content_to_stream: str) -> AsyncGenerator[str, None]:
+                    """Closure to generate SSE stream from final content."""
+                    logger.info(f"[{req_id}] (Stream Gen) 开始伪流式输出 ({len(content_to_stream)} chars)...") # logger
+                    try:
+                        char_count = 0
+                        total_chars = len(content_to_stream)
+                        for i in range(0, total_chars):
+                            if client_disconnected_event.is_set():
+                                logger.info(f"[{req_id}] (Stream Gen) 断开连接，停止。") # logger
+                                break
+                            delta = content_to_stream[i]
+                            yield generate_sse_chunk(delta, req_id, MODEL_NAME)
+                            char_count += 1
+                            if char_count % 100 == 0 or char_count == total_chars:
+                                if DEBUG_LOGS_ENABLED:
+                                    pass # Keep the structure, but no log needed here now
+                            await asyncio.sleep(PSEUDO_STREAM_DELAY) # Use asyncio.sleep
+
+                        yield generate_sse_stop_chunk(req_id, MODEL_NAME)
+                        yield "data: [DONE]\n\n"
+                        logger.info(f"[{req_id}] (Stream Gen) ✅ 伪流式响应发送完毕。") # logger
+                    except asyncio.CancelledError:
+                        logger.info(f"[{req_id}] (Stream Gen) 流生成器被取消。") # logger
+                    except Exception as e:
+                        logger.exception(f"[{req_id}] (Stream Gen) ❌ 伪流式生成过程中出错") # logger
+                        try: yield generate_sse_error_chunk(f"Stream generation error: {e}", req_id); yield "data: [DONE]\n\n"
+                        except: pass
+                    finally:
+                        logger.info(f"[{req_id}] (Stream Gen) 设置完成事件。") # logger
+                        if not event_to_set.is_set(): event_to_set.set()
+
+                stream_generator_func = create_stream_generator(completion_event, final_content)
+                if not result_future.done():
+                    result_future.set_result(StreamingResponse(stream_generator_func, media_type="text/event-stream"))
+                    logger.info(f"[{req_id}] (Refactored Process) 流式响应生成器已设置。") # logger
+                else:
+                    logger.warning(f"[{req_id}] (Refactored Process) Future 已完成/取消，无法设置流式结果。") # logger
+                    if not completion_event.is_set(): completion_event.set()
+                return completion_event
+            else: # Non-streaming
+                response_payload = {
+                    "id": f"{CHAT_COMPLETION_ID_PREFIX}{req_id}-{int(time.time())}",
+                    "object": "chat.completion",
+                    "created": int(time.time()),
+                    "model": MODEL_NAME,
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": final_content},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+                }
+                if not result_future.done():
+                    result_future.set_result(JSONResponse(content=response_payload))
+                    logger.info(f"[{req_id}] (Refactored Process) 非流式 JSON 响应已设置。") # logger
+                else:
+                    logger.warning(f"[{req_id}] (Refactored Process) Future 已完成/取消，无法设置 JSON 结果。") # logger
+                return None
 
     # --- Exception Handling --- (Use logger)
     except ClientDisconnectedError as disco_err:

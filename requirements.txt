@@ -1,5 +1,6 @@
-fastapi
-uvicorn[standard]
-playwright
-camoufox[geoip]
-pydantic 
+fastapi~=0.115.12
+uvicorn[standard]~=0.34.2
+playwright~=1.52.0
+camoufox[geoip]~=0.4.11
+pydantic~=2.11.4
+aiohttp~=3.11.18
