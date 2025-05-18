@@ -374,6 +374,12 @@ if __name__ == "__main__":
 
     # 用户可见参数
     parser.add_argument("--server-port", type=int, default=DEFAULT_SERVER_PORT, help=f"FastAPI 服务器监听的端口号 (默认: {DEFAULT_SERVER_PORT})")
+    parser.add_argument(
+        "--camoufox-debug-port",
+        type=int,
+        default=DEFAULT_CAMOUFOX_PORT,
+        help=f"内部 Camoufox 实例监听的调试端口号 (默认: {DEFAULT_CAMOUFOX_PORT})"
+    )
     mode_selection_group = parser.add_mutually_exclusive_group()
     mode_selection_group.add_argument("--debug", action="store_true", help="启动调试模式 (浏览器界面可见，允许交互式认证)")
     mode_selection_group.add_argument("--headless", action="store_true", help="启动无头模式 (浏览器无界面，需要预先保存的认证文件)")
@@ -637,8 +643,14 @@ if __name__ == "__main__":
     
     # 将用户指定的 --camoufox-os 传递给内部调用
     camoufox_internal_cmd_args.extend(['--internal-camoufox-os', args.camoufox_os])
-    # 可以考虑传递其他 Camoufox 相关参数，如端口、代理等，如果需要的话
-    # camoufox_internal_cmd_args.extend(['--internal-camoufox-port', str(DEFAULT_CAMOUFOX_PORT)]) # 示例
+    
+    # 将用户通过 --camoufox-debug-port 指定的端口传递给内部调用的 --internal-camoufox-port
+    # args.camoufox_debug_port 是新添加的用户可见参数，其默认值为 DEFAULT_CAMOUFOX_PORT。
+    # 当此脚本作为主进程时，args.camoufox_debug_port 会被解析。
+    # 然后，这个值 (用户指定的或默认的) 会作为 --internal-camoufox-port 的值传递给作为子进程的自身。
+    # 子进程在解析参数时，其 args.internal_camoufox_port (定义在第 370 行，默认也是 DEFAULT_CAMOUFOX_PORT)
+    # 将会接收到父进程传递过来的这个值。
+    camoufox_internal_cmd_args.extend(['--internal-camoufox-port', str(args.camoufox_debug_port)])
 
     camoufox_popen_kwargs = {'stdout': subprocess.PIPE, 'stderr': subprocess.PIPE, 'env': os.environ.copy()}
     camoufox_popen_kwargs['env']['PYTHONIOENCODING'] = 'utf-8' # 确保子进程输出编码

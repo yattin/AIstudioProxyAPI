@@ -41,7 +41,7 @@ AI_STUDIO_URL_PATTERN = 'aistudio.google.com/'
 RESPONSE_COMPLETION_TIMEOUT = 300000 # 5 minutes total timeout (in ms)
 POLLING_INTERVAL = 300 # ms
 POLLING_INTERVAL_STREAM = 180 # ms
-SILENCE_TIMEOUT_MS = 10000 # ms
+SILENCE_TIMEOUT_MS = 40000 # ms
 POST_SPINNER_CHECK_DELAY_MS = 500
 FINAL_STATE_CHECK_TIMEOUT_MS = 1500
 SPINNER_CHECK_TIMEOUT_MS = 1000
@@ -744,7 +744,6 @@ async def _initialize_page_logic(browser: AsyncBrowser):
                     logger.error("     5. 系统资源问题: 确保系统有足够的内存和 CPU 资源。")
                     logger.error("="*74 + "\n")
                 raise RuntimeError(f"导航新页面失败: {new_page_nav_err}") from new_page_nav_err
-
         # 处理登录重定向
         if login_url_pattern in current_url:
             if launch_mode == 'headless':

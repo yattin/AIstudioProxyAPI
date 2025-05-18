@@ -668,38 +668,103 @@ async function loadApiInfo() {
     }
 }
 
-async function fetchHealthStatus() {
-    if (!healthStatusDisplay) return;
-    healthStatusDisplay.innerHTML = '<div class="loading-indicator"><div class="loading-spinner"></div><span>正在加载健康状态...</span></div>';
-    try {
-        const response = await fetch('/health');
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-        const data = await response.json();
-        displayInfoList(healthStatusDisplay, data);
-    } catch (error) {
-        if (healthStatusDisplay) {
-            healthStatusDisplay.innerHTML = `<div class="info-list"><div><strong style="color: var(--error-msg-text);">错误:</strong> <span style="color: var(--error-msg-text);">加载健康状态失败: ${error.message}</span></div></div>`;
-        }
-        addLogEntry(`[错误] 获取 /health 状态失败: ${error.message}`);
-    }
+// function to format display keys
+function formatDisplayKey(key_string) {
+  return key_string
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, char => char.toUpperCase());
 }
 
-function displayInfoList(targetElement, data) {
-    if (!targetElement) return;
-    let html = '<div class="info-list">';
+// function to display health data, potentially recursively for nested objects
+function displayHealthData(targetElement, data, sectionTitle) {
+    if (!targetElement) {
+        console.error("Target element for displayHealthData not found");
+        return;
+    }
+    // Clear previous content only if it's the root call (no sectionTitle implies root)
+    if (!sectionTitle) {
+        targetElement.innerHTML = '';
+    }
+
+    const container = document.createElement('div');
+    if (sectionTitle) {
+        const titleElement = document.createElement('h4');
+        titleElement.textContent = sectionTitle;
+        titleElement.className = 'health-section-title';
+        container.appendChild(titleElement);
+    }
+
+    const ul = document.createElement('ul');
+    ul.className = 'info-list health-info-list'; // Added health-info-list for specific styling if needed
+
     for (const key in data) {
-        if (Object.hasOwnProperty.call(data, key)) {
-            let value = data[key];
-            const preStyle = "white-space: pre-wrap; word-break: break-all; background-color: rgba(var(--on-surface-rgb), 0.03); padding: 8px; border-radius: 4px; margin-top: 4px;";
+        if (Object.prototype.hasOwnProperty.call(data, key)) {
+            const li = document.createElement('li');
+            const strong = document.createElement('strong');
+            strong.textContent = `${formatDisplayKey(key)}: `;
+            li.appendChild(strong);
+
+            const value = data[key];
             if (typeof value === 'object' && value !== null) {
-                html += `<div><strong>${key}:</strong> <pre style="${preStyle}"><code>${JSON.stringify(value, null, 2)}</code></pre></div>`;
+                // Recursive call for nested objects
+                const nestedContainer = document.createElement('div');
+                nestedContainer.className = 'nested-health-data';
+                li.appendChild(nestedContainer);
+                // Pass the formatted key as the section title for the nested object
+                displayHealthData(nestedContainer, value, formatDisplayKey(key));
+            } else if (typeof value === 'boolean') {
+                li.appendChild(document.createTextNode(value ? '是' : '否'));
             } else {
-                html += `<div><strong>${key}:</strong> <span>${value}</span></div>`;
+                li.appendChild(document.createTextNode(value === null || value === undefined ? 'N/A' : value));
             }
+            ul.appendChild(li);
         }
     }
-    html += '</div>';
-    targetElement.innerHTML = html;
+    container.appendChild(ul);
+    targetElement.appendChild(container);
+}
+
+// function to fetch and display health status
+async function fetchHealthStatus() {
+    if (!healthStatusDisplay) {
+        console.error("healthStatusDisplay element not found for fetchHealthStatus");
+        addLogEntry("[错误] Health status display element not found.");
+        return;
+    }
+    healthStatusDisplay.innerHTML = '<p class="loading-indicator">正在加载健康状态...</p>'; // Use a paragraph for loading message
+
+    try {
+        const response = await fetch('/health');
+        if (!response.ok) {
+            let errorText = `HTTP error! Status: ${response.status}`;
+            try {
+                const errorData = await response.json();
+                // Prefer detailed message from backend if available
+                if (errorData && errorData.message) {
+                    errorText = errorData.message;
+                } else if (errorData && errorData.details && typeof errorData.details === 'string') {
+                    errorText = errorData.details;
+                } else if (errorData && errorData.detail && typeof errorData.detail === 'string') {
+                     errorText = errorData.detail;
+                }
+            } catch (e) {
+                // Ignore if parsing error body fails, use original status text
+                console.warn("Failed to parse error response body from /health:", e);
+            }
+            throw new Error(errorText);
+        }
+        const data = await response.json();
+        // Call displayHealthData with the parsed data and target element
+        // No sectionTitle for the root call, so it clears the targetElement
+        displayHealthData(healthStatusDisplay, data);
+        addLogEntry("[信息] 健康状态已成功加载并显示。");
+
+    } catch (error) {
+        console.error('获取健康状态失败:', error);
+        // Display user-friendly error message in the target element
+        healthStatusDisplay.innerHTML = `<p class="error-message">获取健康状态失败: ${error.message}</p>`;
+        addLogEntry(`[错误] 获取健康状态失败: ${error.message}`);
+    }
 }
 
 // --- View Switching ---
