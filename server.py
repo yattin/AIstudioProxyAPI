@@ -50,7 +50,7 @@ CLEAR_CHAT_VERIFY_TIMEOUT_MS = 5000
 CLEAR_CHAT_VERIFY_INTERVAL_MS = 400
 CLICK_TIMEOUT_MS = 5000
 CLIPBOARD_READ_TIMEOUT_MS = 5000
-PSEUDO_STREAM_DELAY = 0.001 # 可以根据需要调整这个值
+PSEUDO_STREAM_DELAY = 0.01 # 可以根据需要调整这个值
 EDIT_MESSAGE_BUTTON_SELECTOR = 'ms-chat-turn:last-child .actions-container button.toggle-edit-button'
 MESSAGE_TEXTAREA_SELECTOR = 'ms-chat-turn:last-child ms-text-chunk ms-autosize-textarea'
 FINISH_EDIT_BUTTON_SELECTOR = 'ms-chat-turn:last-child .actions-container button.toggle-edit-button[aria-label="Stop editing"]'
@@ -2913,19 +2913,27 @@ async def _process_request_refactored(
                 """Closure to generate SSE stream from final content."""
                 logger.info(f"[{req_id}] (Stream Gen) 开始伪流式输出 ({len(content_to_stream)} chars)...") # logger
                 try:
-                    char_count = 0
                     total_chars = len(content_to_stream)
-                    for i in range(0, total_chars):
+                    chunk_size = 5 # 定义块大小
+                    for i in range(0, total_chars, chunk_size): # 按块大小迭代
                         if client_disconnected_event.is_set():
                             logger.info(f"[{req_id}] (Stream Gen) 断开连接，停止。") # logger
                             break
-                        delta = content_to_stream[i]
-                        yield generate_sse_chunk(delta, req_id, MODEL_NAME)
-                        char_count += 1
-                        if char_count % 100 == 0 or char_count == total_chars:
-                            if DEBUG_LOGS_ENABLED:
-                                pass # Keep the structure, but no log needed here now
-                        await asyncio.sleep(PSEUDO_STREAM_DELAY) # Use asyncio.sleep
+                        
+                        # 获取当前块
+                        chunk = content_to_stream[i:i + chunk_size] # 获取块
+                        if not chunk: # 如果块为空（不太可能发生，但作为安全检查）
+                            continue
+
+                        yield generate_sse_chunk(chunk, req_id, MODEL_NAME) # yield 整个块
+                        
+                        # 在发送每个块后应用延迟
+                        await asyncio.sleep(PSEUDO_STREAM_DELAY) # 在每个块后延迟
+                        
+                        # 调试日志示例 (可选)
+                        # current_chunk_number = (i // chunk_size) + 1
+                        # if DEBUG_LOGS_ENABLED and (current_chunk_number % 20 == 0 or (i + len(chunk)) >= total_chars) :
+                        #    logger.debug(f"[{req_id}] (Stream Gen) Sent chunk {current_chunk_number}, up to char {i + len(chunk)}")
 
                     yield generate_sse_stop_chunk(req_id, MODEL_NAME)
                     yield "data: [DONE]\\n\\n"
