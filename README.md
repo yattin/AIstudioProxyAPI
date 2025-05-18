@@ -2,18 +2,37 @@
 
 [![Star History Chart](https://api.star-history.com/svg?repos=CJackHwang/AIstudioProxyAPI&type=Date)](https://www.star-history.com/#CJackHwang/AIstudioProxyAPI&Date)
 
+This project is generously sponsored by ZMTO. Visit their website: [https://zmto.com/](https://zmto.com/)
+
+本项目由 ZMTO 慷慨赞助服务器支持。访问他们的网站：[https://zmto.com/](https://zmto.com/)
+
+---
+
+## 致谢 (Acknowledgements)
+
+本项目的诞生与发展，离不开以下个人、组织和社区的慷慨支持与智慧贡献：
+
+*   **项目发起与主要开发**: @CJackHwang ([https://github.com/CJackHwang](https://github.com/CJackHwang))
+*   **重要贡献与功能完善、调试**: @ayuayue ([https://github.com/ayuayue](https://github.com/ayuayue))
+*   **社区支持与灵感碰撞**: 特别感谢 [Linux.do 社区](https://linux.do/) 成员们的热烈讨论、宝贵建议和问题反馈，你们的参与是项目前进的重要动力。
+
+同时，我们衷心感谢所有通过提交 Issue、提供建议、分享使用体验等方式为本项目默默奉献的每一位朋友。是你们共同的努力，让这个项目变得更好！
+
+---
+
 **这是当前维护的 Python 版本。不再维护的 Javascript 版本请参见 [`deprecated_javascript_version/README.md`](deprecated_javascript_version/README.md)。**
 
 ---
 
 ## 目录
 
-1.  [项目概述](#项目概述)
-2.  [免责声明](#免责声明)
-3.  [核心特性](#核心特性-python-版本)
-4.  [重要提示](#重要提示-python-版本)
-5.  [快速开始 (推荐流程)](#快速开始-推荐流程)
-6.  [详细步骤](#详细步骤)
+1.  [致谢 (Acknowledgements)](#致谢-acknowledgements)
+2.  [项目概述](#项目概述)
+3.  [免责声明](#免责声明)
+4.  [核心特性](#核心特性-python-版本)
+5.  [重要提示](#重要提示-python-版本)
+6.  [快速开始 (推荐流程)](#快速开始-推荐流程)
+7.  [详细步骤](#详细步骤)
     *   [1. 先决条件](#1-先决条件)
     *   [2. 安装](#2-安装)
     *   [3. 首次运行与认证 (关键!)](#3-首次运行与认证-关键)
@@ -22,13 +41,12 @@
     *   [6. Web UI (服务测试)](#6-web-ui-服务测试)
     *   [7. 配置客户端 (以 Open WebUI 为例)](#7-配置客户端-以-open-webui-为例)
     *   [8. (可选) 局域网域名访问 (mDNS)](#8-可选-局域网域名访问-mdns)
-7.  [多平台指南](#多平台指南-python-版本)
-8.  [故障排除](#故障排除-python-版本)
-9.  [关于 Camoufox](#关于-camoufox)
-10. [关于 `fetch_camoufox_data.py`](#关于-fetch_camoufox_datapy)
-11. [控制日志输出](#控制日志输出-python-版本)
-12. [未来计划 / Roadmap](#未来计划--roadmap)
-13. [致谢与贡献者](#致谢与贡献者)
+8.  [多平台指南](#多平台指南-python-版本)
+9.  [故障排除](#故障排除-python-版本)
+10. [关于 Camoufox](#关于-camoufox)
+11. [关于 `fetch_camoufox_data.py`](#关于-fetch_camoufox_datapy)
+12. [控制日志输出](#控制日志输出-python-版本)
+13. [未来计划 / Roadmap](#未来计划--roadmap)
 14. [贡献](#贡献)
 15. [License](#license)
 
@@ -639,19 +657,6 @@ python launch_camoufox.py --debug --server-port 2048
 *   **云服务器部署指南**: 提供更详细的在主流云平台（如 AWS, GCP, Azure）上部署和管理服务的指南。
 *   **认证更新流程优化**: 探索更便捷的认证文件更新机制，减少手动操作。
 *   **MCP兼容性支持**: 增加健壮性提高对MCP的兼容性。
-
----
-
-## 致谢与贡献者
-
-本项目的诞生与发展离不开以下开发者和贡献者的努力与智慧：
-
-*   **项目发起与主要开发**: @CJackHwang ([https://github.com/CJackHwang](https://github.com/CJackHwang))
-*   **重要贡献与功能完善、调试**: @ayuayue ([https://github.com/ayuayue](https://github.com/ayuayue))
-
-同时，感谢所有通过提交 Issue、提供建议、分享使用体验等方式为本项目作出贡献的社区成员！
-
----
 
 ## 贡献
 
