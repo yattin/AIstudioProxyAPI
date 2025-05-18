@@ -2014,10 +2014,10 @@ async def use_helper_get_response(helper_endpoint, helper_sapisid):
 
     except aiohttp.ClientError as e:
         logger.error(f"Error connecting to server: {e}")
-        yield "[ERROR]"
+        raise e
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
-        yield "[ERROR]"
+        raise e
 
 
 # --- V5: Refactored Core Request Processing Logic --- (Called by Worker)
@@ -2624,26 +2624,71 @@ async def _process_request_refactored(
             use_helper = False
 
         if use_helper:
-            completion_event = Event()  # Create event for streaming
-            if is_streaming:
-                async def create_stream_generator(event_to_set: Event) -> AsyncGenerator[str, None]:
+            try:
+                if is_streaming:
+                    completion_event = Event()  # Create event for streaming
+
+                    async def create_stream_generator(event_to_set: Event) -> AsyncGenerator[str, None]:
+                        async for data in use_helper_get_response(helper_endpoint, helper_sapisid):
+                            if data == "[DONE]":
+                                break
+                            yield f"data: {data}\n\n"
+                        yield "data: [DONE]\n\n"
+                        if not event_to_set.is_set(): event_to_set.set()
+
+                    stream_generator_func = create_stream_generator(completion_event)
+                    if not result_future.done():
+                        result_future.set_result(
+                            StreamingResponse(stream_generator_func, media_type="text/event-stream"))
+                    else:
+                        if not completion_event.is_set(): completion_event.set()
+                    return completion_event
+                else:
+                    think = ""
+                    body = ""
                     async for data in use_helper_get_response(helper_endpoint, helper_sapisid):
                         if data == "[DONE]":
                             break
-                        elif data == "[ERROR]":
-                            break
-                        yield f"data: {data}\n\n"
-                    yield "data: [DONE]\n\n"
-                    if not event_to_set.is_set(): event_to_set.set()
+                        else:
+                            stream_data = json.loads(data)
+                            if "choices" in stream_data:
+                                choices = stream_data["choices"]
+                                if len(choices)>0:
+                                    choice = choices[0]
+                                    if "reasoning_content" in choice["delta"]:
+                                        think = think + choice["delta"]["reasoning_content"]
+                                    elif "content" in choice["delta"]:
+                                        body = body + choice["delta"]["content"]
 
-                stream_generator_func = create_stream_generator(completion_event)
-                if not result_future.done():
-                    result_future.set_result(StreamingResponse(stream_generator_func, media_type="text/event-stream"))
-                else:
-                    if not completion_event.is_set(): completion_event.set()
-                return completion_event
-            else:
-                logger.info(f"[{req_id}]   - 跳过等待响应生成完成，因为未配置助手。") # logger
+                    final_content = ""
+                    if think != "":
+                        final_content = f"<think>{think}</think>\n" + body
+                    else:
+                        final_content = body
+
+                    response_payload = {
+                        "id": f"{CHAT_COMPLETION_ID_PREFIX}{req_id}-{int(time.time())}",
+                        "object": "chat.completion",
+                        "created": int(time.time()),
+                        "model": MODEL_NAME,
+                        "choices": [{
+                            "index": 0,
+                            "message": {"role": "assistant", "content": final_content},
+                            "finish_reason": "stop"
+                        }],
+                        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+                    }
+                    if not result_future.done():
+                        result_future.set_result(JSONResponse(content=response_payload))
+                        logger.info(f"[{req_id}] (Refactored Process) 非流式 JSON 响应已通过Helper设置。")  # logger
+                    else:
+                        logger.warning(
+                            f"[{req_id}] (Refactored Process) Future 已完成/取消，无法设置 JSON 结果。")  # logger
+                    return None
+            except:
+                use_helper = False
+                logger.error(f"请求Helper服务器异常，退回页面等待")  # logger
+
 
         if not use_helper:
             completion_detected = await _wait_for_response_completion(
