@@ -225,3 +225,6 @@ chrome_temp_profile/
 
 # Deprecated Javascript Version node_modules
 deprecated_javascript_version/node_modules/ 
+
+.roomodes
+memory-bank/

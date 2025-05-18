@@ -9,6 +9,7 @@ import platform
 import threading
 import time
 import socket
+import signal
 from typing import List, Dict, Any, Optional
 
 # --- Configuration & Globals ---
@@ -22,6 +23,7 @@ ACTIVE_AUTH_DIR = os.path.join(AUTH_PROFILES_DIR, "active")
 SAVED_AUTH_DIR = os.path.join(AUTH_PROFILES_DIR, "saved")
 
 DEFAULT_FASTAPI_PORT = 2048
+DEFAULT_CAMOUFOX_PORT_GUI = 9222 # 与 launch_camoufox.py 中的 DEFAULT_CAMOUFOX_PORT 一致
 
 managed_process_info: Dict[str, Any] = {
     "popen": None,
@@ -38,8 +40,9 @@ LANG_TEXTS = {
     "title": {"zh": "AI Studio Proxy API Launcher GUI", "en": "AI Studio Proxy API Launcher GUI"},
     "status_idle": {"zh": "空闲，请选择操作。", "en": "Idle. Select an action."},
     "port_section_label": {"zh": "服务端口配置", "en": "Service Port Configuration"},
-    "port_input_description_lbl": {"zh": "提示: 下方所有启动选项均会使用此端口号。", "en": "Note: All launch options below will use this port number."},
-    "port_label": {"zh": "服务端口 (FastAPI):", "en": "Service Port (FastAPI):"},
+    "port_input_description_lbl": {"zh": "提示: 启动时将使用下方指定的FastAPI服务端口和Camoufox调试端口。", "en": "Note: The FastAPI service port and Camoufox debug port specified below will be used for launch."},
+    "fastapi_port_label": {"zh": "FastAPI 服务端口:", "en": "FastAPI Port:"},
+    "camoufox_debug_port_label": {"zh": "Camoufox 调试端口:", "en": "Camoufox Debug Port:"},
     "query_pids_btn": {"zh": "查询端口进程", "en": "Query Port Processes"},
     "stop_selected_pid_btn": {"zh": "停止选中进程", "en": "Stop Selected Process"},
     "pids_on_port_label": {"zh": "端口占用情况 (PID - 名称):", "en": "Processes on Port (PID - Name):"}, # Static version for initialization
@@ -104,12 +107,20 @@ LANG_TEXTS = {
     "kill_custom_pid_btn": {"zh": "终止指定PID", "en": "Kill Specified PID"},
     "pid_input_empty_warn": {"zh": "请输入要终止的PID。", "en": "Please enter a PID to kill."},
     "pid_input_invalid_warn": {"zh": "输入的PID无效，请输入纯数字。", "en": "Invalid PID entered. Please enter numbers only."},
-    "confirm_kill_custom_pid_title": {"zh": "确认终止PID", "en": "Confirm Kill PID"}
+    "confirm_kill_custom_pid_title": {"zh": "确认终止PID", "en": "Confirm Kill PID"},
+    "status_sending_sigint": {"zh": "正在向 {service_name} (PID: {pid}) 发送 SIGINT...", "en": "Sending SIGINT to {service_name} (PID: {pid})..."},
+    "status_waiting_after_sigint": {"zh": "{service_name} (PID: {pid})：SIGINT 已发送，等待 {timeout} 秒优雅退出...", "en": "{service_name} (PID: {pid}): SIGINT sent, waiting {timeout}s for graceful exit..."},
+    "status_sigint_effective": {"zh": "{service_name} (PID: {pid}) 已响应 SIGINT 并停止。", "en": "{service_name} (PID: {pid}) responded to SIGINT and stopped."},
+    "status_sending_sigterm": {"zh": "{service_name} (PID: {pid})：未在规定时间内响应 SIGINT，正在发送 SIGTERM...", "en": "{service_name} (PID: {pid}): Did not respond to SIGINT in time, sending SIGTERM..."},
+    "status_waiting_after_sigterm": {"zh": "{service_name} (PID: {pid})：SIGTERM 已发送，等待 {timeout} 秒优雅退出...", "en": "{service_name} (PID: {pid}): SIGTERM sent, waiting {timeout}s for graceful exit..."},
+    "status_sigterm_effective": {"zh": "{service_name} (PID: {pid}) 已响应 SIGTERM 并停止。", "en": "{service_name} (PID: {pid}) responded to SIGTERM and stopped."},
+    "status_forcing_kill": {"zh": "{service_name} (PID: {pid})：未在规定时间内响应 SIGTERM，正在强制终止 (SIGKILL)...", "en": "{service_name} (PID: {pid}): Did not respond to SIGTERM in time, forcing kill (SIGKILL)..."}
 }
 current_language = 'zh'
 root_widget: Optional[tk.Tk] = None
 process_status_text_var: Optional[tk.StringVar] = None
-port_entry_var: Optional[tk.StringVar] = None
+port_entry_var: Optional[tk.StringVar] = None # 将用于 FastAPI 端口
+camoufox_debug_port_var: Optional[tk.StringVar] = None
 pid_listbox_widget: Optional[tk.Listbox] = None
 custom_pid_entry_var: Optional[tk.StringVar] = None
 widgets_to_translate: List[Dict[str, Any]] = []
@@ -331,7 +342,7 @@ def monitor_process_thread_target():
         managed_process_info["service_name_key"] = None
         managed_process_info["fully_detached"] = False # Reset flag
 
-def get_current_port_from_gui() -> int:
+def get_fastapi_port_from_gui() -> int:
     try:
         port_str = port_entry_var.get()
         if not port_str: messagebox.showwarning(get_text("warning_title"), get_text("enter_valid_port_warn")); return DEFAULT_FASTAPI_PORT
@@ -342,6 +353,20 @@ def get_current_port_from_gui() -> int:
         messagebox.showwarning(get_text("warning_title"), get_text("enter_valid_port_warn"))
         port_entry_var.set(str(DEFAULT_FASTAPI_PORT))
         return DEFAULT_FASTAPI_PORT
+
+def get_camoufox_debug_port_from_gui() -> int:
+    try:
+        port_str = camoufox_debug_port_var.get()
+        if not port_str: # 允许空输入，使用默认值
+            camoufox_debug_port_var.set(str(DEFAULT_CAMOUFOX_PORT_GUI)) # 确保UI同步
+            return DEFAULT_CAMOUFOX_PORT_GUI
+        port = int(port_str)
+        if not (1024 <= port <= 65535): raise ValueError("Port out of range")
+        return port
+    except ValueError:
+        messagebox.showwarning(get_text("warning_title"), get_text("enter_valid_port_warn"))
+        camoufox_debug_port_var.set(str(DEFAULT_CAMOUFOX_PORT_GUI))
+        return DEFAULT_CAMOUFOX_PORT_GUI
 
 def _configure_proxy_env_vars() -> Dict[str, str]:
     proxy_env = {}
@@ -426,17 +451,29 @@ def _launch_process_gui(cmd: List[str], service_name_key: str, env_vars: Optiona
         update_status_bar("status_error_starting", service_name=service_name)
 
 def start_headed_interactive_gui():
-    port = get_current_port_from_gui()
+    fastapi_port = get_fastapi_port_from_gui()
+    camoufox_debug_port = get_camoufox_debug_port_from_gui()
     proxy_env = _configure_proxy_env_vars()
-    cmd = [PYTHON_EXECUTABLE, LAUNCH_CAMOUFOX_PY, '--debug', '--server-port', str(port)]
+    cmd = [
+        PYTHON_EXECUTABLE, LAUNCH_CAMOUFOX_PY,
+        '--debug',
+        '--server-port', str(fastapi_port),
+        '--camoufox-debug-port', str(camoufox_debug_port)
+    ]
     update_status_bar("status_headed_launch")
     _launch_process_gui(cmd, "service_name_headed_interactive", env_vars=proxy_env,
                         use_new_console_on_win=True, capture_output=False, fully_detached=False)
 
 def start_headless_independent_gui():
-    port = get_current_port_from_gui()
+    fastapi_port = get_fastapi_port_from_gui()
+    camoufox_debug_port = get_camoufox_debug_port_from_gui()
     proxy_env = _configure_proxy_env_vars()
-    cmd = [PYTHON_EXECUTABLE, LAUNCH_CAMOUFOX_PY, "--headless", "--server-port", str(port)]
+    cmd = [
+        PYTHON_EXECUTABLE, LAUNCH_CAMOUFOX_PY,
+        "--headless",
+        "--server-port", str(fastapi_port),
+        "--camoufox-debug-port", str(camoufox_debug_port)
+    ]
     update_status_bar("status_headless_independent_launch")
     _launch_process_gui(cmd, "service_name_headless_independent", env_vars=proxy_env,
                         use_new_console_on_win=False, capture_output=True, fully_detached=True)
@@ -455,16 +492,51 @@ def stop_managed_service_gui():
     service_name_key = managed_process_info["service_name_key"]
     service_name = get_text(service_name_key if service_name_key in LANG_TEXTS else "service_name_headed_interactive") # Fallback
     pid = popen.pid if popen else "N/A"
-    update_status_bar("status_stopping_service", service_name=service_name, pid=str(pid))
+
+    # Timeouts and poll interval
+    SIGINT_TIMEOUT_SECONDS = 5
+    SIGTERM_TIMEOUT_SECONDS = 2
+    POLL_INTERVAL_SECONDS = 0.5
+
     try:
-        popen.terminate()
-        # Monitor thread will update final status. Optionally, can force kill after timeout here.
+        # Phase 1: Try SIGINT
+        update_status_bar("status_sending_sigint", service_name=service_name, pid=str(pid))
+        popen.send_signal(signal.SIGINT) # signal module should be imported
+        update_status_bar("status_waiting_after_sigint", service_name=service_name, pid=str(pid), timeout=SIGINT_TIMEOUT_SECONDS)
+
+        for _ in range(int(SIGINT_TIMEOUT_SECONDS / POLL_INTERVAL_SECONDS)):
+            if popen.poll() is not None:
+                update_status_bar("status_sigint_effective", service_name=service_name, pid=str(pid))
+                return # Process terminated, monitor_thread will report final status
+            time.sleep(POLL_INTERVAL_SECONDS) # time module should be imported
+
+        # Phase 2: Try SIGTERM (if SIGINT failed and process still running)
+        if popen.poll() is None:
+            update_status_bar("status_sending_sigterm", service_name=service_name, pid=str(pid))
+            popen.terminate() # Sends SIGTERM
+            update_status_bar("status_waiting_after_sigterm", service_name=service_name, pid=str(pid), timeout=SIGTERM_TIMEOUT_SECONDS)
+
+            for _ in range(int(SIGTERM_TIMEOUT_SECONDS / POLL_INTERVAL_SECONDS)):
+                if popen.poll() is not None:
+                    update_status_bar("status_sigterm_effective", service_name=service_name, pid=str(pid))
+                    return # Process terminated, monitor_thread will report final status
+                time.sleep(POLL_INTERVAL_SECONDS)
+
+        # Phase 3: Force SIGKILL (if SIGTERM failed and process still running)
+        if popen.poll() is None:
+            update_status_bar("status_forcing_kill", service_name=service_name, pid=str(pid))
+            popen.kill() # Sends SIGKILL
+            # Process will be killed. monitor_thread will report final status (likely "killed" or exit code)
+            return
+
+    except ProcessLookupError: # Process might have already exited before or during signal sending
+        update_status_bar("service_stopped_gracefully_status", service_name=service_name)
     except Exception as e:
-        messagebox.showerror(get_text("error_title"), get_text("error_stopping_service_msgbox", service_name=service_name, pid=str(pid), e=e))
-        update_status_bar("error_stopping_service_msgbox", service_name=service_name, pid=str(pid), e=e)
+        messagebox.showerror(get_text("error_title"), get_text("error_stopping_service_msgbox", service_name=service_name, pid=str(pid), e=str(e)))
+        update_status_bar("error_stopping_service_msgbox", service_name=service_name, pid=str(pid), e=str(e))
 
 def query_port_and_display_pids_gui():
-    port = get_current_port_from_gui()
+    port = get_fastapi_port_from_gui() # Query PIDs 按钮关联 FastAPI 端口
     # Update the LabelFrame's text to include the queried port
     if root_widget: # Ensure GUI elements are available
         # Find the pid_list_lbl_frame widget. This assumes it's accessible.
@@ -593,7 +665,7 @@ def switch_language_gui(lang_code: str):
     # else: print(f"Warning: Language code '{lang_code}' not fully supported.") # Less verbose
 
 def build_gui(root: tk.Tk):
-    global process_status_text_var, port_entry_var, pid_listbox_widget, widgets_to_translate, managed_process_info, root_widget, menu_bar_ref, custom_pid_entry_var
+    global process_status_text_var, port_entry_var, camoufox_debug_port_var, pid_listbox_widget, widgets_to_translate, managed_process_info, root_widget, menu_bar_ref, custom_pid_entry_var
     root_widget = root
     
     # --- 设置窗口属性 ---
@@ -617,7 +689,8 @@ def build_gui(root: tk.Tk):
         # Decide if this is fatal or just a warning
 
     process_status_text_var = tk.StringVar(value=get_text("status_idle"))
-    port_entry_var = tk.StringVar(value=str(DEFAULT_FASTAPI_PORT))
+    port_entry_var = tk.StringVar(value=str(DEFAULT_FASTAPI_PORT)) # FastAPI 端口
+    camoufox_debug_port_var = tk.StringVar(value=str(DEFAULT_CAMOUFOX_PORT_GUI)) # Camoufox 调试端口
     custom_pid_entry_var = tk.StringVar() # 初始化自定义PID输入变量
 
     menu_bar_ref = tk.Menu(root)
@@ -665,28 +738,36 @@ def build_gui(root: tk.Tk):
     # 确保端口部分的内容可以水平扩展
     port_section.columnconfigure(1, weight=1)
     
-    lbl_port = ttk.Label(port_section, text="")
+    lbl_port = ttk.Label(port_section, text="") # FastAPI Port Label
     lbl_port.grid(row=0, column=0, padx=5, pady=5, sticky="w")
-    widgets_to_translate.append({"widget": lbl_port, "key": "port_label"})
+    widgets_to_translate.append({"widget": lbl_port, "key": "fastapi_port_label"})
     
-    entry_port = ttk.Entry(port_section, textvariable=port_entry_var, width=8)
+    entry_port = ttk.Entry(port_section, textvariable=port_entry_var, width=8) # FastAPI Port Entry
     entry_port.grid(row=0, column=1, padx=5, pady=5, sticky="w")
+
+    # Camoufox Debug Port UI Elements
+    lbl_camoufox_debug_port = ttk.Label(port_section, text="")
+    lbl_camoufox_debug_port.grid(row=1, column=0, padx=5, pady=5, sticky="w")
+    widgets_to_translate.append({"widget": lbl_camoufox_debug_port, "key": "camoufox_debug_port_label"})
+
+    entry_camoufox_debug_port = ttk.Entry(port_section, textvariable=camoufox_debug_port_var, width=8)
+    entry_camoufox_debug_port.grid(row=1, column=1, padx=5, pady=5, sticky="w")
     
     lbl_port_desc = ttk.Label(port_section, text="", wraplength=200)
-    lbl_port_desc.grid(row=1, column=0, columnspan=2, padx=5, pady=(0,5), sticky="w")
+    lbl_port_desc.grid(row=2, column=0, columnspan=2, padx=5, pady=(0,5), sticky="w") # Adjusted row
     widgets_to_translate.append({"widget": lbl_port_desc, "key": "port_input_description_lbl"})
     
     # 自适应换行长度
     def update_port_desc_wraplength(event=None):
         if lbl_port_desc.winfo_exists():
-            width = port_section.winfo_width() - 20
-            if width > 100:
+            width = port_section.winfo_width() - 20 # Approximation
+            if width > 100: # Minimum sensible wraplength
                 lbl_port_desc.config(wraplength=width)
     
     port_section.bind("<Configure>", update_port_desc_wraplength)
     
     btn_query = ttk.Button(port_section, text="", command=query_port_and_display_pids_gui)
-    btn_query.grid(row=0, column=2, rowspan=2, padx=5, pady=5, sticky="ne")
+    btn_query.grid(row=0, column=2, rowspan=3, padx=5, pady=5, sticky="nse") # Adjusted rowspan and sticky
     widgets_to_translate.append({"widget": btn_query, "key": "query_pids_btn"})
     
     left_current_row += 1
