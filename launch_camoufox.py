@@ -42,6 +42,7 @@ PYTHON_EXECUTABLE = sys.executable
 ENDPOINT_CAPTURE_TIMEOUT = 45 # 秒 (from dev)
 DEFAULT_SERVER_PORT = 2048 # FastAPI 服务器端口
 DEFAULT_CAMOUFOX_PORT = 9222 # Camoufox 调试端口 (如果内部启动需要)
+DEFAULT_HELPER_ENDPOINT = "" # 新增：默认 Helper 端点
 
 AUTH_PROFILES_DIR = os.path.join(os.path.dirname(__file__), "auth_profiles")
 ACTIVE_AUTH_DIR = os.path.join(AUTH_PROFILES_DIR, "active")
@@ -369,7 +370,15 @@ if __name__ == "__main__":
 
     # 用户可见参数 (merged from dev and helper)
     parser.add_argument("--server-port", type=int, default=DEFAULT_SERVER_PORT, help=f"FastAPI 服务器监听的端口号 (默认: {DEFAULT_SERVER_PORT})")
-    parser.add_argument("--helper", type=str, default=None, help=f"helper 服务器的getStreamResponse端点地址(例如: http://127.0.0.1:3121/getStreamResponse)") # from helper
+    parser.add_argument(
+        "--helper",
+        type=str,
+        default=DEFAULT_HELPER_ENDPOINT, # 使用默认值
+        help=(
+            f"Helper 服务器的 getStreamResponse 端点地址 (例如: http://127.0.0.1:3121/getStreamResponse). "
+            f"提供空字符串 (例如: --helper='') 来禁用此功能. 默认: {DEFAULT_HELPER_ENDPOINT}"
+        )
+    )
     parser.add_argument(
         "--camoufox-debug-port", # from dev
         type=int,
@@ -707,33 +716,45 @@ if __name__ == "__main__":
         cleanup()
         sys.exit(1)
 
-    # --- Helper mode logic (from helper branch, adapted) ---
-    if args.helper is not None and effective_active_auth_json_path is not None:
-        logger.info("  检查 helper 模式...")
-        sapisid = ""
-        try:
-            with open(effective_active_auth_json_path, 'r', encoding='utf-8') as file:
-                auth_file_data = json.load(file)
-                if "cookies" in auth_file_data and isinstance(auth_file_data["cookies"], list):
-                    for cookie in auth_file_data["cookies"]:
-                        if isinstance(cookie, dict) and cookie.get("name") == "SAPISID" and cookie.get("domain") == ".google.com":
-                            sapisid = cookie.get("value", "")
-                            break 
-        except (FileNotFoundError, json.JSONDecodeError, KeyError, TypeError) as e:
-            logger.warning(f"  ⚠️ 无法从认证文件 '{os.path.basename(effective_active_auth_json_path)}' 加载或解析SAPISID: {e}")
-        except Exception as e_sapisid:
-            logger.warning(f"  ⚠️ 提取SAPISID时发生未知错误: {e_sapisid}")
+    # --- Helper mode logic (New implementation) ---
+    if args.helper: # 如果 args.helper 不是空字符串 (即 helper 功能已通过默认值或用户指定启用)
+        logger.info(f"  Helper 模式已启用，端点: {args.helper}")
+        os.environ['HELPER_ENDPOINT'] = args.helper # 设置端点环境变量
 
+        if effective_active_auth_json_path:
+            logger.info(f"    尝试从认证文件 '{os.path.basename(effective_active_auth_json_path)}' 提取 SAPISID...")
+            sapisid = ""
+            try:
+                with open(effective_active_auth_json_path, 'r', encoding='utf-8') as file:
+                    auth_file_data = json.load(file)
+                    if "cookies" in auth_file_data and isinstance(auth_file_data["cookies"], list):
+                        for cookie in auth_file_data["cookies"]:
+                            if isinstance(cookie, dict) and cookie.get("name") == "SAPISID" and cookie.get("domain") == ".google.com":
+                                sapisid = cookie.get("value", "")
+                                break
+            except (FileNotFoundError, json.JSONDecodeError, KeyError, TypeError) as e:
+                logger.warning(f"    ⚠️ 无法从认证文件 '{os.path.basename(effective_active_auth_json_path)}' 加载或解析SAPISID: {e}")
+            except Exception as e_sapisid_extraction:
+                logger.warning(f"    ⚠️ 提取SAPISID时发生未知错误: {e_sapisid_extraction}")
 
-        if not sapisid: # Check if sapisid is empty or None
-            logger.warning(f"  ⚠️ 认证信息中没有找到有效的SAPISID，无法启用helper模式。")
-        else:
-            logger.info(f"  ✅ 成功从认证信息加载SAPISID，将为helper模式设置环境变量。") # Corrected from logger.error
-            os.environ['HELPER_ENDPOINT'] = args.helper
-            os.environ['HELPER_SAPISID'] = sapisid
-    elif args.helper is not None and effective_active_auth_json_path is None:
-        logger.warning("  ⚠️ 请求了 helper 模式，但没有有效的认证文件来提取SAPISID。Helper模式将不会被激活。")
-
+            if sapisid:
+                logger.info(f"    ✅ 成功加载 SAPISID。将设置 HELPER_SAPISID 环境变量。")
+                os.environ['HELPER_SAPISID'] = sapisid
+            else:
+                logger.warning(f"    ⚠️ 未能从认证文件 '{os.path.basename(effective_active_auth_json_path)}' 中找到有效的 SAPISID。HELPER_SAPISID 将不会被设置。")
+                if 'HELPER_SAPISID' in os.environ: # 清理，以防万一
+                    del os.environ['HELPER_SAPISID']
+        else: # args.helper 有值 (Helper 模式启用), 但没有认证文件
+            logger.warning(f"    ⚠️ Helper 模式已启用，但没有有效的认证文件来提取 SAPISID。HELPER_SAPISID 将不会被设置。")
+            if 'HELPER_SAPISID' in os.environ: # 清理
+                del os.environ['HELPER_SAPISID']
+    else: # args.helper 是空字符串 (用户通过 --helper='' 禁用了 helper)
+        logger.info("  Helper 模式已通过 --helper='' 禁用。")
+        # 清理相关的环境变量
+        if 'HELPER_ENDPOINT' in os.environ:
+            del os.environ['HELPER_ENDPOINT']
+        if 'HELPER_SAPISID' in os.environ:
+            del os.environ['HELPER_SAPISID']
 
     # --- 步骤 4: 设置环境变量并准备启动 FastAPI/Uvicorn 服务器 (from dev) ---
     logger.info("--- 步骤 4: 设置环境变量并准备启动 FastAPI/Uvicorn 服务器 ---")
