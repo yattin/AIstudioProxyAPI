@@ -1029,7 +1029,6 @@ async def signal_camoufox_shutdown():
 # --- Lifespan Context Manager (负责初始化和清理) ---
 @asynccontextmanager
 async def lifespan(app_param: FastAPI): # app_param 未使用
-    global STREAM_HELPER
     global playwright_manager, browser_instance, page_instance, worker_task
     global is_playwright_ready, is_browser_connected, is_page_ready, is_initializing
     global logger, log_ws_manager, model_list_fetch_event, current_ai_studio_model_id, excluded_model_ids
