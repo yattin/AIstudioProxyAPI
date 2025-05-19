@@ -40,7 +40,7 @@ POLLING_INTERVAL_STREAM = 180 # ms
 SILENCE_TIMEOUT_MS = 40000 # ms
 POST_SPINNER_CHECK_DELAY_MS = 500
 FINAL_STATE_CHECK_TIMEOUT_MS = 1500
-SPINNER_CHECK_TIMEOUT_MS = 1000
+# SPINNER_CHECK_TIMEOUT_MS = 1000
 POST_COMPLETION_BUFFER = 700
 CLEAR_CHAT_VERIFY_TIMEOUT_MS = 5000
 CLEAR_CHAT_VERIFY_INTERVAL_MS = 400
@@ -82,7 +82,7 @@ INPUT_SELECTOR2 = PROMPT_TEXTAREA_SELECTOR
 SUBMIT_BUTTON_SELECTOR = 'button[aria-label="Run"].run-button'
 RESPONSE_CONTAINER_SELECTOR = 'ms-chat-turn .chat-turn-container.model'
 RESPONSE_TEXT_SELECTOR = 'ms-cmark-node.cmark-node'
-LOADING_SPINNER_SELECTOR = 'button[aria-label="Run"].run-button svg .stoppable-spinner'
+# LOADING_SPINNER_SELECTOR = 'button[aria-label="Run"].run-button svg .stoppable-spinner'
 ERROR_TOAST_SELECTOR = 'div.toast.warning, div.toast.error'
 CLEAR_CHAT_BUTTON_SELECTOR = 'button[data-test-clear="outside"][aria-label="Clear chat"]'
 CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR = 'button.mdc-button:has-text("Continue")'
@@ -1420,112 +1420,127 @@ async def _wait_for_response_completion(
 ) -> bool:
     logger.info(f"[{req_id}] (Helper Wait) 开始等待响应完成... (超时: {RESPONSE_COMPLETION_TIMEOUT}ms)")
     start_time_ns = time.time()
-    spinner_locator = page.locator(LOADING_SPINNER_SELECTOR)
+    # spinner_locator = page.locator(LOADING_SPINNER_SELECTOR) # SPINNER REMOVED
     input_field = page.locator(INPUT_SELECTOR)
     input_field2 = page.locator(INPUT_SELECTOR2)
     submit_button = page.locator(SUBMIT_BUTTON_SELECTOR)
     edit_button = page.locator(EDIT_MESSAGE_BUTTON_SELECTOR)
     while time.time() - start_time_ns < RESPONSE_COMPLETION_TIMEOUT / 1000:
         check_client_disconnected("等待完成循环开始: ")
-        spinner_hidden = False
-        input_empty = False
-        button_disabled = False
-        state_check_error = None
+
+        # observed_spinner_hidden = False # SPINNER REMOVED
+        observed_input_empty = False
+        observed_button_disabled = False
+        current_state_check_error = None
+
         try:
+            # 1. 检查 Spinner (尽力而为，如果失败不要阻塞其他检查) # SPINNER REMOVED
+            # try: # SPINNER REMOVED
+            #     await expect_async(spinner_locator).to_be_hidden(timeout=SPINNER_CHECK_TIMEOUT_MS) # SPINNER REMOVED
+            #     observed_spinner_hidden = True # SPINNER REMOVED
+            # except (PlaywrightAsyncError, asyncio.TimeoutError, AssertionError) as e: # SPINNER REMOVED
+            #     observed_spinner_hidden = False # SPINNER REMOVED
+            #     current_state_check_error = current_state_check_error or e # SPINNER REMOVED
+            # check_client_disconnected("等待完成 - Spinner检查后: ") # SPINNER REMOVED
+
+            # 2. 检查输入框是否为空
             try:
-                await expect_async(spinner_locator).to_be_hidden(timeout=SPINNER_CHECK_TIMEOUT_MS)
-                spinner_hidden = True
+                autosize_wrapper_locator = page.locator('ms-prompt-input-wrapper ms-autosize-textarea')
+                current_data_value = await autosize_wrapper_locator.get_attribute("data-value", timeout=FINAL_STATE_CHECK_TIMEOUT_MS)
+                expected_empty_data_value = ""
+                if "prompts/new_chat" not in page.url:
+                     expected_empty_data_value = "Start typing a prompt"
+                if current_data_value == expected_empty_data_value or current_data_value == "":
+                     observed_input_empty = True
+                else:
+                     observed_input_empty = False
+                     current_state_check_error = current_state_check_error or AssertionError(f"Input data-value not empty: '{current_data_value}'")
             except (PlaywrightAsyncError, asyncio.TimeoutError, AssertionError) as e:
-                spinner_hidden = False
-                state_check_error = e
-            check_client_disconnected("等待完成 - Spinner检查后: ")
-            if spinner_hidden:
-                 await asyncio.sleep(POST_SPINNER_CHECK_DELAY_MS / 1000)
-                 check_client_disconnected("等待完成 - Spinner消失后延时后: ")
-                 try:
-                    autosize_wrapper_locator = page.locator('ms-prompt-input-wrapper ms-autosize-textarea')
-                    current_data_value = await autosize_wrapper_locator.get_attribute("data-value")
-                    expected_empty_data_value = ""
-                    if "prompts/new_chat" not in page.url:
-                         expected_empty_data_value = "Start typing a prompt"
-                    if current_data_value == expected_empty_data_value or current_data_value == "":
-                         input_empty = True
-                    else:
-                         input_empty = False
-                         if DEBUG_LOGS_ENABLED:
-                             logger.debug(f"[{req_id}] (Helper Wait) 输入框 data-value 不为空: '{current_data_value}', 期望: '{expected_empty_data_value}' 或 ''")
-                         state_check_error = AssertionError(f"Input data-value not empty: '{current_data_value}'")
-                 except (PlaywrightAsyncError, asyncio.TimeoutError, AssertionError) as e:
-                      input_empty = False
-                      state_check_error = e
-                 check_client_disconnected("等待完成 - 输入框检查后: ")
-                 try:
-                     await expect_async(submit_button).to_be_disabled(timeout=FINAL_STATE_CHECK_TIMEOUT_MS)
-                     button_disabled = True
-                 except (PlaywrightAsyncError, asyncio.TimeoutError, AssertionError) as e:
-                     button_disabled = False
-                     state_check_error = e
-                 check_client_disconnected("等待完成 - 提交按钮检查后: ")
+                  observed_input_empty = False
+                  current_state_check_error = current_state_check_error or e
+            check_client_disconnected("等待完成 - 输入框检查后: ")
+
+            # 3. 检查提交按钮是否禁用
+            try:
+                 await expect_async(submit_button).to_be_disabled(timeout=FINAL_STATE_CHECK_TIMEOUT_MS)
+                 observed_button_disabled = True
+            except (PlaywrightAsyncError, asyncio.TimeoutError, AssertionError) as e:
+                 observed_button_disabled = False
+                 current_state_check_error = current_state_check_error or e
+            check_client_disconnected("等待完成 - 提交按钮检查后: ")
+
         except ClientDisconnectedError: raise
         except Exception as unexpected_state_err:
              logger.exception(f"[{req_id}] (Helper Wait) 状态检查中发生意外错误")
              await save_error_snapshot(f"wait_completion_state_check_unexpected_{req_id}")
              await asyncio.sleep(POLLING_INTERVAL_STREAM / 1000)
              continue
-        is_final_state = spinner_hidden and input_empty and button_disabled
-        if not is_final_state:
-            if DEBUG_LOGS_ENABLED:
-                reason = "Spinner not hidden" if not spinner_hidden else ("Input not empty" if not input_empty else "Submit button not disabled")
-                error_info = f" (Last Check Error: {type(state_check_error).__name__})" if state_check_error else ""
-                logger.debug(f"[{req_id}] (Helper Wait) 基础状态未满足 ({reason}{error_info})。继续轮询...")
-            await asyncio.sleep(POLLING_INTERVAL_STREAM / 1000)
-            continue
-        logger.info(f"[{req_id}] (Helper Wait) 检测到基础最终状态。开始检查编辑按钮可见性 (最长 {SILENCE_TIMEOUT_MS}ms)...")
-        edit_button_check_start = time.time()
-        edit_button_visible = False
-        last_focus_attempt_time = 0
-        while time.time() - edit_button_check_start < SILENCE_TIMEOUT_MS / 1000:
-            check_client_disconnected("等待完成 - 编辑按钮检查循环: ")
-            current_time = time.time()
-            if current_time - last_focus_attempt_time > 1.0:
+
+        # 主要完成条件：输入框空 且 按钮禁用
+        if observed_input_empty and observed_button_disabled:
+            logger.info(f"[{req_id}] (Helper Wait) 检测到主要完成状态 (输入框空 & 按钮禁用)。开始检查编辑按钮...")
+            
+            # if observed_spinner_hidden: # 如果 spinner 确实隐藏了，可以保留这个延迟 # SPINNER REMOVED
+            #     await asyncio.sleep(POST_SPINNER_CHECK_DELAY_MS / 1000) # SPINNER REMOVED
+            #     check_client_disconnected("等待完成 - Spinner消失且主要条件满足后延时后: ") # SPINNER REMOVED
+
+            edit_button_check_start = time.time()
+            edit_button_visible = False
+            last_focus_attempt_time = 0
+            while time.time() - edit_button_check_start < SILENCE_TIMEOUT_MS / 1000:
+                check_client_disconnected("等待完成 - 编辑按钮检查循环: ")
+                current_time = time.time()
+                if current_time - last_focus_attempt_time > 1.0:
+                    try:
+                        if DEBUG_LOGS_ENABLED:
+                            logger.debug(f"[{req_id}] (Helper Wait)   - 尝试聚焦响应元素...")
+                        await response_element.click(timeout=1000, position={'x': 10, 'y': 10}, force=True)
+                        last_focus_attempt_time = current_time
+                        await asyncio.sleep(0.1)
+                    except (PlaywrightAsyncError, asyncio.TimeoutError) as focus_err:
+                         if DEBUG_LOGS_ENABLED:
+                              logger.debug(f"[{req_id}] (Helper Wait)   - 聚焦响应元素失败 (忽略): {type(focus_err).__name__}")
+                    except ClientDisconnectedError: raise
+                    except Exception as unexpected_focus_err:
+                         logger.warning(f"[{req_id}] (Helper Wait)   - 聚焦响应元素时意外错误 (忽略): {unexpected_focus_err}")
+                    check_client_disconnected("等待完成 - 编辑按钮循环聚焦后: ")
                 try:
-                    if DEBUG_LOGS_ENABLED:
-                        logger.debug(f"[{req_id}] (Helper Wait)   - 尝试聚焦响应元素...")
-                    await response_element.click(timeout=1000, position={'x': 10, 'y': 10}, force=True)
-                    last_focus_attempt_time = current_time
-                    await asyncio.sleep(0.1)
-                except (PlaywrightAsyncError, asyncio.TimeoutError) as focus_err:
-                     if DEBUG_LOGS_ENABLED:
-                          logger.debug(f"[{req_id}] (Helper Wait)   - 聚焦响应元素失败 (忽略): {type(focus_err).__name__}")
+                    is_visible = False
+                    try:
+                        is_visible = await edit_button.is_visible(timeout=500)
+                    except asyncio.TimeoutError:
+                        is_visible = False
+                    except PlaywrightAsyncError as pw_vis_err:
+                        logger.warning(f"[{req_id}] (Helper Wait)   - is_visible 检查Playwright错误(忽略): {pw_vis_err}")
+                        is_visible = False
+                    check_client_disconnected("等待完成 - 编辑按钮 is_visible 检查后: ")
+                    if is_visible:
+                        logger.info(f"[{req_id}] (Helper Wait) ✅ 编辑按钮已出现 (is_visible)，确认响应完成。")
+                        edit_button_visible = True
+                        return True # 响应完成
+                    else:
+                          if DEBUG_LOGS_ENABLED and (time.time() - edit_button_check_start) > 1.0:
+                               logger.debug(f"[{req_id}] (Helper Wait)   - 编辑按钮尚不可见... (is_visible returned False or timed out)")
                 except ClientDisconnectedError: raise
-                except Exception as unexpected_focus_err:
-                     logger.warning(f"[{req_id}] (Helper Wait)   - 聚焦响应元素时意外错误 (忽略): {unexpected_focus_err}")
-                check_client_disconnected("等待完成 - 编辑按钮循环聚焦后: ")
-            try:
-                is_visible = False
-                try:
-                    is_visible = await edit_button.is_visible(timeout=500)
-                except asyncio.TimeoutError:
-                    is_visible = False
-                except PlaywrightAsyncError as pw_vis_err:
-                    logger.warning(f"[{req_id}] (Helper Wait)   - is_visible 检查Playwright错误(忽略): {pw_vis_err}")
-                    is_visible = False
-                check_client_disconnected("等待完成 - 编辑按钮 is_visible 检查后: ")
-                if is_visible:
-                    logger.info(f"[{req_id}] (Helper Wait) ✅ 编辑按钮已出现 (is_visible)，确认响应完成。")
-                    edit_button_visible = True
-                    return True
-                else:
-                      if DEBUG_LOGS_ENABLED and (time.time() - edit_button_check_start) > 1.0:
-                           logger.debug(f"[{req_id}] (Helper Wait)   - 编辑按钮尚不可见... (is_visible returned False or timed out)")
-            except ClientDisconnectedError: raise
-            except Exception as unexpected_btn_err:
-                 logger.warning(f"[{req_id}] (Helper Wait)   - 检查编辑按钮时意外错误: {unexpected_btn_err}")
+                except Exception as unexpected_btn_err:
+                     logger.warning(f"[{req_id}] (Helper Wait)   - 检查编辑按钮时意外错误: {unexpected_btn_err}")
+                await asyncio.sleep(POLLING_INTERVAL_STREAM / 1000)
+            
+            if not edit_button_visible:
+                logger.warning(f"[{req_id}] (Helper Wait) 主要完成状态满足后，编辑按钮未在 {SILENCE_TIMEOUT_MS}ms 内出现。判定为超时。")
+                await save_error_snapshot(f"wait_completion_edit_button_timeout_after_primary_{req_id}")
+                return False # 特定超时，但比整体超时快
+        else: # 主要条件 (输入框空和按钮禁用) 未满足
+            if DEBUG_LOGS_ENABLED:
+                reasons = []
+                if not observed_input_empty: reasons.append("Input not empty")
+                if not observed_button_disabled: reasons.append("Button not disabled")
+                # Spinner 状态在这里仅供参考
+                error_info = f" (Last Check Error in iter: {type(current_state_check_error).__name__})" if current_state_check_error else ""
+                logger.debug(f"[{req_id}] (Helper Wait) 主要完成状态未满足 ({', '.join(reasons)}{error_info}). 继续轮询...")
             await asyncio.sleep(POLLING_INTERVAL_STREAM / 1000)
-        if not edit_button_visible:
-            logger.warning(f"[{req_id}] (Helper Wait) 基础状态满足后，编辑按钮未在 {SILENCE_TIMEOUT_MS}ms 内出现。判定为超时。")
-            await save_error_snapshot(f"wait_completion_edit_button_timeout_{req_id}")
-            return False
+            continue # 继续轮询
+
     logger.error(f"[{req_id}] (Helper Wait) 等待响应完成超时 ({RESPONSE_COMPLETION_TIMEOUT}ms)。")
     await save_error_snapshot(f"wait_completion_overall_timeout_{req_id}")
     return False
