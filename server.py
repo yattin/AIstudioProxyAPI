@@ -40,7 +40,6 @@ POLLING_INTERVAL_STREAM = 180 # ms
 SILENCE_TIMEOUT_MS = 40000 # ms
 POST_SPINNER_CHECK_DELAY_MS = 500
 FINAL_STATE_CHECK_TIMEOUT_MS = 1500
-# SPINNER_CHECK_TIMEOUT_MS = 1000
 POST_COMPLETION_BUFFER = 700
 CLEAR_CHAT_VERIFY_TIMEOUT_MS = 5000
 CLEAR_CHAT_VERIFY_INTERVAL_MS = 400
@@ -1259,6 +1258,16 @@ async def get_response_via_edit_button(
     autosize_textarea_locator = last_message_container.locator('ms-autosize-textarea')
     actual_textarea_locator = autosize_textarea_locator.locator('textarea')
     try:
+        logger.info(f"[{req_id}]   - 尝试悬停最后一条消息以显示 'Edit' 按钮...")
+        try:
+            # 对消息容器执行悬停操作
+            await last_message_container.hover(timeout=CLICK_TIMEOUT_MS / 2) # 使用一半的点击超时作为悬停超时
+            await asyncio.sleep(0.3) # 等待悬停效果生效
+            check_client_disconnected("编辑响应 - 悬停后: ")
+        except Exception as hover_err:
+            logger.warning(f"[{req_id}]   - (get_response_via_edit_button) 悬停最后一条消息失败 (忽略): {type(hover_err).__name__}")
+            # 即使悬停失败，也继续尝试后续操作，Playwright的expect_async可能会处理
+        
         logger.info(f"[{req_id}]   - 定位并点击 'Edit' 按钮...")
         try:
             await expect_async(edit_button).to_be_visible(timeout=CLICK_TIMEOUT_MS)
@@ -1434,27 +1443,18 @@ async def _wait_for_response_completion(
         current_state_check_error = None
 
         try:
-            # 1. 检查 Spinner (尽力而为，如果失败不要阻塞其他检查) # SPINNER REMOVED
-            # try: # SPINNER REMOVED
-            #     await expect_async(spinner_locator).to_be_hidden(timeout=SPINNER_CHECK_TIMEOUT_MS) # SPINNER REMOVED
-            #     observed_spinner_hidden = True # SPINNER REMOVED
-            # except (PlaywrightAsyncError, asyncio.TimeoutError, AssertionError) as e: # SPINNER REMOVED
-            #     observed_spinner_hidden = False # SPINNER REMOVED
-            #     current_state_check_error = current_state_check_error or e # SPINNER REMOVED
-            # check_client_disconnected("等待完成 - Spinner检查后: ") # SPINNER REMOVED
 
             # 2. 检查输入框是否为空
             try:
                 autosize_wrapper_locator = page.locator('ms-prompt-input-wrapper ms-autosize-textarea')
                 current_data_value = await autosize_wrapper_locator.get_attribute("data-value", timeout=FINAL_STATE_CHECK_TIMEOUT_MS)
-                expected_empty_data_value = ""
-                if "prompts/new_chat" in page.url:
-                     expected_empty_data_value = "Start typing a prompt"
-                if current_data_value == expected_empty_data_value or current_data_value == "":
+                # 无论页面URL如何，只要输入框的 data-value 是空字符串 ""
+                # 或者 "Start typing a prompt"，都视为空（即已清空）。
+                if current_data_value == "" or current_data_value == "Start typing a prompt":
                      observed_input_empty = True
                 else:
                      observed_input_empty = False
-                     current_state_check_error = current_state_check_error or AssertionError(f"Input data-value not empty: '{current_data_value}'")
+                     current_state_check_error = current_state_check_error or AssertionError(f"Input data-value ('{current_data_value}') not an expected empty state.")
             except (PlaywrightAsyncError, asyncio.TimeoutError, AssertionError) as e:
                   observed_input_empty = False
                   current_state_check_error = current_state_check_error or e
@@ -1486,24 +1486,25 @@ async def _wait_for_response_completion(
 
             edit_button_check_start = time.time()
             edit_button_visible = False
-            last_focus_attempt_time = 0
+            # 移除 last_focus_attempt_time 和相关逻辑
             while time.time() - edit_button_check_start < SILENCE_TIMEOUT_MS / 1000:
                 check_client_disconnected("等待完成 - 编辑按钮检查循环: ")
-                current_time = time.time()
-                if current_time - last_focus_attempt_time > 1.0:
-                    try:
-                        if DEBUG_LOGS_ENABLED:
-                            logger.debug(f"[{req_id}] (Helper Wait)   - 尝试聚焦响应元素...")
-                        await response_element.click(timeout=1000, position={'x': 10, 'y': 10}, force=True)
-                        last_focus_attempt_time = current_time
-                        await asyncio.sleep(0.1)
-                    except (PlaywrightAsyncError, asyncio.TimeoutError) as focus_err:
-                         if DEBUG_LOGS_ENABLED:
-                              logger.debug(f"[{req_id}] (Helper Wait)   - 聚焦响应元素失败 (忽略): {type(focus_err).__name__}")
-                    except ClientDisconnectedError: raise
-                    except Exception as unexpected_focus_err:
-                         logger.warning(f"[{req_id}] (Helper Wait)   - 聚焦响应元素时意外错误 (忽略): {unexpected_focus_err}")
-                    check_client_disconnected("等待完成 - 编辑按钮循环聚焦后: ")
+                
+                # 在检查可见性之前，尝试悬停在最后一条消息上以触发按钮显示
+                last_message_turn = page.locator('ms-chat-turn').last
+                try:
+                    if DEBUG_LOGS_ENABLED:
+                        logger.debug(f"[{req_id}] (Helper Wait)   - 尝试悬停在最后一条消息上...")
+                    await last_message_turn.hover(timeout=1000) # 增加悬停操作
+                    await asyncio.sleep(0.2) # 短暂等待悬停效果生效
+                except (PlaywrightAsyncError, asyncio.TimeoutError) as hover_err:
+                    if DEBUG_LOGS_ENABLED:
+                        logger.debug(f"[{req_id}] (Helper Wait)   - 悬停最后一条消息失败 (忽略): {type(hover_err).__name__}")
+                except ClientDisconnectedError: raise
+                except Exception as unexpected_hover_err:
+                    logger.warning(f"[{req_id}] (Helper Wait)   - 悬停最后一条消息时发生意外错误 (忽略): {unexpected_hover_err}")
+                check_client_disconnected("等待完成 - 编辑按钮循环悬停后: ")
+
                 try:
                     is_visible = False
                     try:

@@ -390,13 +390,7 @@ if __name__ == "__main__":
     mode_selection_group.add_argument("--headless", action="store_true", help="启动无头模式 (浏览器无界面，需要预先保存的认证文件)")
     mode_selection_group.add_argument("--virtual-display", action="store_true", help="启动无头模式并使用虚拟显示 (Xvfb, 仅限 Linux)") # from dev
     
-    parser.add_argument( # from dev
-        "--camoufox-os",
-        type=str,
-        default="linux", # dev default was "linux", helper didn't have this
-        help='指定 Camoufox 模拟的操作系统。可以是 "windows", "macos", "linux", '
-             '或逗号分隔的列表 (例如 "windows,macos")。此设置会影响浏览器指纹。'
-    )
+    # --camoufox-os 参数已移除，将由脚本内部自动检测系统并设置
     parser.add_argument( # from dev
         "--active-auth-json", type=str, default=None,
         help="[无头模式/调试模式可选] 指定要使用的活动认证JSON文件的路径 (在 auth_profiles/active/ 或 auth_profiles/saved/ 中，或绝对路径)。"
@@ -423,6 +417,20 @@ if __name__ == "__main__":
     parser.add_argument("--trace-logs", action='store_true', help="启用 server.py 内部的 TRACE 级别更详细日志 (环境变量 TRACE_LOGS_ENABLED)。")
 
     args = parser.parse_args()
+
+    # --- 自动检测当前系统并设置 Camoufox OS 模拟 ---
+    # 这个变量将用于后续的 Camoufox 内部启动和 HOST_OS_FOR_SHORTCUT 设置
+    current_system_for_camoufox = platform.system()
+    if current_system_for_camoufox == "Linux":
+        simulated_os_for_camoufox = "linux"
+    elif current_system_for_camoufox == "Windows":
+        simulated_os_for_camoufox = "windows"
+    elif current_system_for_camoufox == "Darwin": # macOS
+        simulated_os_for_camoufox = "macos"
+    else:
+        simulated_os_for_camoufox = "linux" # 未知系统的默认回退值
+        logger.warning(f"无法识别当前系统 '{current_system_for_camoufox}'。Camoufox OS 模拟将默认设置为: {simulated_os_for_camoufox}")
+    logger.info(f"根据当前系统 '{current_system_for_camoufox}'，Camoufox OS 模拟已自动设置为: {simulated_os_for_camoufox}")
 
     # --- 处理内部 Camoufox 启动逻辑 (如果脚本被自身作为子进程调用) (from dev) ---
     if args.internal_launch_mode:
@@ -644,7 +652,7 @@ if __name__ == "__main__":
     if effective_active_auth_json_path:
         camoufox_internal_cmd_args.extend(['--internal-auth-file', effective_active_auth_json_path])
     
-    camoufox_internal_cmd_args.extend(['--internal-camoufox-os', args.camoufox_os])
+    camoufox_internal_cmd_args.extend(['--internal-camoufox-os', simulated_os_for_camoufox])
     camoufox_internal_cmd_args.extend(['--internal-camoufox-port', str(args.camoufox_debug_port)])
 
     camoufox_popen_kwargs = {'stdout': subprocess.PIPE, 'stderr': subprocess.PIPE, 'env': os.environ.copy()}
@@ -777,7 +785,7 @@ if __name__ == "__main__":
     os.environ['SERVER_PORT_INFO'] = str(args.server_port)
 
     host_os_for_shortcut_env = None
-    camoufox_os_param_lower = args.camoufox_os.lower()
+    camoufox_os_param_lower = simulated_os_for_camoufox.lower()
     if camoufox_os_param_lower == "macos": host_os_for_shortcut_env = "Darwin"
     elif camoufox_os_param_lower == "windows": host_os_for_shortcut_env = "Windows"
     elif camoufox_os_param_lower == "linux": host_os_for_shortcut_env = "Linux"
