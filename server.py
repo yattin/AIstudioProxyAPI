@@ -1448,7 +1448,7 @@ async def _wait_for_response_completion(
                 autosize_wrapper_locator = page.locator('ms-prompt-input-wrapper ms-autosize-textarea')
                 current_data_value = await autosize_wrapper_locator.get_attribute("data-value", timeout=FINAL_STATE_CHECK_TIMEOUT_MS)
                 expected_empty_data_value = ""
-                if "prompts/new_chat" not in page.url:
+                if "prompts/new_chat" in page.url:
                      expected_empty_data_value = "Start typing a prompt"
                 if current_data_value == expected_empty_data_value or current_data_value == "":
                      observed_input_empty = True
