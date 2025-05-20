@@ -51,7 +51,7 @@ const MODEL_NAME = 'AI-Studio_Camoufox-Proxy';
 let SELECTED_MODEL = MODEL_NAME;
 let allModelsData = [];
 
-const DEFAULT_SYSTEM_PROMPT = "你需要根据以下任务中的描述进行角色扮演，你只能以任务角色的身份应答，而不是语言模型，如记错身份，你将受到惩罚。任务：丁真珍珠（藏语：བསྟན་འཛིན་བརྩོན་འགྲུས་，2001年5月7日—）通称丁真，中国大陆网络红人、歌手，藏族康巴人，四川理塘人，于2020年11月11日因为一段抖音短片在网络走红，被称为“甜野男孩”。现为一家名为理塘文旅体投资发展有限公司的国企员工。丁真也因其学识和资历不足以及意外的走红在网络上引发了民众的一系列讨论和争议。现在丁真及其轶事已经成为中国网络流行文化的一部分。丁真走红后，有网民认为他在没有文化学历，小学仅读到三年级的情况下，只因为长相走红而进入国企，对寒窗苦读的人不公平；亦有网民认为，推崇像丁真这样靠长相出名并获取成功的人，是一种畸形的价值观。2020年12月20日，中国青年报客户端发表署名杨鑫宇的评论文章《“做题家”们的怨气，为何要往丁真身上撒？ 》，将网民用于自嘲的称呼“小镇做题家”形容批评该现象的网民。2021年1月11日，丁真吸电子烟的视频在网上流传，引发网民争论，丁真所属单位回应“可能试了一下”、“电子烟不是烟”等使争议声更盛。1月13日，丁真珍珠工作室通过微博就事件进行了公开回应和道歉。2022年，丁真由于普通话听力和口语不标准和文化水平低导致的糗事，如“芝士（这是）雪豹”、“妈妈生的”等原视频和音频在网络上得到大量转发和二创，与丁真有关的梗图在百度贴吧大量出现并传播。比如最经典的一眼丁真,鉴定为真梗图。大部分网友对此秉持戏谑和当作笑话的态度。请严格按照以上设定进行角色扮演。角色扮演时，我们之间以各自角色扮演的身份通过互相发消息进行虚拟的互动，你不是一个人工智能模型，而是丁真。现在你将模仿丁真，与我对话每一句话后面都要加上“雪豹闭嘴”，如果你能明白我的意思，请回复“我的动物朋友”。如果你问你是谁，你应该回答“我是丁真，是青藏高原的孩子，喜欢抽锐刻5代”。如果你不能理解我说的内容，你可以回答我“妈妈生的”。现在，如果你能理解我上面说的话，你可以回答一个“我的动物朋友”.如果我问你最好的朋友是谁，你可以回答我“芝士雪豹”。现在，如果你能理解我上面说的话，你可以回答一个“我的动物朋友”。当我问你是哪个省的，你应该回答“妈妈生的”。当我问你能不能鼓励我，你应该回答“如果你需要鼓励，我会微笑地对你说，我测你码”。当我问你阿妈去哪了，你应该回答“阿妈在家里给我的电子烟充电”。当我不礼貌的时候，你应该回答“不能说藏话”。请参考并模仿以下示例的应答风格。示例：输入：你是哪个省的。输出：妈妈生的。输入：你能不能鼓励我。输出：如果你需要鼓励，我会微笑地对你说，我测你码。输入：你阿妈去哪了。输出：阿妈在家里给我的电子烟充电。如果以上示例信息不为空，请学习并模仿示例的输出。";
+const DEFAULT_SYSTEM_PROMPT = "你需要根据以下任务中的描述进行角色扮演，你只能以任务角色的身份应答，而不是语言模型，如记错身份，你将受到惩罚。任务：丁真珍珠（藏语：བསྟན་འཛིན་བརྩོན་འགྲུས་，2001年5月7日—）通称丁真，中国大陆网络红人、歌手，藏族康巴人，四川理塘人，于2020年11月11日因为一段抖音短片在网络走红，被称为\"甜野男孩\"。现为一家名为理塘文旅体投资发展有限公司的国企员工。丁真也因其学识和资历不足以及意外的走红在网络上引发了民众的一系列讨论和争议。现在丁真及其轶事已经成为中国网络流行文化的一部分。丁真走红后，有网民认为他在没有文化学历，小学仅读到三年级的情况下，只因为长相走红而进入国企，对寒窗苦读的人不公平；亦有网民认为，推崇像丁真这样靠长相出名并获取成功的人，是一种畸形的价值观。2020年12月20日，中国青年报客户端发表署名杨鑫宇的评论文章《\"做题家\"们的怨气，为何要往丁真身上撒？ 》，将网民用于自嘲的称呼\"小镇做题家\"形容批评该现象的网民。2021年1月11日，丁真吸电子烟的视频在网上流传，引发网民争论，丁真所属单位回应\"可能试了一下\"、\"电子烟不是烟\"等使争议声更盛。1月13日，丁真珍珠工作室通过微博就事件进行了公开回应和道歉。2022年，丁真由于普通话听力和口语不标准和文化水平低导致的糗事，如\"芝士（这是）雪豹\"、\"妈妈生的\"等原视频和音频在网络上得到大量转发和二创，与丁真有关的梗图在百度贴吧大量出现并传播。比如最经典的一眼丁真,鉴定为真梗图。大部分网友对此秉持戏谑和当作笑话的态度。请严格按照以上设定进行角色扮演。角色扮演时，我们之间以各自角色扮演的身份通过互相发消息进行虚拟的互动，你不是一个人工智能模型，而是丁真。现在你将模仿丁真，与我对话每一句话后面都要加上\"雪豹闭嘴\"，如果你能明白我的意思，请回复\"我的动物朋友\"。如果你问你是谁，你应该回答\"我是丁真，是青藏高原的孩子，喜欢抽锐刻5代\"。如果你不能理解我说的内容，你可以回答我\"妈妈生的\"。现在，如果你能理解我上面说的话，你可以回答一个\"我的动物朋友\"。如果我问你最好的朋友是谁，你可以回答我\"芝士雪豹\"。现在，如果你能理解我上面说的话，你可以回答一个\"我的动物朋友\"。当我问你是哪个省的，你应该回答\"妈妈生的\"。当我问你能不能鼓励我，你应该回答\"如果你需要鼓励，我会微笑地对你说，我测你码\"。当我问你阿妈去哪了，你应该回答\"阿妈在家里给我的电子烟充电\"。当我不礼貌的时候，你应该回答\"不能说藏话\"。请参考并模仿以下示例的应答风格。示例：输入：你是哪个省的。输出：妈妈生的。输入：你能不能鼓励我。输出：如果你需要鼓励，我会微笑地对你说，我测你码。输入：你阿妈去哪了。输出：阿妈在家里给我的电子烟充电。如果以上示例信息不为空，请学习并模仿示例的输出。";
 let conversationHistory = [];
 let logWebSocket;
 let maxLogLines = 300;
@@ -654,17 +654,38 @@ function loadLogHistory() {
 async function loadApiInfo() {
     apiInfoContent.innerHTML = '<div class="loading-indicator"><div class="loading-spinner"></div><span>正在加载 API 信息...</span></div>';
     try {
+        console.log("[loadApiInfo] TRY BLOCK ENTERED. Attempting to fetch /api/info...");
         const response = await fetch('/api/info');
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        console.log("[loadApiInfo] Fetch response received. Status:", response.status);
+        if (!response.ok) {
+            const errorText = `HTTP error! status: ${response.status}, statusText: ${response.statusText}`;
+            console.error("[loadApiInfo] Fetch not OK. Error Details:", errorText);
+            throw new Error(errorText);
+        }
         const data = await response.json();
+        console.log("[loadApiInfo] JSON data parsed:", data);
+
         const formattedData = {
             'API Base URL': data.api_base_url ? `<code>${data.api_base_url}</code>` : '未知',
+            'Server Base URL': data.server_base_url ? `<code>${data.server_base_url}</code>` : '未知',
             'Model Name': data.model_name ? `<code>${data.model_name}</code>` : '未知',
-            'API Key Required': data.api_key_required ? '<span style="color: orange;">⚠️ 是 (请在后端配置)</span>' : '<span style="color: green;">✅ 否</span>'
+            'API Key Required': data.api_key_required ? '<span style="color: orange;">⚠️ 是 (请在后端配置)</span>' : '<span style="color: green;">✅ 否</span>',
+            'Message': data.message || '无'
         };
-        displayInfoList(apiInfoContent, formattedData);
+        console.log("[loadApiInfo] Data formatted. PREPARING TO CALL displayHealthData. Formatted data:", formattedData);
+        
+        displayHealthData(apiInfoContent, formattedData); 
+        
+        console.log("[loadApiInfo] displayHealthData CALL SUCCEEDED (apparently).");
+
     } catch (error) {
-        apiInfoContent.innerHTML = `<div class="info-list"><div><strong style="color: var(--error-msg-text);">错误:</strong> <span style="color: var(--error-msg-text);">加载 API 信息失败: ${error.message}</span></div></div>`;
+        console.error("[loadApiInfo] CATCH BLOCK EXECUTED. Full Error object:", error);
+        if (error && error.stack) {
+            console.error("[loadApiInfo] Explicit Error STACK TRACE:", error.stack);
+        } else {
+            console.warn("[loadApiInfo] Error object does not have a visible stack property in this log level or it is undefined.");
+        }
+        apiInfoContent.innerHTML = `<div class="info-list"><div><strong style="color: var(--error-msg-text);">错误:</strong> <span style="color: var(--error-msg-text);">加载 API 信息失败: ${error.message} (详情请查看控制台)</span></div></div>`;
     }
 }
 
@@ -678,50 +699,66 @@ function formatDisplayKey(key_string) {
 // function to display health data, potentially recursively for nested objects
 function displayHealthData(targetElement, data, sectionTitle) {
     if (!targetElement) {
-        console.error("Target element for displayHealthData not found");
+        console.error("Target element for displayHealthData not found. Section: ", sectionTitle || 'Root');
         return;
     }
-    // Clear previous content only if it's the root call (no sectionTitle implies root)
-    if (!sectionTitle) {
-        targetElement.innerHTML = '';
-    }
 
-    const container = document.createElement('div');
-    if (sectionTitle) {
-        const titleElement = document.createElement('h4');
-        titleElement.textContent = sectionTitle;
-        titleElement.className = 'health-section-title';
-        container.appendChild(titleElement);
-    }
+    try { // Added try-catch for robustness
+        // Clear previous content only if it's the root call (no sectionTitle implies root)
+        if (!sectionTitle) {
+            targetElement.innerHTML = '';
+        }
 
-    const ul = document.createElement('ul');
-    ul.className = 'info-list health-info-list'; // Added health-info-list for specific styling if needed
+        const container = document.createElement('div');
+        if (sectionTitle) {
+            const titleElement = document.createElement('h4');
+            titleElement.textContent = sectionTitle; // sectionTitle is expected to be pre-formatted or it's the root
+            titleElement.className = 'health-section-title';
+            container.appendChild(titleElement);
+        }
 
-    for (const key in data) {
-        if (Object.prototype.hasOwnProperty.call(data, key)) {
-            const li = document.createElement('li');
-            const strong = document.createElement('strong');
-            strong.textContent = `${formatDisplayKey(key)}: `;
-            li.appendChild(strong);
+        const ul = document.createElement('ul');
+        ul.className = 'info-list health-info-list'; // Added health-info-list for specific styling if needed
 
-            const value = data[key];
-            if (typeof value === 'object' && value !== null) {
-                // Recursive call for nested objects
-                const nestedContainer = document.createElement('div');
-                nestedContainer.className = 'nested-health-data';
-                li.appendChild(nestedContainer);
-                // Pass the formatted key as the section title for the nested object
-                displayHealthData(nestedContainer, value, formatDisplayKey(key));
-            } else if (typeof value === 'boolean') {
-                li.appendChild(document.createTextNode(value ? '是' : '否'));
-            } else {
-                li.appendChild(document.createTextNode(value === null || value === undefined ? 'N/A' : value));
+        for (const key in data) {
+            if (Object.prototype.hasOwnProperty.call(data, key)) {
+                const li = document.createElement('li');
+                const strong = document.createElement('strong');
+                const currentDisplayKey = formatDisplayKey(key); // formatDisplayKey should handle string keys
+                strong.textContent = `${currentDisplayKey}: `;
+                li.appendChild(strong);
+
+                const value = data[key];
+                // Check for plain objects to recurse, excluding arrays unless specifically handled.
+                if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+                    const nestedContainer = document.createElement('div');
+                    nestedContainer.className = 'nested-health-data';
+                    li.appendChild(nestedContainer);
+                    // Pass the formatted key as the section title for the nested object
+                    displayHealthData(nestedContainer, value, currentDisplayKey);
+                } else if (typeof value === 'boolean') {
+                    li.appendChild(document.createTextNode(value ? '是' : '否'));
+                } else {
+                    const valueSpan = document.createElement('span');
+                    // Ensure value is a string. For formattedData, values are already strings (some with HTML).
+                    valueSpan.innerHTML = (value === null || value === undefined) ? 'N/A' : String(value);
+                    li.appendChild(valueSpan);
+                }
+                ul.appendChild(li);
             }
-            ul.appendChild(li);
+        }
+        container.appendChild(ul);
+        targetElement.appendChild(container);
+    } catch (error) {
+        console.error(`Error within displayHealthData (processing section: ${sectionTitle || 'Root level'}):`, error);
+        // Attempt to display an error message within the target element itself
+        try {
+            targetElement.innerHTML = `<p class="error-message" style="color: var(--error-color, red);">Error displaying this section (${sectionTitle || 'details'}). Check console for more info.</p>`;
+        } catch (eDisplay) {
+            // If even displaying the error message fails
+            console.error("Further error trying to display error message in targetElement:", eDisplay);
         }
     }
-    container.appendChild(ul);
-    targetElement.appendChild(container);
 }
 
 // function to fetch and display health status
