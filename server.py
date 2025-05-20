@@ -40,7 +40,6 @@ POLLING_INTERVAL_STREAM = 180 # ms
 SILENCE_TIMEOUT_MS = 40000 # ms
 POST_SPINNER_CHECK_DELAY_MS = 500
 FINAL_STATE_CHECK_TIMEOUT_MS = 1500
-# SPINNER_CHECK_TIMEOUT_MS = 1000
 POST_COMPLETION_BUFFER = 700
 CLEAR_CHAT_VERIFY_TIMEOUT_MS = 5000
 CLEAR_CHAT_VERIFY_INTERVAL_MS = 400
@@ -1444,14 +1443,6 @@ async def _wait_for_response_completion(
         current_state_check_error = None
 
         try:
-            # 1. 检查 Spinner (尽力而为，如果失败不要阻塞其他检查) # SPINNER REMOVED
-            # try: # SPINNER REMOVED
-            #     await expect_async(spinner_locator).to_be_hidden(timeout=SPINNER_CHECK_TIMEOUT_MS) # SPINNER REMOVED
-            #     observed_spinner_hidden = True # SPINNER REMOVED
-            # except (PlaywrightAsyncError, asyncio.TimeoutError, AssertionError) as e: # SPINNER REMOVED
-            #     observed_spinner_hidden = False # SPINNER REMOVED
-            #     current_state_check_error = current_state_check_error or e # SPINNER REMOVED
-            # check_client_disconnected("等待完成 - Spinner检查后: ") # SPINNER REMOVED
 
             # 2. 检查输入框是否为空
             try:
