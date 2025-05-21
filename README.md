@@ -13,7 +13,7 @@ This project is generously sponsored by ZMTO. Visit their website: [https://zmto
 本项目的诞生与发展，离不开以下个人、组织和社区的慷慨支持与智慧贡献：
 
 *   **项目发起与主要开发**: @CJackHwang ([https://github.com/CJackHwang](https://github.com/CJackHwang))
-*   **重要贡献与功能完善、调试**: @ayuayue ([https://github.com/ayuayue](https://github.com/ayuayue))
+*   **重要贡献与功能完善、win系统调试**: @ayuayue ([https://github.com/ayuayue](https://github.com/ayuayue))
 *   **社区支持与灵感碰撞**: 特别感谢 [Linux.do 社区](https://linux.do/) 成员们的热烈讨论、宝贵建议和问题反馈，你们的参与是项目前进的重要动力。
 
 同时，我们衷心感谢所有通过提交 Issue、提供建议、分享使用体验等方式为本项目默默奉献的每一位朋友。是你们共同的努力，让这个项目变得更好！
@@ -34,7 +34,7 @@ This project is generously sponsored by ZMTO. Visit their website: [https://zmto
 *   [重要提示 (Python 版本)](#重要提示-python-版本)
 *   [项目运行流程图](#项目运行流程图)
 *   [快速开始 (推荐流程)](#快速开始-推荐流程)
-*   [使用图形界面启动器 ([`gui_launcher.py`](gui_launcher.py:1))](#使用图形界面启动器-guilauncherpy)
+*  [使用图形界面启动器](#使用图形界面启动器-guilauncherpy)
     *   [如何启动 GUI](#如何启动-gui)
     *   [GUI 功能概览](#gui-功能概览)
     *   [使用建议](#使用建议)
@@ -138,41 +138,35 @@ graph TD
     subgraph "用户端"
         User["👤 用户"]
     end
+
     subgraph "启动方式"
         CLI_Launch["launch_camoufox.py (命令行)"]
         GUI_Launch["gui_launcher.py (图形界面)"]
     end
+
     subgraph "核心服务"
         CamoufoxCore["Camoufox 核心 (Playwright + 浏览器实例)"]
         ServerPY["server.py (FastAPI 后端服务)"]
     end
+
     subgraph "外部依赖"
         AI_Studio["☁️ 目标 AI 服务 (如 Google AI Studio)"]
     end
+
     subgraph "API 客户端"
         API_Client["🤖 API 客户端 (如 Open WebUI, cURL)"]
     end
-    User -- "执行命令" --> CLI_Launch
-    User -- "操作界面" --> GUI_Launch
-    GUI_Launch -- "构造并执行命令" --> CLI_Launch
-    CLI_Launch -- "参数配置" --> CamoufoxCore
-    CLI_Launch -- "启动/管理" --> ServerPY
-    CLI_Launch -- "指示(有头/无头)" --> CamoufoxCore
-    ServerPY -- "控制/数据中继" <--> CamoufoxCore
-    CamoufoxCore -- "与 AI 服务交互" <--> AI_Studio
-    API_Client -- "API 请求 (如 /v1/chat/completions)" --> ServerPY
-    ServerPY -- "API 响应" --> API_Client
-    %% Notes
-    note right of CLI_Launch
-        CLI 启动:
-        - `python launch_camoufox.py --debug` (有头, 用于认证)
-        - `python launch_camoufox.py --headless` (无头, 日常使用)
-    end note
-    note right of GUI_Launch
-        GUI 启动:
-        - 通过界面按钮选择有头或无头模式
-        - 简化参数配置
-    end note
+
+    User -->|执行命令| CLI_Launch
+    User -->|操作界面| GUI_Launch
+    GUI_Launch -->|构造并执行命令| CLI_Launch
+    CLI_Launch -->|参数配置| CamoufoxCore
+    CLI_Launch -->|启动和管理| ServerPY
+    CLI_Launch -->|指示有头或无头| CamoufoxCore
+    ServerPY <--> |控制与数据中继| CamoufoxCore
+    CamoufoxCore <--> |与 AI 服务交互| AI_Studio
+    API_Client -->|API 请求 /v1/chat/completions| ServerPY
+    ServerPY -->|API 响应| API_Client
 ```
 
 ## 快速开始 (推荐流程)
@@ -234,7 +228,7 @@ graph TD
 
 **认证过期后，重复步骤 2 和 3（删除旧的 active 文件，重新 debug 获取并移动新的，然后用 `start.py` 或 `gui_launcher.py` 启动）。**
 
-## 使用图形界面启动器 ([`gui_launcher.py`](gui_launcher.py:1))
+## 使用图形界面启动器 `gui_launcher.py`
 
 除了推荐的 `start.py` 脚本外，本项目还提供了一个基于 Tkinter 的图形用户界面 (GUI) 启动器：[`gui_launcher.py`](gui_launcher.py)。对于喜欢图形化操作的用户，这是一个方便的替代方案。
 
