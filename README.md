@@ -14,9 +14,10 @@ This project is generously sponsored by ZMTO. Visit their website: [https://zmto
 
 *   **项目发起与主要开发**: @CJackHwang ([https://github.com/CJackHwang](https://github.com/CJackHwang))
 *   **重要贡献与功能完善、win系统调试**: @ayuayue ([https://github.com/ayuayue](https://github.com/ayuayue))
+*   **实时流式功能优化与完善**: @luispater ([https://github.com/luispater](https://github.com/luispater))
 *   **社区支持与灵感碰撞**: 特别感谢 [Linux.do 社区](https://linux.do/) 成员们的热烈讨论、宝贵建议和问题反馈，你们的参与是项目前进的重要动力。
 
-同时，我们衷心感谢所有通过提交 Issue、提供建议、分享使用体验等方式为本项目默默奉献的每一位朋友。是你们共同的努力，让这个项目变得更好！
+同时，我们衷心感谢所有通过提交 Issue、提供建议、分享使用体验、贡献代码修复等方式为本项目默默奉献的每一位朋友。是你们共同的努力，让这个项目变得更好！
 
 ---
 
@@ -86,6 +87,10 @@ This project is generously sponsored by ZMTO. Visit their website: [https://zmto
 *   **OpenAI API 兼容**: 提供 `/v1/chat/completions`, `/v1/models`, `/api/info`, `/health`, `/v1/queue`, `/v1/cancel/{req_id}` 端点 (默认端口 `2048`)。现在支持在 `/v1/chat/completions` 请求中传递模型参数（如 `temperature`, `max_output_tokens`, `top_p`, `stop`），代理会尝试在 AI Studio 页面上应用这些参数。
 *   **模型切换**: API 请求中的 `model` 字段现在用于在 AI Studio 页面动态切换模型。
 *   **流式/非流式响应**: 支持 `stream=true` 和 `stream=false`。
+*   **响应获取优先级**:
+    1.  **集成的流式代理服务 (Stream Proxy Service)**: 默认启用 (监听在 `3120` 端口)。此服务直接处理流式和非流式请求，通常提供最佳性能和稳定性。可以通过 `launch_camoufox.py` 的 `--stream-port=0` 参数禁用。
+    2.  **外部 Helper 服务 (可选)**: 如果配置了 `HELPER_ENDPOINT` 和 `HELPER_SAPISID` 环境变量 (或通过 `launch_camoufox.py` 的 `--helper` 参数设置端点，并有有效认证文件提供 `SAPISID`)，且集成的流式代理服务被禁用，则会尝试使用此外部服务获取响应。
+    3.  **Playwright 页面交互 (后备)**: 如果上述两种方法都未启用或失败，将回退到通过 Playwright 与 AI Studio 页面直接交互 (模拟点击"编辑"或"复制"按钮) 来获取响应。
 *   **请求队列**: 使用 `asyncio.Queue` 顺序处理请求，提高稳定性。
 *   **Camoufox 集成**: 通过 `launch_camoufox.py` 调用 `camoufox` 库启动修改版的 Firefox 实例，利用其反指纹和反检测能力。
 *   **多种启动模式**:
@@ -96,7 +101,7 @@ This project is generously sponsored by ZMTO. Visit their website: [https://zmto
 *   **认证管理**: 强调 `auth_profiles/active/` 下的 `.json` 认证文件对无头模式的重要性，以及通过 `--debug` 模式更新认证的方法。
 *   **系统提示词与历史记录**: 支持 `messages` 中的 `system` 角色和多轮对话历史。
 *   **自动清空上下文 (条件性)**: 尝试在新对话开始时，如果当前不在 `/new_chat` 页面，则自动清空 AI Studio 页面的聊天记录。
-*   **智能响应获取**: 优先尝试通过模拟点击"编辑"或"复制"按钮获取原生响应，提高响应内容的准确性。
+*   **智能响应获取 (后备机制)**: 当集成的流式代理和外部 Helper 服务均不可用时，优先尝试通过模拟点击"编辑"或"复制"按钮获取原生响应，提高响应内容的准确性。
 *   **Web UI**: 提供 `/` 路径访问一个基于 `index.html` 的现代聊天界面，包含：
     *   聊天视图。
     *   服务器信息视图 (API 信息、健康检查状态，支持刷新)。
@@ -112,23 +117,27 @@ This project is generously sponsored by ZMTO. Visit their website: [https://zmto
 *   **日志控制**: 可通过环境变量控制 `server.py` 的日志级别和 `print` 输出重定向行为。
 *   **WebSocket 实时日志**: 提供 `/ws/logs` 端点，Web UI 通过此接口显示后端日志。
 *   **辅助端点**: 提供 `/health`, `/v1/queue`, `/v1/cancel/{req_id}` 等端点用于监控和管理。
-*   **Helper 模式支持**: 可选通过配置 `HELPER_ENDPOINT` 和 `HELPER_SAPISID` 环境变量来使用外部 Helper 服务获取响应，以提高稳定性和性能。
+*   **集成的流式代理服务**: `server.py` 现在内置一个流式代理子进程 (基于 `stream.py`)，默认监听在端口 `3120`。此服务负责直接与目标 AI 服务通信，获取流式或非流式响应，并将结果传递回 `server.py`。可通过 `launch_camoufox.py` 的 `--stream-port` 参数配置其端口或禁用 (设置为0)。
+*   **外部 Helper 服务支持 (作为次级后备)**: 仍然支持通过配置 `HELPER_ENDPOINT` 和 `HELPER_SAPISID` (或通过 `launch_camoufox.py` 的 `--helper` 参数和认证文件) 来使用外部 Helper 服务获取响应。这现在是第二优先级的响应获取方式。
 
 ## 重要提示 (Python 版本)
 
 *   **非官方项目**: 依赖 AI Studio Web 界面，可能因页面更新失效。
 *   **认证文件是关键**: 无头模式 (通过 `start.py` 或 `gui_launcher.py` 启动) **高度依赖**于 `auth_profiles/active/` 下有效的 `.json` 认证文件。**文件可能会过期**，需要定期通过 `launch_camoufox.py --debug` 模式手动运行、登录并保存新的认证文件来替换更新。
-*   **模型与参数控制**:
-    *   现在可以通过 `/v1/chat/completions` API 请求中的 `model` 字段指定模型，代理将尝试在 AI Studio 页面切换到该模型。请确保指定的模型 ID 是 AI Studio 支持的。
-    *   API 请求中的模型参数（如 `temperature`, `max_output_tokens`, `top_p`, `stop`）会被代理接收，并尝试在 AI Studio 页面的对应设置区域进行配置。
-    *   Web UI 的"模型设置"面板也提供了对这些参数的图形化配置和保存功能（保存在浏览器本地）。
-    *   如果 API 未提供参数，或 Web UI 未设置，AI Studio 页面的当前设置或模型默认值将被使用。
-    *   项目根目录下的 `excluded_models.txt` 文件可用于从 `/v1/models` 端点返回的列表中排除特定的模型 ID。每行一个模型 ID。
-*   **CSS 选择器依赖**: 页面交互（如获取响应、清空聊天、设置参数等）依赖 `server.py` 中定义的 CSS 选择器。AI Studio 页面更新可能导致这些选择器失效，需要手动更新。
+*   **响应获取与参数控制**:
+    *   **响应获取优先级**: 项目现在采用多层响应获取机制：
+        1.  **集成的流式代理服务 (Stream Proxy)**: 默认通过 `launch_camoufox.py` 启动时启用，监听在端口 `3120` (可通过 `--stream-port` 修改或设为 `0` 禁用)。此服务直接处理请求，提供最佳性能。
+        2.  **外部 Helper 服务**: 如果集成的流式代理被禁用，且通过 `launch_camoufox.py` 的 `--helper <endpoint_url>` 参数提供了 Helper 服务端点，并且存在有效的认证文件 (`auth_profiles/active/*.json`，用于提取 `SAPISID` Cookie)，则会尝试使用此外部 Helper 服务。
+        3.  **Playwright 页面交互**: 如果以上两种方法均未启用或失败，则回退到传统的 Playwright 方式，通过模拟浏览器操作（编辑/复制按钮）获取响应。
+    *   API 请求中的 `model` 字段用于在 AI Studio 页面切换模型。请确保模型 ID 有效。
+    *   API 请求中的模型参数（如 `temperature`, `max_output_tokens`, `top_p`, `stop`）会被代理接收并尝试在 AI Studio 页面应用。这些参数的设置**仅在通过 Playwright 页面交互获取响应时生效**。当使用集成的流式代理或外部 Helper 服务时，这些参数的传递和应用方式取决于这些服务自身的实现，可能与 AI Studio 页面的设置不同步或不完全支持。
+    *   Web UI 的"模型设置"面板的参数配置也主要影响通过 Playwright 页面交互获取响应的场景。
+    *   项目根目录下的 `excluded_models.txt` 文件可用于从 `/v1/models` 端点返回的列表中排除特定的模型 ID。
+*   **CSS 选择器依赖**: 页面交互（如获取响应、清空聊天、设置参数等）依赖 `server.py` 中定义的 CSS 选择器。AI Studio 页面更新可能导致这些选择器失效，需要手动更新。此依赖主要影响上述第三种响应获取方式 (Playwright 页面交互)。
 *   **Camoufox 特性**: 利用 Camoufox 增强反指纹能力。了解更多信息请参考 [Camoufox 官方文档](https://camoufox.com/)。
 *   **稳定性**: 浏览器自动化本质上不如原生 API 稳定，长时间运行可能需要重启。
 *   **AI Studio 限制**: 无法绕过 AI Studio 本身的速率、内容等限制。
-*   **端口号**: 默认端口已更改为 `2048`。可在 `start.py` 的配置、`launch_camoufox.py` 的 `--server-port` 参数或 `gui_launcher.py` 中修改。
+*   **端口号**: FastAPI 服务默认端口为 `2048`。集成的流式代理服务默认端口为 `3120`。这些都可以在 `launch_camoufox.py` 中通过参数 (`--server-port`, `--stream-port`) 修改。
 *   **客户端管理历史，代理不支持 UI 内编辑**: 客户端负责维护完整的聊天记录并将其发送给代理。代理服务器本身不支持在 AI Studio 界面中对历史消息进行编辑或分叉操作；它总是处理客户端发送的完整消息列表，然后将其发送到 AI Studio 页面。
 
 ## 项目运行流程图
@@ -142,29 +151,46 @@ graph TD
     subgraph "启动方式"
         CLI_Launch["launch_camoufox.py (命令行)"]
         GUI_Launch["gui_launcher.py (图形界面)"]
+        StartPY["start.py (简化脚本)"]
     end
 
     subgraph "核心服务"
-        CamoufoxCore["Camoufox 核心 (Playwright + 浏览器实例)"]
-        ServerPY["server.py (FastAPI 后端服务)"]
+        ServerPY["server.py (FastAPI 后端 + Playwright控制)"]
+        StreamProxy["stream.py (集成流式代理服务)"]
+        CamoufoxInstance["Camoufox 浏览器实例"]
     end
 
-    subgraph "外部依赖"
+    subgraph "外部依赖与服务"
         AI_Studio["☁️ 目标 AI 服务 (如 Google AI Studio)"]
+        OptionalHelper["(可选) 外部 Helper 服务"]
     end
 
     subgraph "API 客户端"
         API_Client["🤖 API 客户端 (如 Open WebUI, cURL)"]
     end
 
+    User -->|执行命令或操作界面| StartPY
     User -->|执行命令| CLI_Launch
     User -->|操作界面| GUI_Launch
-    GUI_Launch -->|构造并执行命令| CLI_Launch
-    CLI_Launch -->|参数配置| CamoufoxCore
+    
+    StartPY -->|构建并执行命令 (通常 headless)| CLI_Launch
+    GUI_Launch -->|构建并执行命令| CLI_Launch
+
     CLI_Launch -->|启动和管理| ServerPY
-    CLI_Launch -->|指示有头或无头| CamoufoxCore
-    ServerPY <--> |控制与数据中继| CamoufoxCore
-    CamoufoxCore <--> |与 AI 服务交互| AI_Studio
+    CLI_Launch -- "--stream-port > 0" -->|启动和管理| StreamProxy
+    CLI_Launch -- "--helper <url>" -->|配置| ServerPY
+    
+    ServerPY -->|控制浏览器| CamoufoxInstance
+    ServerPY -- "请求 (优先级1)" -->|转发/处理| StreamProxy
+    StreamProxy -->|直接请求| AI_Studio
+    StreamProxy -->|响应| ServerPY
+    
+    ServerPY -- "请求 (优先级2, if StreamProxy disabled AND Helper configured)" -->|API调用| OptionalHelper
+    OptionalHelper -->|响应| ServerPY
+
+    ServerPY -- "请求 (优先级3, if StreamProxy AND Helper disabled/failed)" -->|通过 Playwright 页面交互| CamoufoxInstance
+    CamoufoxInstance <--> |与 AI 服务交互| AI_Studio
+    
     API_Client -->|API 请求 /v1/chat/completions| ServerPY
     ServerPY -->|API 响应| API_Client
 ```
@@ -190,9 +216,12 @@ graph TD
 2.  **首次运行获取认证 (使用 Debug 模式 或 GUI 有头模式):**
     *   **命令行方式**:
         ```bash
-        python launch_camoufox.py --debug --server-port 2048
+        python launch_camoufox.py --debug --server-port 2048 --stream-port 3120 --helper ''
         ```
-        *   **重要:** 加上 `--server-port 2048` (或其他你想用的端口) 来指定 FastAPI 监听端口。
+        *   **重要:** 
+            *   `--server-port 2048` (或其他你想用的端口) 来指定 FastAPI 监听端口。
+            *   `--stream-port 3120` (或其他端口) 启用集成的流式代理服务。设为 `0` 则禁用。
+            *   `--helper ''` (或 `--helper <your_helper_endpoint>`) 用于配置外部 Helper 服务。空字符串表示禁用。
         *   会启动一个**带界面的浏览器**。
         *   **关键交互:** **在弹出的浏览器窗口中完成 Google 登录**，直到看到 AI Studio 聊天界面。 (脚本会自动处理浏览器连接，无需用户手动操作)。
         *   回到终端，提示保存认证时输入 `y` 并回车 (文件名可默认)。文件会保存在 `auth_profiles/saved/`。
@@ -327,9 +356,12 @@ python gui_launcher.py
 
 1.  **通过命令行运行 Debug 模式**:
     ```bash
-    python launch_camoufox.py --debug --server-port 2048
+    python launch_camoufox.py --debug --server-port 2048 --stream-port 3120 --helper ''
     ```
-    *   **重要:** 使用 `--server-port <端口号>` (例如 2048) 指定 FastAPI 服务器监听的端口，后续客户端连接需要使用此端口。
+    *   **重要:** 
+        *   使用 `--server-port <端口号>` (例如 2048) 指定 FastAPI 服务器监听的端口。
+        *   使用 `--stream-port <端口号>` (例如 3120) 来启动集成的流式代理服务。如果希望禁用此服务 (例如，优先使用外部 Helper 或仅依赖 Playwright 交互)，请设置为 `--stream-port 0`。
+        *   使用 `--helper <端点URL>` (例如 `--helper http://my.helper.service/api`) 来指定外部 Helper 服务的地址。如果不想使用外部 Helper，可以省略此参数或设置为空字符串 (`--helper ''`)。
     *   脚本会启动 Camoufox（通过内部调用自身），并在终端输出启动信息。
     *   你会看到一个 **带界面的 Firefox 浏览器窗口** 弹出。
     *   **关键交互:** **在弹出的浏览器窗口中完成 Google 登录**，直到看到 AI Studio 聊天界面。 (脚本会自动处理浏览器连接，无需用户手动操作)。
@@ -364,10 +396,42 @@ python gui_launcher.py
 在熟悉 `start.py` 或 `gui_launcher.py` 之前，或者当你需要进行配置、测试、调试或更新认证文件时，**推荐优先直接使用 `launch_camoufox.py` 脚本启动**。这是项目的基础启动方式，提供了更详细的控制和日志输出。
 
 *   `launch_camoufox.py` 支持通过命令行参数 (`--headless` 或 `--debug` 或 `--virtual-display`) 或交互式选择来启动有头（带界面）或无头模式。
+*   它还支持通过 `--server-port` (FastAPI服务端口, 默认 2048), `--stream-port` (集成流式代理端口, 默认 3120, 设为 0 禁用), 和 `--helper <url>` (外部Helper服务URL, 默认为空即禁用) 参数来精细控制服务端口和响应获取方式。
 *   使用 `launch_camoufox.py --debug` 是生成和更新认证文件的**唯一方式**（或者通过 GUI 的有头模式间接调用）。
-*   通过直接运行 `launch_camoufox.py`，你可以更清晰地看到内部 Camoufox 启动、FastAPI 服务器的启动过程和日志，方便排查初始设置问题。
+*   通过直接运行 `launch_camoufox.py`，你可以更清晰地看到内部 Camoufox 启动、FastAPI 服务器及集成流式代理的启动过程和日志，方便排查初始设置问题。
+
+**配置响应获取模式示例 (使用 `launch_camoufox.py`):**
+
+    *   **模式1: 优先使用集成的流式代理 (默认推荐)**
+        ```bash
+        # FastAPI 在 2048, 集成流式代理在 3120, 不使用外部 Helper
+        python launch_camoufox.py --server-port 2048 --stream-port 3120 --helper ''
+        # 如果希望流式代理使用其他端口，例如 3125:
+        # python launch_camoufox.py --server-port 2048 --stream-port 3125 --helper ''
+        ```
+        在此模式下，`server.py` 会优先尝试通过端口 `3120` (或指定的 `--stream-port`) 上的集成流式代理获取响应。如果失败，则回退到 Playwright 页面交互。
+
+    *   **模式2: 优先使用外部 Helper 服务 (禁用集成流式代理)**
+        ```bash
+        # FastAPI 在 2048, 禁用集成流式代理, 配置外部 Helper 服务
+        python launch_camoufox.py --server-port 2048 --stream-port 0 --helper 'http://your-helper-service.com/api/getStreamResponse'
+        ```
+        在此模式下，`server.py` 会优先尝试通过 `--helper` 指定的端点获取响应 (需要有效的 `auth_profiles/active/*.json` 以提取 `SAPISID`)。如果失败，则回退到 Playwright 页面交互。
+
+    *   **模式3: 仅使用 Playwright 页面交互 (禁用所有代理和 Helper)**
+        ```bash
+        # FastAPI 在 2048, 禁用集成流式代理, 不使用外部 Helper
+        python launch_camoufox.py --server-port 2048 --stream-port 0 --helper ''
+        ```
+        在此模式下，`server.py` 将仅通过 Playwright 与 AI Studio 页面交互 (模拟点击"编辑"或"复制"按钮) 来获取响应。这是传统的后备方法。
+
+    **注意**: 上述命令示例默认采用交互式选择启动模式 (有头/无头)。你可以添加 `--headless` 或 `--debug` 参数来指定模式，例如:
+    `python launch_camoufox.py --headless --server-port 2048 --stream-port 3120 --helper ''`
 
 **只有当你确认使用 `launch_camoufox.py --debug` 或 GUI 有头模式一切运行正常（特别是浏览器内的登录和认证保存），并且 `auth_profiles/active/` 目录下有有效的认证文件后，才推荐使用下面的 `start.py` 或 `gui_launcher.py` 作为日常后台运行的标准方式。**
+
+**关于 `start.py` 和 `gui_launcher.py` 的说明:**
+目前的 `start.py` 和 `gui_launcher.py` 脚本可能尚未完全更新以支持通过命令行参数或界面选项来配置 `--stream-port` 和 `--helper`。它们可能默认使用集成的流式代理 (如果 `launch_camoufox.py` 的默认行为是如此)。如果需要细致配置响应获取模式，建议直接使用 `launch_camoufox.py`。
 
 **使用 `start.py` 启动 (便捷后台方式):**
 
@@ -389,10 +453,16 @@ python start.py
 *   服务将在后台以无头模式独立运行，**关闭 GUI 窗口后服务将继续运行**。
 *   此模式通常需要 `auth_profiles/active/` 目录下有预先保存且有效的 `.json` 认证文件。
 
-**如果你需要查看详细日志或进行调试，或者需要手动控制启动过程（例如更新认证），仍然可以使用:**
+**如果你需要查看详细日志或进行调试，或者需要手动控制启动过程（例如更新认证或配置响应获取模式），仍然可以使用:**
 ```bash
-# 运行 Debug 模式 (浏览器内交互，脚本自动处理内部连接)
-python launch_camoufox.py --debug --server-port 2048
+# 运行 Debug 模式, 启用集成流式代理 (默认端口3120), 禁用外部 Helper
+python launch_camoufox.py --debug --server-port 2048 --stream-port 3120 --helper ''
+
+# 运行 Debug 模式, 禁用集成流式代理, 使用外部 Helper
+# python launch_camoufox.py --debug --server-port 2048 --stream-port 0 --helper 'http://your-helper-endpoint'
+
+# 运行 Debug 模式, 仅使用 Playwright 页面交互
+# python launch_camoufox.py --debug --server-port 2048 --stream-port 0 --helper ''
 ```
 
 ### 5. API 使用
@@ -592,6 +662,7 @@ python launch_camoufox.py --debug --server-port 2048
 
 ## 故障排除 (Python 版本)
 
+*   **Asyncio 相关的错误日志**: 您可能会在日志中观察到一些与 `asyncio` 相关的错误信息，尤其是在网络连接不稳定或套接字 (socket) 被意外提前关闭时 (例如，由于目标 URL 无法访问)。如果核心代理功能仍然可用，这些错误信息可能不直接影响主要功能，但表明底层网络操作存在一些非预期的关闭或中断。虽然这些错误可能看起来不太美观，但在不影响核心使用的情况下，可以暂时观察。
 *   **`pip install camoufox[geoip]` 失败**:
     *   可能是网络问题或缺少编译环境。尝试不带 `[geoip]` 安装 (`pip install camoufox`)。
 *   **`camoufox fetch` 失败**:
@@ -606,9 +677,20 @@ python launch_camoufox.py --debug --server-port 2048
 *   **`server.py` 启动时提示端口 (`2048`) 被占用**:
     *   如果使用 `start.py` 或 `gui_launcher.py` 启动，它会尝试自动检测并提示终止占用进程。
     *   如果自动终止失败或未使用 `start.py`/`gui_launcher.py`，请使用系统工具 (如 `netstat -ano | findstr 2048` on Windows, `lsof -i :2048` on Linux/macOS) 查找并结束占用该端口的进程，或修改 `start.py` 的配置、`launch_camoufox.py` 的 `--server-port` 参数或 `gui_launcher.py` 中的端口设置。
-    *   Web UI 中的模型参数设置（如温度、系统提示词等）未生效或行为异常：
-        *   这可能是由于 AI Studio 页面的 `localStorage` 中的 `isAdvancedOpen` 未正确设置为 `true`，或者 `areToolsOpen` 干扰了参数面板。
-        *   代理服务在启动时会尝试自动修正这些 `localStorage` 设置并重新加载页面。如果问题依旧，可以尝试清除浏览器缓存和 `localStorage` 后重启代理服务和浏览器，或在AI Studio页面手动打开高级设置面板再尝试。
+*   **集成的流式代理服务 (`stream.py`) 相关问题**:
+        *   **端口冲突 (`3120` 或自定义的 `--stream-port`)**: 确保流式代理服务使用的端口未被其他应用占用。可以使用与检查 FastAPI 服务端口相同的系统工具进行排查。
+        *   **上游代理配置**: 如果您的网络环境需要通过代理访问外部服务 (如 Google AI Studio)，请确保在启动 `launch_camoufox.py` 之前正确设置了 `HTTP_PROXY` 或 `HTTPS_PROXY` 环境变量。集成的流式代理服务会尝试使用这些环境变量来配置其出站连接。
+        *   **流式响应中断或不完整**: 如果流式响应频繁中断或不完整，可以尝试通过 `launch_camoufox.py --stream-port=0` 禁用集成的流式代理，以测试是否是该组件导致的问题。如果禁用后问题解决，可能与流式代理本身或其网络连接有关。
+        *   Web UI 中的模型参数设置（如温度、系统提示词等）未生效或行为异常：
+            *   这可能是由于 AI Studio 页面的 `localStorage` 中的 `isAdvancedOpen` 未正确设置为 `true`，或者 `areToolsOpen` 干扰了参数面板。
+            *   代理服务在启动时会尝试自动修正这些 `localStorage` 设置并重新加载页面。如果问题依旧，可以尝试清除浏览器缓存和 `localStorage` 后重启代理服务和浏览器，或在AI Studio页面手动打开高级设置面板再尝试。
+        *   **自签名证书管理与信任 (关键)**:
+            *   集成的流式代理服务 (`stream.py`) 会在首次运行时于项目根目录下的 `certs` 文件夹内生成一个自签名的根证书 (例如 `ca.pem`, `ca.key`)。为了使代理能成功拦截和处理 HTTPS 流量（这是其核心功能之一），您**必须将这个自签名根证书 (`certs/ca.pem`) 导入到您的操作系统或浏览器的受信任根证书颁发机构列表中，并设置为完全信任。** 如果不进行此操作，您在通过代理访问 HTTPS 网站时会遇到证书错误，导致服务无法正常工作。具体导入和信任步骤因操作系统而异，请查阅您系统的相关文档。
+            *   **证书删除与重新生成**:
+                *   您可以删除 `certs` 目录下的根证书 (例如 `ca.pem`, `ca.key`)，代码会在下次启动流式代理时尝试重新生成它。
+                *   **重要**: 如果您选择删除根证书，**强烈建议同时删除 `certs` 目录下的所有其他文件和子目录** (特别是为已访问主机生成的缓存子证书，通常位于 `certs/authority/` 或类似路径下)。否则，旧的子证书可能因为签发者（旧根证书）的丢失而导致与新生成的根证书之间出现信任链错误。
+                *   目前 Python 实现依赖于将这些证书保存在磁盘上（位于 `certs` 目录）。
+        *   **首次访问新主机的性能问题**: 当通过流式代理首次访问一个新的 HTTPS 主机时，服务需要为该主机动态生成并签署一个新的子证书。这个过程可能会比较耗时，导致对该新主机的首次连接请求响应较慢，甚至在某些情况下可能被主程序（如 `server.py` 中的 Playwright 交互逻辑）误判为浏览器加载超时。一旦证书生成并缓存后，后续访问同一主机将会显著加快。
 *   **认证失败 (特别是无头模式)**:
     *   **最常见**: `auth_profiles/active/` 下的 `.json` 文件已过期或无效。
     *   **解决**: 删除 `active` 下的文件，重新运行 `python launch_camoufox.py --debug --server-port 2048` 或通过 `gui_launcher.py` 启动有头模式，生成新的认证文件，并将其移动到 `active` 目录。
@@ -689,8 +771,8 @@ python launch_camoufox.py --debug --server-port 2048
                 python start.py
                 ```
         *   **`SERVER_REDIRECT_PRINT`**: 控制 `server.py` 内部的 `print()` 和 `input()` 行为。
-            *   如果设置为 `'true'` (默认，当通过 `start.py` 启动，或 `launch_camoufox.py` 以无头模式启动时)，`print()` 输出会被重定向到 `server.py` 的日志系统（文件、WebSocket 和控制台），`input()` 调用可能会出问题或无响应（因此只在无头模式推荐）。
-            *   如果设置为 `'false'` (当 `launch_camoufox.py` 以调试模式启动时)，`print()` 会输出到 `launch_camoufox.py` 所在的原始终端，`input()` 也会在该终端等待用户输入。
+            *   如果设置为 `'true'` (当 `launch_camoufox.py` 以无头模式或虚拟显示无头模式运行时，此为默认行为；`start.py` 也会强制此行为)，`print()` 输出会被重定向到 `server.py` 的日志系统（文件、WebSocket 和控制台），`input()` 调用可能会出问题或无响应（因此主要在无头模式下推荐）。
+            *   如果设置为 `'false'` (当 `launch_camoufox.py` 以调试模式启动时，此为默认行为)，`print()` 会输出到 `launch_camoufox.py` 所在的原始终端，`input()` 也会在该终端等待用户输入。
         *   **`DEBUG_LOGS_ENABLED`**: (布尔值，`true` 或 `false`) 控制 `server.py` 内部一些非常详细的、用于特定功能调试的日志点是否激活。即使 `SERVER_LOG_LEVEL` 不是 `DEBUG`，这些日志点如果被激活且其消息级别达到 `SERVER_LOG_LEVEL`，也会输出。默认为 `false`。
         *   **`TRACE_LOGS_ENABLED`**: (布尔值，`true` 或 `false`) 类似 `DEBUG_LOGS_ENABLED`，用于更深层次的跟踪日志。默认为 `false`。
 
