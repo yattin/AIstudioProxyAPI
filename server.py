@@ -2348,7 +2348,7 @@ async def _process_request_refactored(
                                 }
 
                                 last_reason_pos = len(data["reason"])
-                                yield f"data: {json.dumps(output, separators=(',', ':'))}\n\n"
+                                yield f"data: {json.dumps(output, ensure_ascii=False, separators=(',', ':'))}\n\n"
                             elif len(data["body"])>last_body_pos:
                                 finish_reason = None
                                 if data["done"]:
@@ -2382,7 +2382,7 @@ async def _process_request_refactored(
                                                 "arguments": json.dumps(function["params"]),
                                             },
                                         })
-                                yield f"data: {json.dumps(output, separators=(',', ':'))}\n\n"
+                                yield f"data: {json.dumps(output, ensure_ascii=False, separators=(',', ':'))}\n\n"
                             elif data["done"]:
                                 output = {
                                     "id": chat_completion_id,
@@ -2413,7 +2413,7 @@ async def _process_request_refactored(
                                                 "arguments": json.dumps(function["params"]),
                                             },
                                         })
-                                yield f"data: {json.dumps(output, separators=(',', ':'))}\n\n"
+                                yield f"data: {json.dumps(output, ensure_ascii=False, separators=(',', ':'))}\n\n"
                         yield "data: [DONE]\n\n"
 
                         if not event_to_set.is_set():
