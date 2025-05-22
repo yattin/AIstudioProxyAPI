@@ -5,3 +5,4 @@ camoufox[geoip]
 pydantic
 aiohttp~=3.11.18
 aiosocks~=0.2.6
+python-socks~=2.7.1
