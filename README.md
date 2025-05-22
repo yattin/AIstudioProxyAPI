@@ -168,28 +168,28 @@ graph TD
         API_Client["🤖 API 客户端 (如 Open WebUI, cURL)"]
     end
 
-    User -->|执行命令| CLI_Launch
-    User -->|操作界面| GUI_Launch
+    User --> "执行命令" CLI_Launch
+    User --> "操作界面" GUI_Launch
     
-    GUI_Launch -->|构建并执行命令| CLI_Launch
+    GUI_Launch --> "构建并执行命令" CLI_Launch
 
-    CLI_Launch -->|启动和管理| ServerPY
-    CLI_Launch -- "--stream-port > 0" -->|启动和管理| StreamProxy
-    CLI_Launch -- "--helper <url>" -->|配置| ServerPY
+    CLI_Launch --> "启动和管理" ServerPY
+    CLI_Launch -- "当 --stream-port > 0" --> StreamProxy
+    CLI_Launch -- "通过 --helper <url>" --> ServerPY
     
-    ServerPY -->|控制浏览器| CamoufoxInstance
-    ServerPY -- "请求 (优先级1)" -->|转发/处理| StreamProxy
-    StreamProxy -->|直接请求| AI_Studio
-    StreamProxy -->|响应| ServerPY
+    ServerPY --> "控制浏览器" CamoufoxInstance
+    ServerPY -- "请求 (优先级1)" --> StreamProxy
+    StreamProxy --> "直接请求" AI_Studio
+    StreamProxy --> "响应" ServerPY
     
-    ServerPY -- "请求 (优先级2, if StreamProxy disabled AND Helper configured)" -->|API调用| OptionalHelper
-    OptionalHelper -->|响应| ServerPY
+    ServerPY -- "请求 (优先级2, if StreamProxy disabled AND Helper configured)" --> OptionalHelper
+    OptionalHelper --> "响应" ServerPY
 
-    ServerPY -- "请求 (优先级3, if StreamProxy AND Helper disabled/failed)" -->|通过 Playwright 页面交互| CamoufoxInstance
-    CamoufoxInstance <--> |与 AI 服务交互| AI_Studio
+    ServerPY -- "请求 (优先级3, if StreamProxy AND Helper disabled/failed)" --> CamoufoxInstance
+    CamoufoxInstance <--> "与 AI 服务交互" AI_Studio
     
-    API_Client -->|API 请求 /v1/chat/completions| ServerPY
-    ServerPY -->|API 响应| API_Client
+    API_Client --> "API 请求 /v1/chat/completions" ServerPY
+    ServerPY --> "API 响应" API_Client
 ```
 
 ## 快速开始 (推荐流程)
