@@ -151,7 +151,6 @@ graph TD
     subgraph "启动方式"
         CLI_Launch["launch_camoufox.py (命令行)"]
         GUI_Launch["gui_launcher.py (图形界面)"]
-        StartPY["start.py (简化脚本)"]
     end
 
     subgraph "核心服务"
@@ -169,11 +168,9 @@ graph TD
         API_Client["🤖 API 客户端 (如 Open WebUI, cURL)"]
     end
 
-    User -->|执行命令或操作界面| StartPY
     User -->|执行命令| CLI_Launch
     User -->|操作界面| GUI_Launch
     
-    StartPY -->|构建并执行命令 (通常 headless)| CLI_Launch
     GUI_Launch -->|构建并执行命令| CLI_Launch
 
     CLI_Launch -->|启动和管理| ServerPY
@@ -197,7 +194,7 @@ graph TD
 
 ## 快速开始 (推荐流程)
 
-推荐使用 `start.py` 脚本进行日常运行，它简化了无头模式的启动流程。对于图形界面用户，可以使用 `gui_launcher.py`。仅在首次设置或认证过期时才需要使用 `launch_camoufox.py --debug` 或 `gui_launcher.py` 的有头模式。
+推荐使用 `gui_launcher.py` (图形界面) 或直接使用 `launch_camoufox.py` (命令行) 进行日常运行。仅在首次设置或认证过期时才需要使用 `launch_camoufox.py --debug` 或 `gui_launcher.py` 的有头模式。
 
 1.  **安装依赖 (首次):**
     ```bash
@@ -234,21 +231,22 @@ graph TD
         *   在弹出的新控制台和浏览器窗口中，按照命令行方式的提示进行 Google 登录和认证文件保存操作。
         *   同样需要手动将认证文件从 `auth_profiles/saved/` 移动到 `auth_profiles/active/`。
 
-3.  **日常运行 (推荐: 使用 `start.py` 无头模式 或 GUI 无头模式):**
-    *   **命令行方式**:
+3.  **日常运行 (推荐: 使用 `gui_launcher.py` 的无头模式 或 `launch_camoufox.py --headless`):**
+    *   **GUI 方式 (`gui_launcher.py`):**
+        *   运行 `python gui_launcher.py` 启动图形界面。
+        *   前提: 确保 `auth_profiles/active/` 下有有效的 `.json` 文件。
+        *   在 GUI 中输入 `FastAPI 服务端口` 和其他所需配置 (如流式代理端口、Helper服务)。
+        *   GUI 内部会进行端口冲突检查。如有冲突，请使用 GUI 内的端口管理功能清理端口。
+        *   点击 `启动无头模式` 按钮。
+        *   服务将在后台以无头模式独立运行。根据 GUI 的设计，**关闭 GUI 后服务将继续运行**。您需要通过系统工具或 GUI 的端口管理功能来停止服务。
+    *   **命令行方式 (`launch_camoufox.py`):**
         ```bash
-        python start.py
+        # 示例: 启动无头模式, FastAPI 监听 2048, 集成流式代理监听 3120, 禁用外部 Helper
+        python launch_camoufox.py --headless --server-port 2048 --stream-port 3120 --helper ''
         ```
         *   **前提:** 确保 `auth_profiles/active/` 下有有效的 `.json` 文件。
-        *   脚本会自动检查端口 `2048` 是否被占用，并尝试清理。
-        *   会询问是否启用代理和代理地址 (可选)。
-        *   设置完成后，脚本会在后台自动启动 `launch_camoufox.py` (无头模式)，并自动处理内部连接，**无需任何手动交互**。
-        *   你可以关闭 `start.py` 的终端窗口，服务将在后台运行。
-    *   **GUI 方式**:
-        *   运行 `python gui_launcher.py` 启动图形界面。
-        *   在 GUI 中输入 `FastAPI 服务端口`。
-        *   点击 `启动无头模式` 按钮。
-        *   服务将在后台以无头模式独立运行，**关闭 GUI 后服务将继续运行**。通常需要 `auth_profiles/active/` 目录下有预先保存且有效的 `.json` 认证文件。
+        *   此方式提供了最细致的参数配置。
+        *   服务将在当前终端的后台运行 (如果操作系统支持且命令正确配置) 或在前台运行 (需要保持终端打开)。
 
 4.  **使用:**
     *   API 地址: `http://127.0.0.1:2048/v1` (或其他你配置的地址和端口)。
@@ -389,13 +387,13 @@ python gui_launcher.py
 
 ### 4. 日常运行
 
-完成首次认证设置后，强烈推荐使用 `start.py` 或 `gui_launcher.py` 的无头模式进行日常运行，它们提供了更便捷的无头模式启动体验。
+完成首次认证设置后，推荐使用 `gui_launcher.py` 的无头模式或直接通过命令行运行 `launch_camoufox.py --headless` 进行日常运行。
 
 **启动器 (`launch_camoufox.py`) 说明:**
 
-在熟悉 `start.py` 或 `gui_launcher.py` 之前，或者当你需要进行配置、测试、调试或更新认证文件时，**推荐优先直接使用 `launch_camoufox.py` 脚本启动**。这是项目的基础启动方式，提供了更详细的控制和日志输出。
+在需要进行配置、测试、调试或更新认证文件时，或者当您偏好命令行操作并需要细致控制启动参数时，**推荐优先直接使用 `launch_camoufox.py` 脚本启动**。这是项目的基础启动方式，提供了更详细的控制和日志输出。
 
-*   `launch_camoufox.py` 支持通过命令行参数 (`--headless` 或 `--debug` 或 `--virtual-display`) 或交互式选择来启动有头（带界面）或无头模式。
+*   `launch_camoufox.py` 支持通过命令行参数 (`--headless` 或 `--debug` 或 `--virtual-display`) 来启动有头（带界面）或无头模式。
 *   它还支持通过 `--server-port` (FastAPI服务端口, 默认 2048), `--stream-port` (集成流式代理端口, 默认 3120, 设为 0 禁用), 和 `--helper <url>` (外部Helper服务URL, 默认为空即禁用) 参数来精细控制服务端口和响应获取方式。
 *   使用 `launch_camoufox.py --debug` 是生成和更新认证文件的**唯一方式**（或者通过 GUI 的有头模式间接调用）。
 *   通过直接运行 `launch_camoufox.py`，你可以更清晰地看到内部 Camoufox 启动、FastAPI 服务器及集成流式代理的启动过程和日志，方便排查初始设置问题。
@@ -428,30 +426,20 @@ python gui_launcher.py
     **注意**: 上述命令示例默认采用交互式选择启动模式 (有头/无头)。你可以添加 `--headless` 或 `--debug` 参数来指定模式，例如:
     `python launch_camoufox.py --headless --server-port 2048 --stream-port 3120 --helper ''`
 
-**只有当你确认使用 `launch_camoufox.py --debug` 或 GUI 有头模式一切运行正常（特别是浏览器内的登录和认证保存），并且 `auth_profiles/active/` 目录下有有效的认证文件后，才推荐使用下面的 `start.py` 或 `gui_launcher.py` 作为日常后台运行的标准方式。**
+**只有当你确认使用 `launch_camoufox.py --debug` 或 GUI 有头模式一切运行正常（特别是浏览器内的登录和认证保存），并且 `auth_profiles/active/` 目录下有有效的认证文件后，才推荐使用 `gui_launcher.py` 的无头模式或 `launch_camoufox.py --headless`作为日常后台运行的标准方式。**
 
-**关于 `start.py` 和 `gui_launcher.py` 的说明:**
-目前的 `start.py` 和 `gui_launcher.py` 脚本可能尚未完全更新以支持通过命令行参数或界面选项来配置 `--stream-port` 和 `--helper`。它们可能默认使用集成的流式代理 (如果 `launch_camoufox.py` 的默认行为是如此)。如果需要细致配置响应获取模式，建议直接使用 `launch_camoufox.py`。
+**关于 `gui_launcher.py` 的说明:**
+`gui_launcher.py` 提供了一个图形界面，用于简化 `launch_camoufox.py` 的常用操作。它允许用户配置端口、选择有头/无头模式、管理认证文件（通过激活已保存文件）、以及查看基本日志。对于希望通过图形界面管理服务的用户来说，这是一个方便的选择。
+它内部仍然是调用 `launch_camoufox.py` 来执行实际的启动命令。当使用 GUI 的无头模式时，服务会独立运行，关闭 GUI 不会停止服务。
 
-**使用 `start.py` 启动 (便捷后台方式):**
-
-```bash
-python start.py
-```
-
-*   **前提**: `auth_profiles/active/` 目录下**必须**存在一个有效的 `.json` 认证文件。
-*   **自动端口检查**: 脚本会检查默认端口 `2048` 是否被占用。如果被占用，会尝试识别占用进程并提示用户是否尝试自动终止它们。
-*   **代理设置 (可选)**: 脚本会交互式地询问你是否需要为 Camoufox 浏览器设置 HTTP/HTTPS 代理，并允许你输入代理地址。这对需要通过代理访问 Google 服务的用户很有用。
-*   **后台启动**: 设置完成后，脚本会在**后台**自动启动 `launch_camoufox.py` (强制使用 `--headless` 模式)，并自动处理内部连接和进程分离。**无需任何手动交互。**
-*   **退出启动器**: `start.py` 成功启动后台服务后，会提示你可以安全地关闭该终端窗口。主服务 (`launch_camoufox.py` 及其管理的 `server.py`) 会在后台继续运行。
-
-**通过 GUI 启动无头模式 (独立后台方式):**
+**使用 `gui_launcher.py` 启动无头模式 (独立后台方式):**
 
 *   运行 `python gui_launcher.py`。
-*   在 GUI 界面设置好端口，然后点击 `启动无头模式` 按钮。
-*   GUI 会启动一个新控制台窗口，其中会显示服务的启动日志。
+*   在 GUI 界面设置好端口，选择或确认认证文件（GUI 可能提供认证文件管理功能）。
+*   点击 `启动无头模式` 按钮。
+*   GUI 会启动一个新控制台窗口 (或在 GUI 内显示日志)，其中会显示服务的启动日志。
 *   服务将在后台以无头模式独立运行，**关闭 GUI 窗口后服务将继续运行**。
-*   此模式通常需要 `auth_profiles/active/` 目录下有预先保存且有效的 `.json` 认证文件。
+*   此模式通常需要 `auth_profiles/active/` 目录下有预先保存且有效的 `.json` 认证文件，或者通过 GUI 的认证管理功能激活一个已保存的认证文件。
 
 **如果你需要查看详细日志或进行调试，或者需要手动控制启动过程（例如更新认证或配置响应获取模式），仍然可以使用:**
 ```bash
