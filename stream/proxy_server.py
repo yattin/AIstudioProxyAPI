@@ -68,13 +68,9 @@ class ProxyServer:
             if method == 'CONNECT':
                 # Handle HTTPS connection
                 await self._handle_connect(reader, writer, target)
-            else:
-                # Handle HTTP connection
-                await self._handle_http(reader, writer, method, target, version, request_line)
-        
+
         except Exception as e:
             self.logger.error(f"Error handling client: {e}")
-            raise e
         finally:
             writer.close()
     
@@ -168,120 +164,6 @@ class ProxyServer:
                 # self.logger.error(f"Error connecting to server {host}:{port}: {e}")
                 writer.close()
                 # await writer.wait_closed()
-    
-    async def _handle_http(self, reader, writer, method, target, version, request_line):
-        """
-        Handle HTTP requests (non-CONNECT)
-        """
-        # Parse the target URL
-        url = urlparse(target)
-        host = url.netloc
-        path = url.path
-        if url.query:
-            path += f"?{url.query}"
-        
-        # Read headers
-        headers = {}
-        while True:
-            line = await reader.readline()
-            line = line.decode('utf-8').strip()
-            if not line:
-                break
-            
-            key, value = line.split(':', 1)
-            headers[key.strip()] = value.strip()
-        
-        # Read body if present
-        content_length = int(headers.get('Content-Length', '0'))
-        body = await reader.read(content_length) if content_length > 0 else b''
-        
-        # Determine if we should intercept
-        intercept = self.should_intercept(host)
-
-        if intercept:
-            # Process the request
-            processed_body = await self.interceptor.process_request(body, host, path)
-            
-            # Connect to the server
-            try:
-                server_reader, server_writer = await self.proxy_connector.create_connection(
-                    host, 80, ssl=None
-                )
-                
-                # Send the request to the server
-                request = f"{method} {path} {version}\r\n"
-                for key, value in headers.items():
-                    request += f"{key}: {value}\r\n"
-                request += "\r\n"
-                
-                server_writer.write(request.encode())
-                if processed_body:
-                    server_writer.write(processed_body)
-                await server_writer.drain()
-                
-                # Read the response
-                response_line = await server_reader.readline()
-                response_headers = {}
-                
-                # Read response headers
-                while True:
-                    line = await server_reader.readline()
-                    if line == b'\r\n':
-                        break
-                    
-                    key, value = line.decode('utf-8').strip().split(':', 1)
-                    response_headers[key.strip()] = value.strip()
-                
-                # Write response line and headers to client
-                writer.write(response_line)
-                for key, value in response_headers.items():
-                    writer.write(f"{key}: {value}\r\n".encode())
-                writer.write(b'\r\n')
-                
-                # Read and process response body
-                response_body = await server_reader.read()
-                # processed_response = await self.interceptor.process_response(
-                #     response_body, host, path, response_headers
-                # )
-                
-                # Send processed response to client
-                writer.write(response_body)
-                await writer.drain()
-
-                server_writer.close()
-            except Exception as e:
-                self.logger.error(f"Error handling HTTP request to {host}: {e}")
-                writer.close()
-                raise e
-        else:
-            # No interception, just forward the request
-            try:
-                server_reader, server_writer = await self.proxy_connector.create_connection(
-                    host, 80, ssl=None
-                )
-                
-                # Send the request to the server
-                request = f"{method} {path} {version}\r\n"
-                for key, value in headers.items():
-                    request += f"{key}: {value}\r\n"
-                request += "\r\n"
-                
-                server_writer.write(request.encode())
-                if body:
-                    server_writer.write(body)
-                await server_writer.drain()
-                
-                # Forward the response to the client
-                response = await server_reader.read()
-                writer.write(response)
-                await writer.drain()
-
-                server_writer.close()
-            except Exception as e:
-                self.logger.error(f"Error handling HTTP request to {host}: {e}")
-                writer.close()
-                raise e
-    
     async def _forward_data(self, client_reader, client_writer, server_reader, server_writer):
         """
         Forward data between client and server without interception
@@ -296,7 +178,6 @@ class ProxyServer:
                     await writer.drain()
             except Exception as e:
                 self.logger.error(f"Error forwarding data: {e}")
-                raise e
             finally:
                 writer.close()
         
@@ -375,7 +256,6 @@ class ProxyServer:
                         client_buffer.clear()
             except Exception as e:
                 self.logger.error(f"Error processing client data: {e}")
-                raise e
             finally:
                 server_writer.close()
                 # await server_writer.wait_closed()
@@ -430,7 +310,6 @@ class ProxyServer:
                         server_buffer.clear()
             except Exception as e:
                 self.logger.error(f"Error processing server data: {e}")
-                # raise e
             finally:
                 client_writer.close()
                 # await client_writer.wait_closed()

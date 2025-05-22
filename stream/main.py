@@ -82,10 +82,6 @@ async def builtin(queue: multiprocessing.Queue = None, port=None, proxy=None):
     if port is None:
         port = 3120
 
-    logger.info("*******************************")
-    logger.info(f"{proxy}")
-    logger.info("*******************************")
-
     # Create and start the proxy server
     proxy_server = ProxyServer(
         host="127.0.0.1",

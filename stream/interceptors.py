@@ -150,9 +150,6 @@ class HttpInterceptor:
                 length_crlf_idx = response_body.find(b"0\r\n\r\n")
                 if length_crlf_idx != -1:
                     return chunked_data, True
-                # if len(response_body) >= 5:
-                #     if response_body[:5] == b"0\r\n\r\n":
-                #         break
 
             if length + 2 > len(response_body):
                 break
