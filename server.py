@@ -1,4 +1,5 @@
 import asyncio
+import multiprocessing
 import random
 import time
 import json
@@ -23,6 +24,11 @@ from urllib.parse import urljoin, urlparse
 import uuid
 import datetime
 import aiohttp
+import stream
+
+# --- stream queue ---
+STREAM_QUEUE:Optional[multiprocessing.Queue] = None
+STREAM_PROCESS = None
 
 # --- 全局添加标记常量 ---
 USER_INPUT_START_MARKER_SERVER = "__USER_INPUT_START__"
@@ -57,7 +63,10 @@ LOG_DIR = os.path.join(os.path.dirname(__file__), 'logs')
 APP_LOG_FILE_PATH = os.path.join(LOG_DIR, 'app.log')
 
 # --- 全局代理设置 ---
-PROXY_SERVER_ENV = os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
+
+PROXY_SERVER_ENV = "http://127.0.0.1:3120/"
+STREAM_PROXY_SERVER_ENV = os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
+
 NO_PROXY_ENV = os.environ.get('NO_PROXY')
 AUTO_SAVE_AUTH = os.environ.get('AUTO_SAVE_AUTH', '').lower() in ('1', 'true', 'yes')
 AUTH_SAVE_TIMEOUT = int(os.environ.get('AUTH_SAVE_TIMEOUT', '30'))
@@ -901,7 +910,10 @@ async def lifespan(app_param: FastAPI):
     global logger, log_ws_manager, model_list_fetch_event, current_ai_studio_model_id, excluded_model_ids
     global request_queue, processing_lock, model_switching_lock, page_params_cache, params_cache_lock
     true_original_stdout, true_original_stderr = sys.stdout, sys.stderr
+    global STREAM_QUEUE ,STREAM_PROCESS, PROXY_SERVER_ENV, STREAM_PROXY_SERVER_ENV, STREAM_PORT, PROXY_SERVER_ENV
+    global PLAYWRIGHT_PROXY_SETTINGS
     initial_stdout_before_redirect, initial_stderr_before_redirect = sys.stdout, sys.stderr
+
     if log_ws_manager is None:
         log_ws_manager = WebSocketConnectionManager()
     log_level_env = os.environ.get('SERVER_LOG_LEVEL', 'INFO')
@@ -910,6 +922,36 @@ async def lifespan(app_param: FastAPI):
         log_level_name=log_level_env,
         redirect_print_str=redirect_print_env
     )
+
+    PROXY_SERVER_ENV = "http://127.0.0.1:3120/"
+    STREAM_PROXY_SERVER_ENV = os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
+
+    STREAM_PORT = os.environ.get('STREAM_PORT')
+    if STREAM_PORT == '0':
+        PROXY_SERVER_ENV = os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
+    elif STREAM_PORT is not None:
+        PROXY_SERVER_ENV = f"http://127.0.0.1:{STREAM_PORT}/"
+
+    PLAYWRIGHT_PROXY_SETTINGS = None
+    if PROXY_SERVER_ENV:
+        PLAYWRIGHT_PROXY_SETTINGS = {'server': PROXY_SERVER_ENV}
+        if NO_PROXY_ENV:
+            PLAYWRIGHT_PROXY_SETTINGS['bypass'] = NO_PROXY_ENV.replace(',', ';')
+
+    if STREAM_PORT != '0':
+        logger.info(f"STREAM 代理启动中，端口: {STREAM_PORT}")
+        STREAM_QUEUE = multiprocessing.Queue()
+        if STREAM_PORT is None:
+            port = 3120
+        else:
+            port = int(STREAM_PORT)
+        logger.info(f"STREAM 代理使用上游代理服务器：{STREAM_PROXY_SERVER_ENV}")
+        STREAM_PROCESS = multiprocessing.Process(target=stream.start, args=(STREAM_QUEUE, port, STREAM_PROXY_SERVER_ENV))
+        STREAM_PROCESS.start()
+        logger.info("STREAM 代理启动完毕")
+    else:
+        logger.info("STREAM 代理已禁用")
+
     request_queue = asyncio.Queue()
     processing_lock = asyncio.Lock()
     model_switching_lock = asyncio.Lock()
@@ -1005,6 +1047,9 @@ async def lifespan(app_param: FastAPI):
             except: pass
         raise RuntimeError(f"应用程序启动失败: {startup_err}") from startup_err
     finally:
+        logger.info("STREAM 代理关闭中")
+        STREAM_PROCESS.terminate()
+
         is_initializing = False
         logger.info(f"\nFastAPI 应用生命周期: 关闭中...")
         if worker_task and not worker_task.done():
@@ -1698,6 +1743,28 @@ async def use_helper_get_response(helper_endpoint, helper_sapisid) -> AsyncGener
         logger.error(f"Unexpected error in use_helper_get_response: {e}")
         raise # Re-raise
 
+
+async def use_stream_response() -> AsyncGenerator[Any, None]:
+    total_empty = 0
+    while True:
+        try:
+            data_chunk = await asyncio.to_thread(STREAM_QUEUE.get_nowait)
+            if data_chunk is not None:
+                total_empty = 0
+                data = json.loads(data_chunk)
+                if data["done"]:
+                    yield data
+                    return
+                else:
+                    yield data
+        except:
+            total_empty = total_empty + 1
+
+        if total_empty > 150:
+            raise Exception("获得流式数据超时")
+
+        time.sleep(0.1)
+
 # --- Core Request Processing Logic ---
 async def _process_request_refactored(
     req_id: str,
@@ -2244,220 +2311,381 @@ async def _process_request_refactored(
             await save_error_snapshot(f"submit_prompt_unexpected_{req_id}")
             raise HTTPException(status_code=500, detail=f"[{req_id}] Unexpected error during prompt submission: {submit_exc}")
         check_client_disconnected("After Submit Logic: ")
-        logger.info(f"[{req_id}] (Refactored Process) 定位响应元素...")
-        response_container = page.locator(RESPONSE_CONTAINER_SELECTOR).last
-        response_element = response_container.locator(RESPONSE_TEXT_SELECTOR)
-        try:
-            await expect_async(response_container).to_be_attached(timeout=20000)
-            check_client_disconnected("After Response Container Attached: ")
-            await expect_async(response_element).to_be_attached(timeout=90000)
-            logger.info(f"[{req_id}]   - 响应元素已定位。")
-        except (PlaywrightAsyncError, asyncio.TimeoutError, ClientDisconnectedError) as locate_err:
-            if isinstance(locate_err, ClientDisconnectedError): raise
-            logger.error(f"[{req_id}] ❌ 错误: 定位响应元素失败或超时: {locate_err}")
-            await save_error_snapshot(f"response_locate_error_{req_id}")
-            raise HTTPException(status_code=502, detail=f"[{req_id}] Failed to locate AI Studio response element: {locate_err}")
-        except Exception as locate_exc:
-            logger.exception(f"[{req_id}] ❌ 错误: 定位响应元素时意外错误")
-            await save_error_snapshot(f"response_locate_unexpected_{req_id}")
-            raise HTTPException(status_code=500, detail=f"[{req_id}] Unexpected error locating response element: {locate_exc}")
-        check_client_disconnected("After Locate Response: ")
 
-        # --- MERGED: Helper logic integration ---
-        use_helper = False
-        helper_endpoint = os.environ.get('HELPER_ENDPOINT')
-        helper_sapisid = os.environ.get('HELPER_SAPISID')
-        if helper_endpoint and helper_sapisid:
-            logger.info(f"[{req_id}] 检测到 Helper 配置，将尝试使用 Helper 服务获取响应。")
-            use_helper = True
-        else:
-            logger.info(f"[{req_id}] 未检测到完整的 Helper 配置，将使用 Playwright 页面交互获取响应。")
+        stream_port = os.environ.get('STREAM_PORT')
 
-        if use_helper:
-            try:
-                if is_streaming:
+        use_stream = stream_port != '0'
+        if use_stream:
+            def generate_random_string(length):
+                charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+                return ''.join(random.choice(charset) for _ in range(length))
+
+            if is_streaming:
+                try:
                     completion_event = Event()
                     async def create_stream_generator_from_helper(event_to_set: Event) -> AsyncGenerator[str, None]:
-                        try:
-                            async for data_chunk in use_helper_get_response(helper_endpoint, helper_sapisid):
-                                if client_disconnected_event.is_set():
-                                    logger.info(f"[{req_id}] (Helper Stream Gen) 客户端断开，停止。")
-                                    break
-                                if data_chunk == "[ERROR]": # Helper indicated an error
-                                    logger.error(f"[{req_id}] (Helper Stream Gen) Helper 服务返回错误信号。")
-                                    yield generate_sse_error_chunk("Helper service reported an error.", req_id, "helper_error")
-                                    break 
-                                if data_chunk == "[DONE]": # Helper indicated completion
-                                    logger.info(f"[{req_id}] (Helper Stream Gen) Helper 服务指示完成。")
-                                    break
-                                yield f"data: {data_chunk}\n\n" # Assume helper sends pre-formatted SSE data chunks
-                            yield "data: [DONE]\n\n" # Ensure final DONE is sent
-                        except Exception as e_helper_stream:
-                            logger.error(f"[{req_id}] (Helper Stream Gen) 从 Helper 获取流式数据时出错: {e_helper_stream}", exc_info=True)
-                            yield generate_sse_error_chunk(f"Error streaming from helper: {e_helper_stream}", req_id)
-                            yield "data: [DONE]\n\n"
-                        finally:
-                            if not event_to_set.is_set(): event_to_set.set()
-                    
+                        last_reason_pos = 0
+                        last_body_pos = 0
+                        chat_completion_id = f"{CHAT_COMPLETION_ID_PREFIX}{req_id}-{int(time.time())}-{random.randint(100, 999)}"
+                        created = int(time.time())
+
+                        async for data in use_stream_response():
+                            if len(data["reason"])>last_reason_pos:
+                                output = {
+                                    "id": chat_completion_id,
+                                    "object": "chat.completion.chunk",
+                                    "model":"model",
+                                    "created":created,
+                                    "choices":[{
+                                        "delta":{
+                                            "role": "assistant",
+                                            "content": None,
+                                            "reasoning_content":data["reason"][last_reason_pos:],
+                                        },
+                                        "finish_reason":None,
+                                        "native_finish_reason":None,
+                                    }]
+                                }
+
+                                last_reason_pos = len(data["reason"])
+                                yield f"data: {json.dumps(output, ensure_ascii=False, separators=(',', ':'))}\n\n"
+                            elif len(data["body"])>last_body_pos:
+                                finish_reason = None
+                                if data["done"]:
+                                    finish_reason = "stop"
+                                output = {
+                                    "id": chat_completion_id,
+                                    "object": "chat.completion.chunk",
+                                    "model":"model",
+                                    "created":created,
+                                    "choices": [{
+                                        "delta": {
+                                            "role": "assistant",
+                                            "content": data["body"][last_body_pos:],
+                                            "reasoning_content": None,
+                                        },
+                                        "finish_reason": finish_reason,
+                                        "native_finish_reason": finish_reason,
+                                    }]
+                                }
+                                last_body_pos = len(data["body"])
+
+                                if data["done"] and len(data["function"]) > 0:
+                                    output["choices"][0]["delta"]["tool_calls"] = []
+                                    for function in data["function"]:
+                                        output["choices"][0]["delta"]["tool_calls"].append({
+                                            "id": f"call_{generate_random_string(22)}",
+                                            "index": 0,
+                                            "type": "function",
+                                            "function": {
+                                                "name": function["name"],
+                                                "arguments": json.dumps(function["params"]),
+                                            },
+                                        })
+                                yield f"data: {json.dumps(output, ensure_ascii=False, separators=(',', ':'))}\n\n"
+                            elif data["done"]:
+                                output = {
+                                    "id": chat_completion_id,
+                                    "object": "chat.completion.chunk",
+                                    "model":"model",
+                                    "created":created,
+                                    "choices": [{
+                                        "delta": {
+                                            "role": "assistant",
+                                            "content": None,
+                                            "reasoning_content": None,
+                                        },
+                                        "finish_reason": "stop",
+                                        "native_finish_reason": "stop",
+                                    }]
+                                }
+
+                                if len(data["function"]) > 0:
+                                    #{"id":"","index":0,"type":"function","function":{"name":"","arguments":""}}
+                                    output["choices"][0]["delta"]["tool_calls"] = []
+                                    for function in data["function"]:
+                                        output["choices"][0]["delta"]["tool_calls"].append({
+                                            "id": f"call_{generate_random_string(22)}",
+                                            "index": 0,
+                                            "type": "function",
+                                            "function": {
+                                                "name": function["name"],
+                                                "arguments": json.dumps(function["params"]),
+                                            },
+                                        })
+                                yield f"data: {json.dumps(output, ensure_ascii=False, separators=(',', ':'))}\n\n"
+                        yield "data: [DONE]\n\n"
+
+                        if not event_to_set.is_set():
+                            event_to_set.set()
+
                     stream_gen_func = create_stream_generator_from_helper(completion_event)
                     if not result_future.done():
                         result_future.set_result(StreamingResponse(stream_gen_func, media_type="text/event-stream"))
                     else:
-                        if not completion_event.is_set(): completion_event.set() # Ensure event is set if future already done
-                    return completion_event # Return the event for the worker to wait on
-                else: # Non-streaming with helper
-                    full_response_content = ""
-                    think_content = ""
-                    body_content = ""
-                    async for data_chunk in use_helper_get_response(helper_endpoint, helper_sapisid):
-                        if data_chunk == "[ERROR]":
-                            raise HTTPException(status_code=502, detail=f"[{req_id}] Helper service reported an error during non-streaming fetch.")
-                        if data_chunk == "[DONE]":
-                            break
+                        if not completion_event.is_set(): completion_event.set()  # Ensure event is set if future already done
+                    return completion_event  # Return the event for the worker to wait on
+
+                except Exception as e:
+                    logger.error(f"[{req_id}] (Stream Gen) 从队列获取流式数据时出错: {e}")
+                    use_stream = False
+            else:
+                content = None
+                reasoning_content = None
+                functions = None
+                async for data in use_stream_response():
+                    if data["done"]:
+                        content = data["body"]
+                        reasoning_content = data["reason"]
+                        functions = data["function"]
+
+                response_payload = {
+                    "id": f"{CHAT_COMPLETION_ID_PREFIX}{req_id}-{int(time.time())}",
+                    "object": "chat.completion", "created": int(time.time()), "model": MODEL_NAME,
+                    "choices": [{
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": content,
+                            "reasoning_content":reasoning_content
+                        },
+                        "finish_reason": "stop",
+                        "native_finish_reason": "stop"
+                    }],
+                    "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+                }
+                if len(functions)>0:
+                    response_payload["choices"][0]["tool_calls"] = []
+                    for function in functions:
+                        response_payload["choices"][0]["tool_calls"].append({
+                            "id": f"call_{generate_random_string(22)}",
+                            "index": 0,
+                            "type": "function",
+                            "function": {
+                                "name": function["name"],
+                                "arguments": json.dumps(function["params"]),
+                            },
+                        })
+                if not result_future.done():
+                    result_future.set_result(JSONResponse(content=response_payload))
+                return None  # No event for non-streaming
+
+
+        if not use_stream:
+            logger.info(f"[{req_id}] (Refactored Process) 定位响应元素...")
+            response_container = page.locator(RESPONSE_CONTAINER_SELECTOR).last
+            response_element = response_container.locator(RESPONSE_TEXT_SELECTOR)
+            try:
+                await expect_async(response_container).to_be_attached(timeout=20000)
+                check_client_disconnected("After Response Container Attached: ")
+                await expect_async(response_element).to_be_attached(timeout=90000)
+                logger.info(f"[{req_id}]   - 响应元素已定位。")
+            except (PlaywrightAsyncError, asyncio.TimeoutError, ClientDisconnectedError) as locate_err:
+                if isinstance(locate_err, ClientDisconnectedError): raise
+                logger.error(f"[{req_id}] ❌ 错误: 定位响应元素失败或超时: {locate_err}")
+                await save_error_snapshot(f"response_locate_error_{req_id}")
+                raise HTTPException(status_code=502, detail=f"[{req_id}] Failed to locate AI Studio response element: {locate_err}")
+            except Exception as locate_exc:
+                logger.exception(f"[{req_id}] ❌ 错误: 定位响应元素时意外错误")
+                await save_error_snapshot(f"response_locate_unexpected_{req_id}")
+                raise HTTPException(status_code=500, detail=f"[{req_id}] Unexpected error locating response element: {locate_exc}")
+            check_client_disconnected("After Locate Response: ")
+
+            # --- MERGED: Helper logic integration ---
+            use_helper = False
+            helper_endpoint = os.environ.get('HELPER_ENDPOINT')
+            helper_sapisid = os.environ.get('HELPER_SAPISID')
+            if helper_endpoint and helper_sapisid:
+                logger.info(f"[{req_id}] 检测到 Helper 配置，将尝试使用 Helper 服务获取响应。")
+                use_helper = True
+            else:
+                logger.info(f"[{req_id}] 未检测到完整的 Helper 配置，将使用 Playwright 页面交互获取响应。")
+
+            if use_helper and (not use_stream):
+                try:
+                    if is_streaming:
+                        completion_event = Event()
+                        async def create_stream_generator_from_helper(event_to_set: Event) -> AsyncGenerator[str, None]:
+                            try:
+                                async for data_chunk in use_helper_get_response(helper_endpoint, helper_sapisid):
+                                    if client_disconnected_event.is_set():
+                                        logger.info(f"[{req_id}] (Helper Stream Gen) 客户端断开，停止。")
+                                        break
+                                    if data_chunk == "[ERROR]": # Helper indicated an error
+                                        logger.error(f"[{req_id}] (Helper Stream Gen) Helper 服务返回错误信号。")
+                                        yield generate_sse_error_chunk("Helper service reported an error.", req_id, "helper_error")
+                                        break
+                                    if data_chunk == "[DONE]": # Helper indicated completion
+                                        logger.info(f"[{req_id}] (Helper Stream Gen) Helper 服务指示完成。")
+                                        break
+                                    yield f"data: {data_chunk}\n\n" # Assume helper sends pre-formatted SSE data chunks
+                                yield "data: [DONE]\n\n" # Ensure final DONE is sent
+                            except Exception as e_helper_stream:
+                                logger.error(f"[{req_id}] (Helper Stream Gen) 从 Helper 获取流式数据时出错: {e_helper_stream}", exc_info=True)
+                                yield generate_sse_error_chunk(f"Error streaming from helper: {e_helper_stream}", req_id)
+                                yield "data: [DONE]\n\n"
+                            finally:
+                                if not event_to_set.is_set(): event_to_set.set()
+
+                        stream_gen_func = create_stream_generator_from_helper(completion_event)
+                        if not result_future.done():
+                            result_future.set_result(StreamingResponse(stream_gen_func, media_type="text/event-stream"))
+                        else:
+                            if not completion_event.is_set(): completion_event.set() # Ensure event is set if future already done
+                        return completion_event # Return the event for the worker to wait on
+                    else: # Non-streaming with helper
+                        full_response_content = ""
+                        think_content = ""
+                        body_content = ""
+                        async for data_chunk in use_helper_get_response(helper_endpoint, helper_sapisid):
+                            if data_chunk == "[ERROR]":
+                                raise HTTPException(status_code=502, detail=f"[{req_id}] Helper service reported an error during non-streaming fetch.")
+                            if data_chunk == "[DONE]":
+                                break
+                            try:
+                                # Assuming helper sends OpenAI-like delta chunks even for non-streaming,
+                                # and we need to aggregate them.
+                                stream_data = json.loads(data_chunk)
+                                if "choices" in stream_data and stream_data["choices"]:
+                                    delta = stream_data["choices"][0].get("delta", {})
+                                    if "reasoning_content" in delta: # Example for structured content
+                                        think_content += delta["reasoning_content"]
+                                    elif "content" in delta:
+                                        body_content += delta["content"]
+                            except json.JSONDecodeError:
+                                logger.warning(f"[{req_id}] (Helper Non-Stream) 无法解析来自 Helper 的 JSON 数据块: {data_chunk}")
+                                body_content += data_chunk # Fallback: append raw if not JSON
+
+                        if think_content:
+                            full_response_content = f"<think>{think_content}</think>\n{body_content}"
+                        else:
+                            full_response_content = body_content
+
+                        response_payload = {
+                            "id": f"{CHAT_COMPLETION_ID_PREFIX}{req_id}-{int(time.time())}",
+                            "object": "chat.completion", "created": int(time.time()), "model": MODEL_NAME,
+                            "choices": [{"index": 0, "message": {"role": "assistant", "content": full_response_content}, "finish_reason": "stop"}],
+                            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+                        }
+                        if not result_future.done():
+                            result_future.set_result(JSONResponse(content=response_payload))
+                        return None # No event for non-streaming
+                except Exception as e_helper:
+                    logger.error(f"[{req_id}] 使用 Helper 服务时发生错误: {e_helper}。将回退到 Playwright 页面交互。", exc_info=True)
+                    use_helper = False # Fallback to Playwright
+
+            # --- Fallback to Playwright page interaction if helper is not used or failed ---
+            if (not use_helper) and (not use_stream):
+                logger.info(f"[{req_id}] (Refactored Process) 等待响应生成完成或检测模型错误...")
+                MODEL_ERROR_CONTAINER_SELECTOR = 'ms-chat-turn:last-child div.model-error'
+                completion_detected_via_edit_button = False
+                page_model_error_message: Optional[str] = None
+                completion_detected_via_edit_button = await _wait_for_response_completion(
+                    page, req_id, response_element, None, check_client_disconnected, None
+                )
+                check_client_disconnected("After _wait_for_response_completion attempt: ")
+                if not completion_detected_via_edit_button:
+                    logger.info(f"[{req_id}] _wait_for_response_completion 未通过编辑按钮确认完成，检查是否存在模型错误...")
+                    try:
+                        error_container_locator = page.locator(MODEL_ERROR_CONTAINER_SELECTOR)
+                        await expect_async(error_container_locator).to_be_visible(timeout=2000)
+                        specific_error_text_locator = error_container_locator.locator('*:not(mat-icon)')
                         try:
-                            # Assuming helper sends OpenAI-like delta chunks even for non-streaming,
-                            # and we need to aggregate them.
-                            stream_data = json.loads(data_chunk)
-                            if "choices" in stream_data and stream_data["choices"]:
-                                delta = stream_data["choices"][0].get("delta", {})
-                                if "reasoning_content" in delta: # Example for structured content
-                                    think_content += delta["reasoning_content"]
-                                elif "content" in delta:
-                                    body_content += delta["content"]
-                        except json.JSONDecodeError:
-                            logger.warning(f"[{req_id}] (Helper Non-Stream) 无法解析来自 Helper 的 JSON 数据块: {data_chunk}")
-                            body_content += data_chunk # Fallback: append raw if not JSON
-                    
-                    if think_content:
-                        full_response_content = f"<think>{think_content}</think>\n{body_content}"
+                            page_model_error_message = await specific_error_text_locator.first.text_content(timeout=500)
+                            if page_model_error_message: page_model_error_message = page_model_error_message.strip()
+                        except PlaywrightAsyncError:
+                            page_model_error_message = await error_container_locator.text_content(timeout=500)
+                            if page_model_error_message: page_model_error_message = page_model_error_message.strip()
+                        if page_model_error_message:
+                            logger.error(f"[{req_id}] ❌ 检测到 AI Studio 模型返回的错误信息: {page_model_error_message}")
+                            await save_error_snapshot(f"model_returned_error_{req_id}")
+                            raise HTTPException(status_code=502, detail=f"[{req_id}] AI Studio Model Error: {page_model_error_message}")
+                        else:
+                            logger.warning(f"[{req_id}] 检测到 model-error 容器，但未能提取具体错误文本。")
+                            await save_error_snapshot(f"model_error_container_no_text_{req_id}")
+                            raise HTTPException(status_code=502, detail=f"[{req_id}] AI Studio returned an unspecified model error (error container found).")
+                    except (PlaywrightAsyncError, asyncio.TimeoutError) as e_model_err_check:
+                        logger.info(f"[{req_id}] 未检测到明确的 model-error 容器 (或检查超时: {type(e_model_err_check).__name__})。继续按原超时逻辑处理。")
+                        if not completion_detected_via_edit_button:
+                             raise HTTPException(status_code=504, detail=f"[{req_id}] AI Studio response generation timed out (and no specific model error detected).")
+                if not completion_detected_via_edit_button:
+                    logger.info(f"[{req_id}] (Refactored Process) 检查页面 Toast 错误提示...")
+                    page_toast_error = await detect_and_extract_page_error(page, req_id)
+                    if page_toast_error:
+                        logger.error(f"[{req_id}] ❌ 错误: AI Studio 页面返回 Toast 错误: {page_toast_error}")
+                        await save_error_snapshot(f"page_toast_error_detected_{req_id}")
+                        raise HTTPException(status_code=502, detail=f"[{req_id}] AI Studio Page Error: {page_toast_error}")
+                    check_client_disconnected("After Page Toast Error Check: ")
+                else:
+                    logger.info(f"[{req_id}] 已通过编辑按钮确认完成，跳过 Toast 错误检查。")
+                if not completion_detected_via_edit_button:
+                    logger.error(f"[{req_id}] 逻辑异常：响应未完成，也未检测到模型错误，但不应到达此处获取内容。")
+                    raise HTTPException(status_code=500, detail=f"[{req_id}] Internal logic error in response processing.")
+                logger.info(f"[{req_id}] (Refactored Process) 获取最终响应内容...")
+                final_content = await _get_final_response_content(
+                    page, req_id, check_client_disconnected
+                )
+                if final_content is None:
+                    try:
+                        error_container_locator = page.locator(MODEL_ERROR_CONTAINER_SELECTOR)
+                        if await error_container_locator.is_visible(timeout=500):
+                            late_error_message = await error_container_locator.text_content(timeout=300) or "Unknown model error after content fetch attempt."
+                            logger.error(f"[{req_id}] 获取内容失败后，检测到延迟出现的模型错误: {late_error_message.strip()}")
+                            raise HTTPException(status_code=502, detail=f"[{req_id}] AI Studio Model Error (detected after content fetch failure): {late_error_message.strip()}")
+                    except:
+                        pass
+                    raise HTTPException(status_code=500, detail=f"[{req_id}] Failed to extract final response content from AI Studio.")
+                check_client_disconnected("After Get Content: ")
+                logger.info(f"[{req_id}] (Refactored Process) 格式化并设置结果 (模式: {'流式' if is_streaming else '非流式'})...")
+                if is_streaming:
+                    completion_event = Event()
+                    async def create_stream_generator(event_to_set: Event, content_to_stream: str) -> AsyncGenerator[str, None]:
+                        logger.info(f"[{req_id}] (Stream Gen) 开始伪流式输出 ({len(content_to_stream)} chars)...")
+                        try:
+                            total_chars = len(content_to_stream)
+                            chunk_size = 5
+                            for i in range(0, total_chars, chunk_size):
+                                if client_disconnected_event.is_set():
+                                    logger.info(f"[{req_id}] (Stream Gen) 断开连接，停止。")
+                                    break
+                                chunk = content_to_stream[i:i + chunk_size]
+                                if not chunk:
+                                    continue
+                                yield generate_sse_chunk(chunk, req_id, MODEL_NAME)
+                                await asyncio.sleep(PSEUDO_STREAM_DELAY)
+                            yield generate_sse_stop_chunk(req_id, MODEL_NAME)
+                            yield "data: [DONE]\n\n"
+                            logger.info(f"[{req_id}] (Stream Gen) ✅ 伪流式响应发送完毕。")
+                        except asyncio.CancelledError:
+                            logger.info(f"[{req_id}] (Stream Gen) 流生成器被取消。")
+                        except Exception as e:
+                            logger.exception(f"[{req_id}] (Stream Gen) ❌ 伪流式生成过程中出错")
+                            try: yield generate_sse_error_chunk(f"Stream generation error: {e}", req_id); yield "data: [DONE]\n\n"
+                            except: pass
+                        finally:
+                            logger.info(f"[{req_id}] (Stream Gen) 设置完成事件。")
+                            if not event_to_set.is_set(): event_to_set.set()
+                    stream_generator_func = create_stream_generator(completion_event, final_content)
+                    if not result_future.done():
+                        result_future.set_result(StreamingResponse(stream_generator_func, media_type="text/event-stream"))
+                        logger.info(f"[{req_id}] (Refactored Process) 流式响应生成器已设置。")
                     else:
-                        full_response_content = body_content
-                    
+                        logger.warning(f"[{req_id}] (Refactored Process) Future 已完成/取消，无法设置流式结果。")
+                        if not completion_event.is_set(): completion_event.set()
+                    return completion_event
+                else:
                     response_payload = {
                         "id": f"{CHAT_COMPLETION_ID_PREFIX}{req_id}-{int(time.time())}",
                         "object": "chat.completion", "created": int(time.time()), "model": MODEL_NAME,
-                        "choices": [{"index": 0, "message": {"role": "assistant", "content": full_response_content}, "finish_reason": "stop"}],
+                        "choices": [{"index": 0, "message": {"role": "assistant", "content": final_content}, "finish_reason": "stop"}],
                         "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
                     }
                     if not result_future.done():
                         result_future.set_result(JSONResponse(content=response_payload))
-                    return None # No event for non-streaming
-            except Exception as e_helper:
-                logger.error(f"[{req_id}] 使用 Helper 服务时发生错误: {e_helper}。将回退到 Playwright 页面交互。", exc_info=True)
-                use_helper = False # Fallback to Playwright
-        
-        # --- Fallback to Playwright page interaction if helper is not used or failed ---
-        if not use_helper:
-            logger.info(f"[{req_id}] (Refactored Process) 等待响应生成完成或检测模型错误...")
-            MODEL_ERROR_CONTAINER_SELECTOR = 'ms-chat-turn:last-child div.model-error'
-            completion_detected_via_edit_button = False
-            page_model_error_message: Optional[str] = None
-            completion_detected_via_edit_button = await _wait_for_response_completion(
-                page, req_id, response_element, None, check_client_disconnected, None
-            )
-            check_client_disconnected("After _wait_for_response_completion attempt: ")
-            if not completion_detected_via_edit_button:
-                logger.info(f"[{req_id}] _wait_for_response_completion 未通过编辑按钮确认完成，检查是否存在模型错误...")
-                try:
-                    error_container_locator = page.locator(MODEL_ERROR_CONTAINER_SELECTOR)
-                    await expect_async(error_container_locator).to_be_visible(timeout=2000)
-                    specific_error_text_locator = error_container_locator.locator('*:not(mat-icon)')
-                    try:
-                        page_model_error_message = await specific_error_text_locator.first.text_content(timeout=500)
-                        if page_model_error_message: page_model_error_message = page_model_error_message.strip()
-                    except PlaywrightAsyncError:
-                        page_model_error_message = await error_container_locator.text_content(timeout=500)
-                        if page_model_error_message: page_model_error_message = page_model_error_message.strip()
-                    if page_model_error_message:
-                        logger.error(f"[{req_id}] ❌ 检测到 AI Studio 模型返回的错误信息: {page_model_error_message}")
-                        await save_error_snapshot(f"model_returned_error_{req_id}")
-                        raise HTTPException(status_code=502, detail=f"[{req_id}] AI Studio Model Error: {page_model_error_message}")
+                        logger.info(f"[{req_id}] (Refactored Process) 非流式 JSON 响应已设置。")
                     else:
-                        logger.warning(f"[{req_id}] 检测到 model-error 容器，但未能提取具体错误文本。")
-                        await save_error_snapshot(f"model_error_container_no_text_{req_id}")
-                        raise HTTPException(status_code=502, detail=f"[{req_id}] AI Studio returned an unspecified model error (error container found).")
-                except (PlaywrightAsyncError, asyncio.TimeoutError) as e_model_err_check:
-                    logger.info(f"[{req_id}] 未检测到明确的 model-error 容器 (或检查超时: {type(e_model_err_check).__name__})。继续按原超时逻辑处理。")
-                    if not completion_detected_via_edit_button:
-                         raise HTTPException(status_code=504, detail=f"[{req_id}] AI Studio response generation timed out (and no specific model error detected).")
-            if not completion_detected_via_edit_button:
-                logger.info(f"[{req_id}] (Refactored Process) 检查页面 Toast 错误提示...")
-                page_toast_error = await detect_and_extract_page_error(page, req_id)
-                if page_toast_error:
-                    logger.error(f"[{req_id}] ❌ 错误: AI Studio 页面返回 Toast 错误: {page_toast_error}")
-                    await save_error_snapshot(f"page_toast_error_detected_{req_id}")
-                    raise HTTPException(status_code=502, detail=f"[{req_id}] AI Studio Page Error: {page_toast_error}")
-                check_client_disconnected("After Page Toast Error Check: ")
-            else:
-                logger.info(f"[{req_id}] 已通过编辑按钮确认完成，跳过 Toast 错误检查。")
-            if not completion_detected_via_edit_button:
-                logger.error(f"[{req_id}] 逻辑异常：响应未完成，也未检测到模型错误，但不应到达此处获取内容。")
-                raise HTTPException(status_code=500, detail=f"[{req_id}] Internal logic error in response processing.")
-            logger.info(f"[{req_id}] (Refactored Process) 获取最终响应内容...")
-            final_content = await _get_final_response_content(
-                page, req_id, check_client_disconnected
-            )
-            if final_content is None:
-                try:
-                    error_container_locator = page.locator(MODEL_ERROR_CONTAINER_SELECTOR)
-                    if await error_container_locator.is_visible(timeout=500):
-                        late_error_message = await error_container_locator.text_content(timeout=300) or "Unknown model error after content fetch attempt."
-                        logger.error(f"[{req_id}] 获取内容失败后，检测到延迟出现的模型错误: {late_error_message.strip()}")
-                        raise HTTPException(status_code=502, detail=f"[{req_id}] AI Studio Model Error (detected after content fetch failure): {late_error_message.strip()}")
-                except:
-                    pass
-                raise HTTPException(status_code=500, detail=f"[{req_id}] Failed to extract final response content from AI Studio.")
-            check_client_disconnected("After Get Content: ")
-            logger.info(f"[{req_id}] (Refactored Process) 格式化并设置结果 (模式: {'流式' if is_streaming else '非流式'})...")
-            if is_streaming:
-                completion_event = Event()
-                async def create_stream_generator(event_to_set: Event, content_to_stream: str) -> AsyncGenerator[str, None]:
-                    logger.info(f"[{req_id}] (Stream Gen) 开始伪流式输出 ({len(content_to_stream)} chars)...")
-                    try:
-                        total_chars = len(content_to_stream)
-                        chunk_size = 5
-                        for i in range(0, total_chars, chunk_size):
-                            if client_disconnected_event.is_set():
-                                logger.info(f"[{req_id}] (Stream Gen) 断开连接，停止。")
-                                break
-                            chunk = content_to_stream[i:i + chunk_size]
-                            if not chunk:
-                                continue
-                            yield generate_sse_chunk(chunk, req_id, MODEL_NAME)
-                            await asyncio.sleep(PSEUDO_STREAM_DELAY)
-                        yield generate_sse_stop_chunk(req_id, MODEL_NAME)
-                        yield "data: [DONE]\n\n"
-                        logger.info(f"[{req_id}] (Stream Gen) ✅ 伪流式响应发送完毕。")
-                    except asyncio.CancelledError:
-                        logger.info(f"[{req_id}] (Stream Gen) 流生成器被取消。")
-                    except Exception as e:
-                        logger.exception(f"[{req_id}] (Stream Gen) ❌ 伪流式生成过程中出错")
-                        try: yield generate_sse_error_chunk(f"Stream generation error: {e}", req_id); yield "data: [DONE]\n\n"
-                        except: pass
-                    finally:
-                        logger.info(f"[{req_id}] (Stream Gen) 设置完成事件。")
-                        if not event_to_set.is_set(): event_to_set.set()
-                stream_generator_func = create_stream_generator(completion_event, final_content)
-                if not result_future.done():
-                    result_future.set_result(StreamingResponse(stream_generator_func, media_type="text/event-stream"))
-                    logger.info(f"[{req_id}] (Refactored Process) 流式响应生成器已设置。")
-                else:
-                    logger.warning(f"[{req_id}] (Refactored Process) Future 已完成/取消，无法设置流式结果。")
-                    if not completion_event.is_set(): completion_event.set()
-                return completion_event
-            else:
-                response_payload = {
-                    "id": f"{CHAT_COMPLETION_ID_PREFIX}{req_id}-{int(time.time())}",
-                    "object": "chat.completion", "created": int(time.time()), "model": MODEL_NAME,
-                    "choices": [{"index": 0, "message": {"role": "assistant", "content": final_content}, "finish_reason": "stop"}],
-                    "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-                }
-                if not result_future.done():
-                    result_future.set_result(JSONResponse(content=response_payload))
-                    logger.info(f"[{req_id}] (Refactored Process) 非流式 JSON 响应已设置。")
-                else:
-                    logger.warning(f"[{req_id}] (Refactored Process) Future 已完成/取消，无法设置 JSON 结果。")
-                return None
+                        logger.warning(f"[{req_id}] (Refactored Process) Future 已完成/取消，无法设置 JSON 结果。")
+                    return None
     except ClientDisconnectedError as disco_err:
         logger.info(f"[{req_id}] (Refactored Process) 捕获到客户端断开连接信号: {disco_err}")
         if not result_future.done():

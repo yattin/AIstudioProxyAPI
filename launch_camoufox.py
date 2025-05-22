@@ -371,6 +371,15 @@ if __name__ == "__main__":
     # 用户可见参数 (merged from dev and helper)
     parser.add_argument("--server-port", type=int, default=DEFAULT_SERVER_PORT, help=f"FastAPI 服务器监听的端口号 (默认: {DEFAULT_SERVER_PORT})")
     parser.add_argument(
+        "--stream-port",
+        type=int,
+        default=3120, # 使用默认值
+        help=(
+            f"流式代理服务器使用端口"
+            f"提供来禁用此功能 --stream-port=0 . 默认: 3120"
+        )
+    )
+    parser.add_argument(
         "--helper",
         type=str,
         default=DEFAULT_HELPER_ENDPOINT, # 使用默认值
@@ -783,6 +792,7 @@ if __name__ == "__main__":
     os.environ['AUTO_SAVE_AUTH'] = str(args.auto_save_auth).lower()
     os.environ['AUTH_SAVE_TIMEOUT'] = str(args.auth_save_timeout)
     os.environ['SERVER_PORT_INFO'] = str(args.server_port)
+    os.environ['STREAM_PORT'] = str(args.stream_port)
 
     host_os_for_shortcut_env = None
     camoufox_os_param_lower = simulated_os_for_camoufox.lower()
@@ -800,7 +810,7 @@ if __name__ == "__main__":
         'SERVER_REDIRECT_PRINT', 'DEBUG_LOGS_ENABLED', 'TRACE_LOGS_ENABLED', 
         'ACTIVE_AUTH_JSON_PATH', 'AUTO_SAVE_AUTH', 'AUTH_SAVE_TIMEOUT', 
         'SERVER_PORT_INFO', 'HOST_OS_FOR_SHORTCUT',
-        'HELPER_ENDPOINT', 'HELPER_SAPISID' # Added helper env vars
+        'HELPER_ENDPOINT', 'HELPER_SAPISID', 'STREAM_PORT' # Added helper env vars
     ]
     for key in env_keys_to_log:
         if key in os.environ:
