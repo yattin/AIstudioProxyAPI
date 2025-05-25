@@ -51,7 +51,6 @@ This project is generously sponsored by ZMTO. Visit their website: [https://zmto
     *   [4. 日常运行](#4-日常运行)
 *   [API 使用](#api-使用)
 *   [Web UI (服务测试)](#web-ui-服务测试)
-*   [(可选) 局域网域名访问 (mDNS)](#可选-局域网域名访问-mdns)
 *   [多平台指南 (Python 版本)](#多平台指南-python-版本)
 *   [故障排除 (Python 版本)](#故障排除-python-版本)
 *   [关于 Camoufox](#关于-camoufox)
@@ -530,37 +529,6 @@ python launch_camoufox.py --debug --server-port 2048 --stream-port 3120 --helper
 6.  **API 密钥**: 留空或输入任意字符 (服务器不验证)。
 7.  保存设置。
 8.  现在，你应该可以在 Open WebUI 中选择你在第一步中配置的模型名称并开始聊天了。如果之前配置过，可能需要刷新或重新选择模型以应用新的 API 基地址。
-
-### 8. (可选) 局域网域名访问 (mDNS)
-
-项目包含一个辅助脚本 [`mdns_publisher.py`](mdns_publisher.py:1)，它使用 mDNS (Bonjour/ZeroConf) 在你的局域网内广播此代理服务。这允许你和其他局域网内的设备通过一个更友好的 `.local` 域名（例如 `http://chatui.local:2048`）来访问服务，而无需记住或查找服务器的 IP 地址。但此脚本未经验证是否可以正常使用。
-
-**用途:**
-
-*   当你希望在手机、平板或其他电脑上方便地访问运行在 Mac/PC 上的代理服务时。
-*   避免因 IP 地址变化而需要更新客户端配置。
-
-**如何使用:**
-
-1.  **安装依赖:** 此脚本需要额外的库。在你的虚拟环境中运行：
-    ```bash
-    pip install zeroconf netifaces
-    ```
-2.  **运行脚本:** 你需要**同时运行**主代理服务 (通过 [`launch_camoufox.py`](launch_camoufox.py:1) 启动，确保 [`server.py`](server.py:1) 监听在 `0.0.0.0` 和指定端口，如 2048) 和 [`mdns_publisher.py`](mdns_publisher.py:1)。
-    在**另一个终端**窗口，激活虚拟环境后，运行：
-    ```bash
-    python mdns_publisher.py
-    ```
-    *   默认广播的域名是 `chatui.local`，广播的端口是脚本内 `PORT` 变量定义的端口 (当前为 2048)。
-    *   你可以使用 `--name yourname` 参数来修改广播的域名前缀，例如 `python mdns_publisher.py --name mychat` 将广播 `mychat.local`。
-    *   此脚本**不需要** `sudo` 权限运行。
-3.  **访问服务:** 在局域网内的其他支持 mDNS 的设备上，通过浏览器或客户端配置访问 `http://<你设置的域名>.local:<端口>`，例如 `http://chatui.local:2048` 或 API 地址 `http://chatui.local:2048/v1`。
-
-**注意:**
-
-*   确保你的防火墙允许 UDP 端口 5353 (mDNS) 的通信。
-*   客户端设备需要支持 mDNS 才能解析 `.local` 域名 (大多数现代操作系统默认支持)。
-*   此脚本广播的是 [`server.py`](server.py:1) 实际监听的端口 (由 [`mdns_publisher.py`](mdns_publisher.py:1) 中的 `PORT` 变量决定)。确保这个端口与 [`server.py`](server.py:1) 实际使用的端口一致。
 
 ## 多平台指南 (Python 版本)
 
