@@ -348,6 +348,117 @@ def input_with_timeout(prompt_message: str, timeout_seconds: int = 30) -> str:
         else:
             print("\n输入超时。将使用默认值。", flush=True)
             return ""
+def get_proxy_from_gsettings():
+    """
+    Retrieves the proxy settings from GSettings on Linux systems.
+    Returns a proxy string like "http://host:port" or None.
+    """
+    def _run_gsettings_command(command_parts):
+        try:
+            process_result = subprocess.run(
+                command_parts,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=1
+            )
+            if process_result.returncode == 0:
+                value = process_result.stdout.strip()
+                if value.startswith("'") and value.endswith("'"):
+                    return value[1:-1]
+                return value
+            else:
+                return None
+        except subprocess.TimeoutExpired:
+            return None
+        except Exception: # pylint: disable=broad-except
+            return None
+
+    proxy_mode = _run_gsettings_command(["gsettings", "get", "org.gnome.system.proxy", "mode"])
+
+    if proxy_mode == "manual":
+        http_host = _run_gsettings_command(["gsettings", "get", "org.gnome.system.proxy.http", "host"])
+        http_port_str = _run_gsettings_command(["gsettings", "get", "org.gnome.system.proxy.http", "port"])
+
+        if http_host and http_port_str:
+            try:
+                http_port = int(http_port_str)
+                if http_port > 0:
+                    return f"http://{http_host}:{http_port}"
+            except ValueError:
+                pass
+
+        https_host = _run_gsettings_command(["gsettings", "get", "org.gnome.system.proxy.https", "host"])
+        https_port_str = _run_gsettings_command(["gsettings", "get", "org.gnome.system.proxy.https", "port"])
+
+        if https_host and https_port_str:
+            try:
+                https_port = int(https_port_str)
+                if https_port > 0:
+                    return f"http://{https_host}:{https_port}"
+            except ValueError:
+                pass
+    return None
+def get_proxy_from_gsettings():
+    """
+    Retrieves the proxy settings from GSettings on Linux systems.
+    Returns a proxy string like "http://host:port" or None.
+    """
+    def _run_gsettings_command(command_parts: list[str]) -> str | None:
+        """Helper function to run gsettings command and return cleaned string output."""
+        try:
+            process_result = subprocess.run(
+                command_parts,
+                capture_output=True,
+                text=True,
+                check=False, # Do not raise CalledProcessError for non-zero exit codes
+                timeout=1  # Timeout for the subprocess call
+            )
+            if process_result.returncode == 0:
+                value = process_result.stdout.strip()
+                if value.startswith("'") and value.endswith("'"): # Remove surrounding single quotes
+                    value = value[1:-1]
+                
+                # If after stripping quotes, value is empty, or it's a gsettings "empty" representation
+                if not value or value == "''" or value == "@as []" or value == "[]":
+                    return None
+                return value
+            else:
+                return None
+        except subprocess.TimeoutExpired:
+            return None
+        except Exception: # Broad exception as per pseudocode
+            return None
+
+    proxy_mode = _run_gsettings_command(["gsettings", "get", "org.gnome.system.proxy", "mode"])
+
+    if proxy_mode == "manual":
+        # Try HTTP proxy first
+        http_host = _run_gsettings_command(["gsettings", "get", "org.gnome.system.proxy.http", "host"])
+        http_port_str = _run_gsettings_command(["gsettings", "get", "org.gnome.system.proxy.http", "port"])
+
+        if http_host and http_port_str:
+            try:
+                http_port = int(http_port_str)
+                if http_port > 0:
+                    return f"http://{http_host}:{http_port}"
+            except ValueError:
+                pass  # Continue to HTTPS
+
+        # Try HTTPS proxy if HTTP not found or invalid
+        https_host = _run_gsettings_command(["gsettings", "get", "org.gnome.system.proxy.https", "host"])
+        https_port_str = _run_gsettings_command(["gsettings", "get", "org.gnome.system.proxy.https", "port"])
+
+        if https_host and https_port_str:
+            try:
+                https_port = int(https_port_str)
+                if https_port > 0:
+                    # Note: Even for HTTPS proxy settings, the scheme for Playwright/requests is usually http://
+                    return f"http://{https_host}:{https_port}"
+            except ValueError:
+                pass
+    
+    return None
 
 # --- 主执行逻辑 ---
 if __name__ == "__main__":
