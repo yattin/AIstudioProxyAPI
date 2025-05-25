@@ -40,6 +40,7 @@ This project is generously sponsored by ZMTO. Visit their website: [https://zmto
 *   [AI Studio Proxy Server (Python/Camoufox Version)](#ai-studio-proxy-server-pythoncamoufox-version)
 *   [致谢 (Acknowledgements)](#致谢-acknowledgements)
 *   [项目概述](#项目概述)
+*   [工作原理](#工作原理)
 *   [免责声明](#免责声明)
 *   [核心特性 (Python 版本)](#核心特性-python-版本)
 *   [重要提示 (Python 版本)](#重要提示-python-版本)
@@ -74,6 +75,42 @@ This project is generously sponsored by ZMTO. Visit their website: [https://zmto
 *   **请求队列**: 保证请求按顺序处理，提高稳定性。
 
 通过此代理，支持 OpenAI API 的各种客户端（如 Open WebUI, LobeChat, NextChat 等）可以连接并使用 Google AI Studio 的模型。
+## 工作原理
+
+本项目作为一个智能代理层，核心目标是允许用户通过标准的 OpenAI API 格式与 Google AI Studio 进行交互。其工作流程和关键组件如下：
+
+1.  **API 兼容层 ([`server.py`](server.py:1) 与 FastAPI)**:
+    *   使用 FastAPI 构建了一个与 OpenAI API 规范兼容的 HTTP 服务器。这使得各种现有的 OpenAI 客户端（如聊天界面、开发库等）可以直接连接到本代理。
+    *   负责接收来自客户端的请求（例如 `/v1/chat/completions`），解析参数，并将任务分发给后端处理模块。
+
+2.  **浏览器自动化 ([`server.py`](server.py:1) 与 Playwright)**:
+    *   当需要与 Google AI Studio 网页直接交互时（例如，在没有更优的响应获取方式时，或进行参数设置、模型切换等操作），项目利用 Playwright 库。
+    *   Playwright 能够以编程方式控制浏览器，模拟用户在 AI Studio 页面上的操作，如输入文本、点击按钮、读取页面内容等。
+
+3.  **增强型浏览器 (Camoufox)**:
+    *   为了提高自动化操作的隐蔽性并减少被目标网站检测为机器人的风险，本项目集成了 Camoufox。
+    *   Camoufox 是一个经过修改的 Firefox 浏览器，专注于通过底层修改来伪装浏览器指纹（如 User-Agent、屏幕分辨率、WebGL 指纹等），而非依赖容易被检测的 JavaScript 注入。这有助于模拟更真实的浏览器环境。
+    *   [`launch_camoufox.py`](launch_camoufox.py:1) 负责启动和管理 Camoufox 实例。
+
+4.  **集成的流式代理服务 ([`stream/main.py`](stream/main.py:1) 与 [`server.py`](server.py:1) 子进程)**:
+    *   这是项目推荐的、性能更优的响应获取方式，默认监听在端口 `3120`。
+    *   **HTTPS 拦截与动态证书生成**:
+        *   此服务扮演一个中间人代理 (Man-in-the-Middle Proxy) 的角色，能够拦截发往特定域名（如 Google 相关服务）的 HTTPS 请求。
+        *   为了解密和处理 HTTPS 流量，它使用一个自签名的根 CA 证书 ([`certs/ca.crt`](certs/ca.crt:1))。当首次拦截到一个新的 HTTPS 主机时，它会动态地为该主机生成一个服务器证书，并用此 CA 进行签名。
+        *   用户需要将项目提供的 `certs/ca.crt` 安装并信任到其操作系统或浏览器中，才能使此功能正常工作并避免安全警告。相关的证书安装指南请参见 [安装和信任根证书](#31-安装和信任根证书-用于实时流式服务)。
+    *   **响应转换**: 拦截到来自 Google AI Studio 的响应后，此服务会将其解析并转换为 OpenAI API 所期望的流式或非流式格式，然后返回给 [`server.py`](server.py:1)，最终传递给 API 客户端。
+    *   如果用户需要手动重新生成项目使用的根 CA 证书，详细命令位于本文档的 [故障排除 -> 流式代理服务：工作原理与手动证书生成 -> 证书生成](#证书生成) 小节。
+
+5.  **请求处理与响应获取优先级**:
+    *   项目采用多层机制获取响应，优先级如下：
+        1.  **集成的流式代理服务**: 性能最佳，直接处理。
+        2.  **(可选) 外部 Helper 服务**: 如果配置，作为次级选择。
+        3.  **Playwright 页面交互**: 作为后备方案，直接通过 Camoufox 与 AI Studio 网页交互。
+    *   详细的请求处理流程和组件交互可以参考 [项目运行流程图](#项目运行流程图)。
+
+通过这些组件的协同工作，本项目实现了将 Google AI Studio 的能力封装在 OpenAI 兼容的 API 之后，为用户提供了便捷的访问方式。
+
+---
 
 ## 免责声明
 
@@ -146,52 +183,52 @@ This project is generously sponsored by ZMTO. Visit their website: [https://zmto
 
 ```mermaid
 graph TD
-    subgraph "用户端"
-        User["👤 用户"]
+    subgraph "User Side"
+        User["User"]
     end
 
-    subgraph "启动方式"
-        CLI_Launch["launch_camoufox.py (命令行)"]
-        GUI_Launch["gui_launcher.py (图形界面)"]
+    subgraph "Launch Methods"
+        CLI_Launch["launch_camoufox.py (CLI)"]
+        GUI_Launch["gui_launcher.py (GUI)"]
     end
 
-    subgraph "核心服务"
-        ServerPY["server.py (FastAPI 后端 + Playwright控制)"]
-        StreamProxy["stream.py (集成流式代理服务)"]
-        CamoufoxInstance["Camoufox 浏览器实例"]
+    subgraph "Core Services"
+        ServerPY["server.py (FastAPI + Playwright)"]
+        StreamProxy["stream.py (Integrated Stream Proxy)"]
+        CamoufoxInstance["Camoufox Browser Instance"]
     end
 
-    subgraph "外部依赖与服务"
-        AI_Studio["☁️ 目标 AI 服务 (如 Google AI Studio)"]
-        OptionalHelper["(可选) 外部 Helper 服务"]
+    subgraph "External Dependencies & Services"
+        AI_Studio["Target AI Service (e.g., Google AI Studio)"]
+        OptionalHelper["(Optional) External Helper Service"]
     end
 
-    subgraph "API 客户端"
-        API_Client["🤖 API 客户端 (如 Open WebUI, cURL)"]
+    subgraph "API Clients"
+        API_Client["API Client (e.g., Open WebUI, cURL)"]
     end
 
-    User --> "执行命令" CLI_Launch
-    User --> "操作界面" GUI_Launch
+    User -- "Executes command" --> CLI_Launch
+    User -- "Interacts with UI" --> GUI_Launch
     
-    GUI_Launch --> "构建并执行命令" CLI_Launch
+    GUI_Launch -- "Builds & executes command" --> CLI_Launch
 
-    CLI_Launch --> "启动和管理" ServerPY
-    CLI_Launch -- "当 --stream-port > 0" --> StreamProxy
-    CLI_Launch -- "通过 --helper <url>" --> ServerPY
+    CLI_Launch -- "Starts & manages" --> ServerPY
+    CLI_Launch -- "If --stream-port > 0" --> StreamProxy
+    CLI_Launch -- "Via --helper <url>" --> ServerPY
     
-    ServerPY --> "控制浏览器" CamoufoxInstance
-    ServerPY -- "请求 (优先级1)" --> StreamProxy
-    StreamProxy --> "直接请求" AI_Studio
-    StreamProxy --> "响应" ServerPY
+    ServerPY -- "Controls browser" --> CamoufoxInstance
+    ServerPY -- "Request (Priority 1)" --> StreamProxy
+    StreamProxy -- "Direct request" --> AI_Studio
+    StreamProxy -- "Response" --> ServerPY
     
-    ServerPY -- "请求 (优先级2, if StreamProxy disabled AND Helper configured)" --> OptionalHelper
-    OptionalHelper --> "响应" ServerPY
+    ServerPY -- "Request (Priority 2, if StreamProxy disabled AND Helper configured)" --> OptionalHelper
+    OptionalHelper -- "Response" --> ServerPY
 
-    ServerPY -- "请求 (优先级3, if StreamProxy AND Helper disabled/failed)" --> CamoufoxInstance
-    CamoufoxInstance <--> "与 AI 服务交互" AI_Studio
+    ServerPY -- "Request (Priority 3, if StreamProxy AND Helper disabled/failed)" --> CamoufoxInstance
+    CamoufoxInstance -- "Interacts with AI Service" --> AI_Studio
     
-    API_Client --> "API 请求 /v1/chat/completions" ServerPY
-    ServerPY --> "API 响应" API_Client
+    API_Client -- "API Request /v1/chat/completions" --> ServerPY
+    ServerPY -- "API Response" --> API_Client
 ```
 
 ## 使用教程
