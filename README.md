@@ -285,6 +285,69 @@ graph TD
 2.  重新执行上面的 **【通过命令行运行 Debug 模式】** 或 **【通过 GUI 启动有头模式】** 步骤，生成新的认证文件。
 3.  将新生成的 `.json` 文件再次移动到 `active` 目录下。
 
+#### 3.1 安装和信任根证书 (用于实时流式服务)
+
+为了确保实时流式服务 (通过端口 `3120` 或自定义的 `--stream-port` 提供的服务) 能够正常工作，特别是当您在浏览器或其他客户端中直接访问此服务的 HTTPS 端点时，您需要安装并信任项目提供的根证书 `certs/ca.pem`。如果不信任此证书，浏览器或客户端可能会报告安全警告，并拒绝连接。
+
+**重要提示**:
+*   此证书由项目在首次运行时自动生成 (通过 [`stream/cert_manager.py`](stream/cert_manager.py:1))，用于加密代理服务器与您的客户端之间的本地通信。
+*   信任此证书仅用于本地开发和测试目的。请勿在生产环境中使用自签名证书。
+*   文件路径: `certs/ca.pem` (相对于项目根目录)
+
+**Windows 系统:**
+
+1.  **打开证书管理器**:
+    *   按 `Win + R` 打开“运行”对话框，输入 `certmgr.msc` 并按回车。
+2.  **导入证书**:
+    *   在左侧导航栏中，右键点击“受信任的根证书颁发机构” -> “所有任务” -> “导入...”。
+    *   点击“下一步”。
+    *   点击“浏览...”，导航到项目目录下的 `certs/` 文件夹，选择 `ca.pem` 文件。 (确保文件类型选择为 "所有文件 (\*.\*)" 或 "PKCS \#7 证书 (\*.spc; \*.p7b)" 或 "X.509 证书 (\*.cer; \*.crt; \*.der; \*.pem; \*.pfx; \*.p12)" 才能看到 `.pem` 文件)。
+    *   点击“打开”，然后点击“下一步”。
+    *   确保“证书存储”选择的是“受信任的根证书颁发机构”。
+    *   点击“下一步”，然后点击“完成”。
+    *   如果出现安全警告，请选择“是”。
+3.  **验证**:
+    *   在“受信任的根证书颁发机构” -> “证书”中，您应该能找到名为 "AI Studio Proxy CA" (或类似名称) 的证书。
+
+**macOS 系统:**
+
+1.  **打开钥匙串访问 (Keychain Access)**:
+    *   通过 Spotlight 搜索 (Cmd + Space) 输入 "Keychain Access" 并打开它。
+2.  **导入证书**:
+    *   在左上角的“钥匙串”列表中，选择“系统”。
+    *   将 `certs/ca.pem` 文件拖拽到右侧的证书列表中。
+    *   或者，选择菜单栏的“文件” -> “导入项目...”，然后选择 `certs/ca.pem` 文件。
+3.  **信任证书**:
+    *   在证书列表中找到刚刚导入的证书 (通常以 "AI Studio Proxy CA" 或类似名称显示)。
+    *   双击该证书，展开“信任”部分。
+    *   在“使用此证书时:”下拉菜单中，选择“始终信任”。
+    *   关闭证书信息窗口，系统可能会要求您输入管理员密码以保存更改。
+4.  **验证**:
+    *   证书图标应该不再显示红色的 "x" 标记。
+
+**Linux 系统 (以 Ubuntu/Debian 为例):**
+
+1.  **复制证书文件**:
+    *   首先，将 `.pem` 文件转换为 `.crt` 文件，因为某些系统工具更喜欢 `.crt` 格式。
+        ```bash
+        sudo cp certs/ca.pem /usr/local/share/ca-certificates/aistudio_proxy_ca.crt
+        ```
+    *   或者，如果您的系统可以直接处理 `.pem`：
+        ```bash
+        sudo cp certs/ca.pem /usr/local/share/ca-certificates/aistudio_proxy_ca.pem
+        ```
+2.  **更新证书存储**:
+    ```bash
+    sudo update-ca-certificates
+    ```
+    您应该会看到类似 "1 added, 0 removed; done." 的输出。
+3.  **验证 (可选)**:
+    *   检查 `/etc/ssl/certs` 目录中是否包含指向新证书的符号链接。
+
+完成以上步骤后，您的系统和浏览器应该会信任由 `certs/ca.pem` 签发的本地 HTTPS 服务证书，从而避免安全警告并确保实时流式服务正常连接。如果遇到问题，请尝试重启浏览器或计算机。
+
+*   **首次访问新主机的性能问题**: 当通过流式代理首次访问一个新的 HTTPS 主机时，服务需要为该主机动态生成并签署一个新的子证书。这个过程可能会比较耗时，导致对该新主机的首次连接请求响应较慢，甚至在某些情况下可能被主程序（如 [`server.py`](server.py:1) 中的 Playwright 交互逻辑）误判为浏览器加载超时。一旦证书生成并缓存后，后续访问同一主机将会显著加快。
+
 ### 4. 日常运行
 
 完成首次认证设置后，推荐使用 [`gui_launcher.py`](gui_launcher.py:1) 的无头模式或直接通过命令行运行 [`launch_camoufox.py --headless`](launch_camoufox.py:1) 进行日常运行。
@@ -584,7 +647,26 @@ python launch_camoufox.py --debug --server-port 2048 --stream-port 3120 --helper
                 *   您可以删除 `certs` 目录下的根证书 (例如 `ca.pem`, `ca.key`)，代码会在下次启动流式代理时尝试重新生成它。
                 *   **重要**: 如果您选择删除根证书，**强烈建议同时删除 `certs` 目录下的所有其他文件和子目录** (特别是为已访问主机生成的缓存子证书，通常位于 `certs/authority/` 或类似路径下)。否则，旧的子证书可能因为签发者（旧根证书）的丢失而导致与新生成的根证书之间出现信任链错误。
                 *   目前 Python 实现依赖于将这些证书保存在磁盘上（位于 `certs` 目录）。
-        *   **首次访问新主机的性能问题**: 当通过流式代理首次访问一个新的 HTTPS 主机时，服务需要为该主机动态生成并签署一个新的子证书。这个过程可能会比较耗时，导致对该新主机的首次连接请求响应较慢，甚至在某些情况下可能被主程序（如 [`server.py`](server.py:1) 中的 Playwright 交互逻辑）误判为浏览器加载超时。一旦证书生成并缓存后，后续访问同一主机将会显著加快。
+#### 流式代理服务：工作原理与手动证书生成
+
+##### 特性
+
+- 创建一个 HTTP 代理服务器（默认端口：3120）
+- 拦截针对 Google 域名的 HTTPS 请求（也可配置）
+- 使用自签名 CA 证书动态自动生成服务器证书
+- 将 AIStudio 响应解析为 OpenAI 兼容格式
+
+##### 使用方法
+
+###### 证书生成
+
+项目中包含了预生成的 CA 证书和密钥。如果您需要重新生成它们，可以使用以下命令：
+
+```bash
+openssl genrsa -out cert/ca.key 2048
+openssl req -new -x509 -days 3650 -key cert/ca.key -out cert/ca.crt -subj "/C=CN/ST=Shanghai/L=Shanghai/O=AiStudioProxyHelper/OU=CA/CN=AiStudioProxyHelper CA/emailAddress=ca@example.com"
+openssl rsa -in cert/ca.key -out cert/ca.key
+```
 *   **认证失败 (特别是无头模式)**:
     *   **最常见**: `auth_profiles/active/` 下的 `.json` 文件已过期或无效。
     *   **解决**: 删除 `active` 下的文件，重新运行 [`python launch_camoufox.py --debug --server-port 2048`](launch_camoufox.py:1) 或通过 [`gui_launcher.py`](gui_launcher.py:1) 启动有头模式，生成新的认证文件，并将其移动到 `active` 目录。
