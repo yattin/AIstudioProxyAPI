@@ -300,39 +300,39 @@ graph TD
 
 **配置响应获取模式示例 (使用 [`launch_camoufox.py`](launch_camoufox.py:1)):**
 
-    *   **模式1: 优先使用集成的流式代理 (默认推荐)**
-        ```bash
-        # FastAPI 在 2048, 集成流式代理在 3120, 不使用外部 Helper, 明确不使用浏览器代理
-        python launch_camoufox.py --server-port 2048 --stream-port 3120 --helper '' --internal-camoufox-proxy ''
-        # 如果希望流式代理使用其他端口，例如 3125:
-        # python launch_camoufox.py --server-port 2048 --stream-port 3125 --helper '' --internal-camoufox-proxy ''
-        # 如果需要指定浏览器代理，例如 http://127.0.0.1:7890:
-        # python launch_camoufox.py --server-port 2048 --stream-port 3120 --helper '' --internal-camoufox-proxy 'http://127.0.0.1:7890'
-        ```
-        在此模式下，[`server.py`](server.py:1) 会优先尝试通过端口 `3120` (或指定的 `--stream-port`) 上的集成流式代理获取响应。如果失败，则回退到 Playwright 页面交互。
-        **重要提示**: 当 `--stream-port` 大于 `0` (即启用流式代理) 时，强烈建议同时通过 `--internal-camoufox-proxy` 参数为 Camoufox 浏览器指定代理地址，以确保流式代理能够正常工作。如果不需要浏览器代理，也请明确设置为 `--internal-camoufox-proxy ''`。
+*   **模式1: 优先使用集成的流式代理 (默认推荐)**
+    ```bash
+    # FastAPI 在 2048, 集成流式代理在 3120, 不使用外部 Helper, 明确不使用浏览器代理
+    python launch_camoufox.py --server-port 2048 --stream-port 3120 --helper '' --internal-camoufox-proxy ''
+    # 如果希望流式代理使用其他端口，例如 3125:
+    # python launch_camoufox.py --server-port 2048 --stream-port 3125 --helper '' --internal-camoufox-proxy ''
+    # 如果需要指定浏览器代理，例如 http://127.0.0.1:7890:
+    # python launch_camoufox.py --server-port 2048 --stream-port 3120 --helper '' --internal-camoufox-proxy 'http://127.0.0.1:7890'
+    ```
+    在此模式下，[`server.py`](server.py:1) 会优先尝试通过端口 `3120` (或指定的 `--stream-port`) 上的集成流式代理获取响应。如果失败，则回退到 Playwright 页面交互。
+    **重要提示**: 当 `--stream-port` 大于 `0` (即启用流式代理) 时，强烈建议同时通过 `--internal-camoufox-proxy` 参数为 Camoufox 浏览器指定代理地址，以确保流式代理能够正常工作。如果不需要浏览器代理，也请明确设置为 `--internal-camoufox-proxy ''`。
 
-    *   **模式2: 优先使用外部 Helper 服务 (禁用集成流式代理)**
-        ```bash
-        # FastAPI 在 2048, 禁用集成流式代理, 配置外部 Helper 服务, 明确不使用浏览器代理
-        python launch_camoufox.py --server-port 2048 --stream-port 0 --helper 'http://your-helper-service.com/api/getStreamResponse' --internal-camoufox-proxy ''
-        # 如果需要指定浏览器代理，例如 http://127.0.0.1:7890:
-        # python launch_camoufox.py --server-port 2048 --stream-port 0 --helper 'http://your-helper-service.com/api/getStreamResponse' --internal-camoufox-proxy 'http://127.0.0.1:7890'
-        ```
-        在此模式下，[`server.py`](server.py:1) 会优先尝试通过 `--helper` 指定的端点获取响应 (需要有效的 `auth_profiles/active/*.json` 以提取 `SAPISID`)。如果失败，则回退到 Playwright 页面交互。
+*   **模式2: 优先使用外部 Helper 服务 (禁用集成流式代理)**
+    ```bash
+    # FastAPI 在 2048, 禁用集成流式代理, 配置外部 Helper 服务, 明确不使用浏览器代理
+    python launch_camoufox.py --server-port 2048 --stream-port 0 --helper 'http://your-helper-service.com/api/getStreamResponse' --internal-camoufox-proxy ''
+    # 如果需要指定浏览器代理，例如 http://127.0.0.1:7890:
+    # python launch_camoufox.py --server-port 2048 --stream-port 0 --helper 'http://your-helper-service.com/api/getStreamResponse' --internal-camoufox-proxy 'http://127.0.0.1:7890'
+    ```
+    在此模式下，[`server.py`](server.py:1) 会优先尝试通过 `--helper` 指定的端点获取响应 (需要有效的 `auth_profiles/active/*.json` 以提取 `SAPISID`)。如果失败，则回退到 Playwright 页面交互。
 
-    *   **模式3: 仅使用 Playwright 页面交互 (禁用所有代理和 Helper)**
-        ```bash
-        # FastAPI 在 2048, 禁用集成流式代理, 不使用外部 Helper, 明确不使用浏览器代理
-        python launch_camoufox.py --server-port 2048 --stream-port 0 --helper '' --internal-camoufox-proxy ''
-        # 如果需要指定浏览器代理，例如 http://127.0.0.1:7890:
-        # python launch_camoufox.py --server-port 2048 --stream-port 0 --helper '' --internal-camoufox-proxy 'http://127.0.0.1:7890'
-        ```
-        在此模式下，[`server.py`](server.py:1) 将仅通过 Playwright 与 AI Studio 页面交互 (模拟点击"编辑"或"复制"按钮) 来获取响应。这是传统的后备方法。
+*   **模式3: 仅使用 Playwright 页面交互 (禁用所有代理和 Helper)**
+    ```bash
+    # FastAPI 在 2048, 禁用集成流式代理, 不使用外部 Helper, 明确不使用浏览器代理
+    python launch_camoufox.py --server-port 2048 --stream-port 0 --helper '' --internal-camoufox-proxy ''
+    # 如果需要指定浏览器代理，例如 http://127.0.0.1:7890:
+    # python launch_camoufox.py --server-port 2048 --stream-port 0 --helper '' --internal-camoufox-proxy 'http://127.0.0.1:7890'
+    ```
+    在此模式下，[`server.py`](server.py:1) 将仅通过 Playwright 与 AI Studio 页面交互 (模拟点击"编辑"或"复制"按钮) 来获取响应。这是传统的后备方法。
 
-    **注意**: 上述命令示例默认采用交互式选择启动模式 (有头/无头)。你可以添加 `--headless` 或 `--debug` 参数来指定模式，例如:
-    `python launch_camoufox.py --headless --server-port 2048 --stream-port 3120 --helper '' --internal-camoufox-proxy ''`
-    **强烈建议在所有 `launch_camoufox.py` 命令中明确指定 `--internal-camoufox-proxy` 参数，即使其值为空字符串 (`''`)，以避免意外使用系统环境变量中的代理设置。**
+**注意**: 上述命令示例默认采用交互式选择启动模式 (有头/无头)。你可以添加 `--headless` 或 `--debug` 参数来指定模式，例如:
+`python launch_camoufox.py --headless --server-port 2048 --stream-port 3120 --helper '' --internal-camoufox-proxy ''`
+**强烈建议在所有 `launch_camoufox.py` 命令中明确指定 `--internal-camoufox-proxy` 参数，即使其值为空字符串 (`''`)，以避免意外使用系统环境变量中的代理设置。**
 
 **只有当你确认使用 [`launch_camoufox.py --debug`](launch_camoufox.py:1) 或 GUI 有头模式一切运行正常（特别是浏览器内的登录和认证保存），并且 `auth_profiles/active/` 目录下有有效的认证文件后，才推荐使用 [`gui_launcher.py`](gui_launcher.py:1) 的无头模式或 [`launch_camoufox.py --headless`](launch_camoufox.py:1) 作为日常后台运行的标准方式。**
 
