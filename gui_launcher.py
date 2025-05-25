@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 import shlex
 import logging
 import json
+import requests # 新增导入
 
 # --- Configuration & Globals ---
 PYTHON_EXECUTABLE = sys.executable
@@ -215,7 +216,19 @@ LANG_TEXTS = {
     "service_closing_guide_btn": {"zh": "如何关闭服务?", "en": "How to Close Service?"},
     "service_closing_guide_message": {"zh": service_closing_guide_message_zh, "en": service_closing_guide_message_en},
     "enable_proxy_label": {"zh": "启用浏览器代理", "en": "Enable Browser Proxy"},
-    "proxy_address_label": {"zh": "代理地址:", "en": "Proxy Address:"}
+    "proxy_address_label": {"zh": "代理地址:", "en": "Proxy Address:"},
+    "current_auth_file_display_label": {"zh": "当前认证: ", "en": "Current Auth: "},
+    "current_auth_file_none": {"zh": "无", "en": "None"},
+    "current_auth_file_selected_format": {"zh": "{file}", "en": "{file}"},
+    "test_proxy_btn": {"zh": "测试代理连通性", "en": "Test Proxy Connectivity"},
+    "proxy_test_url_default": "http://httpbin.org/get", # 默认测试URL
+    "proxy_not_enabled_warn": {"zh": "代理未启用或地址为空，请先配置。", "en": "Proxy not enabled or address is empty. Please configure first."},
+    "proxy_test_success": {"zh": "代理连接成功 ({url})", "en": "Proxy connection successful ({url})"},
+    "proxy_test_failure": {"zh": "代理连接失败 ({url}):\n{error}", "en": "Proxy connection failed ({url}):\n{error}"},
+    "querying_ports_status": {"zh": "正在查询端口: {ports_desc}...", "en": "Querying ports: {ports_desc}..."},
+    "port_query_result_format": {"zh": "[{port_type} - {port_num}] {pid_info}", "en": "[{port_type} - {port_num}] {pid_info}"},
+    "port_not_in_use_format": {"zh": "[{port_type} - {port_num}] 未被占用", "en": "[{port_type} - {port_num}] Not in use"},
+    "pids_on_multiple_ports_label": {"zh": "多端口占用情况:", "en": "Multi-Port Usage:"}
 }
 
 # 删除重复的定义
@@ -229,6 +242,7 @@ custom_pid_entry_var: Optional[tk.StringVar] = None
 widgets_to_translate: List[Dict[str, Any]] = []
 proxy_address_var: Optional[tk.StringVar] = None  # 添加变量存储代理地址
 proxy_enabled_var: Optional[tk.BooleanVar] = None  # 添加变量标记代理是否启用
+active_auth_file_display_var: Optional[tk.StringVar] = None # 用于显示当前认证文件
 
 # 将所有辅助函数定义移到 build_gui 之前
 
@@ -504,14 +518,52 @@ def check_all_required_ports(ports_to_check: List[Tuple[int, str]]) -> bool:
         update_status_bar("port_check_user_declined_cleanup")
         return False
 
+def _update_active_auth_display():
+    """更新GUI中显示的当前活动认证文件"""
+    if not active_auth_file_display_var or not root_widget:
+        return
+
+    active_files = [f for f in os.listdir(ACTIVE_AUTH_DIR) if f.lower().endswith('.json')]
+    if active_files:
+        # 通常 active 目录只有一个文件，但以防万一，取第一个
+        active_file_name = sorted(active_files)[0]
+        active_auth_file_display_var.set(get_text("current_auth_file_selected_format", file=active_file_name))
+    else:
+        active_auth_file_display_var.set(get_text("current_auth_file_none"))
+
+
 def manage_auth_files_gui():
-    if not os.path.exists(SAVED_AUTH_DIR) or not os.path.exists(ACTIVE_AUTH_DIR):
+    if not os.path.exists(AUTH_PROFILES_DIR): # 检查根目录
         messagebox.showerror(get_text("error_title"), get_text("auth_dirs_missing"), parent=root_widget)
         return
-    saved_files = [f for f in os.listdir(SAVED_AUTH_DIR) if f.lower().endswith('.json')]
-    if not saved_files:
-        messagebox.showinfo(get_text("info_title"), get_text("no_saved_auth_files"), parent=root_widget)
+    
+    # 确保 active 和 saved 目录存在，如果不存在则创建
+    os.makedirs(ACTIVE_AUTH_DIR, exist_ok=True)
+    os.makedirs(SAVED_AUTH_DIR, exist_ok=True)
+
+    all_auth_files = set()
+    # 扫描 auth_profiles/ 根目录
+    if os.path.exists(AUTH_PROFILES_DIR):
+        for f in os.listdir(AUTH_PROFILES_DIR):
+            if f.lower().endswith('.json') and os.path.isfile(os.path.join(AUTH_PROFILES_DIR, f)):
+                all_auth_files.add(f)
+    # 扫描 auth_profiles/active/ 子目录
+    if os.path.exists(ACTIVE_AUTH_DIR):
+        for f in os.listdir(ACTIVE_AUTH_DIR):
+            if f.lower().endswith('.json') and os.path.isfile(os.path.join(ACTIVE_AUTH_DIR, f)):
+                all_auth_files.add(f) # 通常 active 目录的文件也应该在 saved 或根目录有副本
+    # 扫描 auth_profiles/saved/ 子目录
+    if os.path.exists(SAVED_AUTH_DIR):
+        for f in os.listdir(SAVED_AUTH_DIR):
+            if f.lower().endswith('.json') and os.path.isfile(os.path.join(SAVED_AUTH_DIR, f)):
+                all_auth_files.add(f)
+
+    sorted_auth_files = sorted(list(all_auth_files))
+
+    if not sorted_auth_files:
+        messagebox.showinfo(get_text("info_title"), get_text("no_saved_auth_files"), parent=root_widget) # 可以复用这个文本
         return
+
     auth_window = tk.Toplevel(root_widget)
     auth_window.title(get_text("auth_manager_title"))
     auth_window.geometry("400x300")
@@ -524,14 +576,34 @@ def manage_auth_files_gui():
     files_scrollbar = ttk.Scrollbar(files_frame, command=files_listbox.yview)
     files_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
     files_listbox.config(yscrollcommand=files_scrollbar.set)
-    for file in sorted(saved_files):
-        files_listbox.insert(tk.END, file)
+    for file_name in sorted_auth_files:
+        files_listbox.insert(tk.END, file_name)
+
     def activate_selected_file():
         if not files_listbox.curselection():
             messagebox.showwarning(get_text("warning_title"), get_text("no_file_selected"), parent=auth_window)
             return
-        selected_file = files_listbox.get(files_listbox.curselection()[0])
-        source_path = os.path.join(SAVED_AUTH_DIR, selected_file)
+        selected_file_name = files_listbox.get(files_listbox.curselection()[0])
+        
+        # 确定源文件路径，优先从 saved, 然后是根目录
+        source_path = None
+        potential_saved_path = os.path.join(SAVED_AUTH_DIR, selected_file_name)
+        potential_root_path = os.path.join(AUTH_PROFILES_DIR, selected_file_name)
+
+        if os.path.exists(potential_saved_path):
+            source_path = potential_saved_path
+        elif os.path.exists(potential_root_path):
+            source_path = potential_root_path
+        else:
+            # 如果文件在 active 目录但不在 saved 或根目录，也允许激活（理论上不应发生，但作为容错）
+            potential_active_path = os.path.join(ACTIVE_AUTH_DIR, selected_file_name)
+            if os.path.exists(potential_active_path):
+                 source_path = potential_active_path
+            else:
+                messagebox.showerror(get_text("error_title"), f"源文件 {selected_file_name} 未找到!", parent=auth_window)
+                return
+
+        # 清空 active 目录
         for existing_file in os.listdir(ACTIVE_AUTH_DIR):
             if existing_file.lower().endswith('.json'):
                 try:
@@ -541,27 +613,48 @@ def manage_auth_files_gui():
                     return
         try:
             import shutil
-            dest_path = os.path.join(ACTIVE_AUTH_DIR, selected_file)
-            shutil.copy2(source_path, dest_path)
-            messagebox.showinfo(get_text("info_title"), get_text("auth_file_activated", file=selected_file), parent=auth_window)
+            dest_path = os.path.join(ACTIVE_AUTH_DIR, selected_file_name)
+            shutil.copy2(source_path, dest_path) # 将选中的文件复制到 active 目录
+            messagebox.showinfo(get_text("info_title"), get_text("auth_file_activated", file=selected_file_name), parent=auth_window)
+            _update_active_auth_display() # 更新主界面显示
             auth_window.destroy()
         except Exception as e:
-            messagebox.showerror(get_text("error_title"), get_text("error_activating_file", file=selected_file, error=str(e)), parent=auth_window)
+            messagebox.showerror(get_text("error_title"), get_text("error_activating_file", file=selected_file_name, error=str(e)), parent=auth_window)
+            _update_active_auth_display() # 即使失败也尝试更新显示
+
     buttons_frame = ttk.Frame(auth_window)
     buttons_frame.pack(fill=tk.X, padx=10, pady=10)
     ttk.Button(buttons_frame, text=get_text("activate_selected_btn"), command=activate_selected_file).pack(side=tk.LEFT, padx=5)
     ttk.Button(buttons_frame, text=get_text("cancel_btn"), command=auth_window.destroy).pack(side=tk.RIGHT, padx=5)
 
+def get_active_auth_json_path_for_launch() -> Optional[str]:
+    """获取用于启动命令的 --active-auth-json 参数值"""
+    active_files = [f for f in os.listdir(ACTIVE_AUTH_DIR) if f.lower().endswith('.json') and os.path.isfile(os.path.join(ACTIVE_AUTH_DIR, f))]
+    if active_files:
+        # 如果 active 目录有文件，总是使用它（按名称排序的第一个）
+        return os.path.join(ACTIVE_AUTH_DIR, sorted(active_files)[0])
+    return None
+
 def build_launch_command(mode, fastapi_port, camoufox_debug_port, stream_port_enabled, stream_port, helper_enabled, helper_endpoint):
     cmd = [PYTHON_EXECUTABLE, LAUNCH_CAMOUFOX_PY, f"--{mode}", "--server-port", str(fastapi_port), "--camoufox-debug-port", str(camoufox_debug_port)]
+    
+    active_auth_path = get_active_auth_json_path_for_launch()
+    if active_auth_path:
+        cmd.extend(["--active-auth-json", active_auth_path])
+        logger.info(f"将使用认证文件: {active_auth_path}")
+    else:
+        logger.info("未找到活动的认证文件，不传递 --active-auth-json 参数。")
+
     if stream_port_enabled:
         cmd.extend(["--stream-port", str(stream_port)])
     else:
-        cmd.extend(["--stream-port", "0"])
+        cmd.extend(["--stream-port", "0"]) # 显式传递0表示禁用
+        
     if helper_enabled and helper_endpoint:
         cmd.extend(["--helper", helper_endpoint])
     else:
-        cmd.extend(["--helper", ""])
+        cmd.extend(["--helper", ""]) # 显式传递空字符串表示禁用
+        
     return cmd
 
 # --- GUI构建与主逻辑区段的函数定义 ---
@@ -982,22 +1075,121 @@ def start_virtual_display_gui():
     _launch_process_gui(cmd, "service_name_virtual_display", env_vars=proxy_env)
 
 def query_port_and_display_pids_gui():
-    port_to_query = get_fastapi_port_from_gui() # 始终查询 FastAPI 端口
-    update_status_bar("checking_port_with_name", port_name=get_text("port_name_fastapi"), port=port_to_query)
+    ports_to_query_info = []
+    ports_desc_list = []
+
+    # 1. FastAPI Port
+    fastapi_port = get_fastapi_port_from_gui()
+    ports_to_query_info.append({"port": fastapi_port, "type_key": "port_name_fastapi", "type_name": get_text("port_name_fastapi")})
+    ports_desc_list.append(f"{get_text('port_name_fastapi')}:{fastapi_port}")
+
+    # 2. Camoufox Debug Port
+    camoufox_port = get_camoufox_debug_port_from_gui()
+    ports_to_query_info.append({"port": camoufox_port, "type_key": "port_name_camoufox_debug", "type_name": get_text("port_name_camoufox_debug")})
+    ports_desc_list.append(f"{get_text('port_name_camoufox_debug')}:{camoufox_port}")
     
-    if pid_listbox_widget: 
+    # 3. Stream Proxy Port (if enabled)
+    if stream_port_enabled_var.get():
+        try:
+            stream_p_val_str = stream_port_var.get().strip()
+            stream_p = int(stream_p_val_str) if stream_p_val_str else 0 # Default to 0 if empty, meaning disabled
+            if stream_p != 0 and not (1024 <= stream_p <= 65535):
+                 messagebox.showwarning(get_text("warning_title"), get_text("stream_port_out_of_range"), parent=root_widget)
+                 # Optionally, do not query this port or handle as error
+            elif stream_p != 0 : # Only query if valid and non-zero
+                ports_to_query_info.append({"port": stream_p, "type_key": "port_name_stream_proxy", "type_name": get_text("port_name_stream_proxy")})
+                ports_desc_list.append(f"{get_text('port_name_stream_proxy')}:{stream_p}")
+        except ValueError:
+            messagebox.showwarning(get_text("warning_title"), get_text("stream_port_out_of_range") + " (非数字)", parent=root_widget)
+
+
+    update_status_bar("querying_ports_status", ports_desc=", ".join(ports_desc_list))
+    
+    if pid_listbox_widget and pid_list_lbl_frame_ref:
         pid_listbox_widget.delete(0, tk.END)
-        processes_info = find_processes_on_port(port_to_query)
-        if processes_info:
-            for proc_info in processes_info:
-                display_text = f"{proc_info['pid']} - {proc_info['name']}"
+        pid_list_lbl_frame_ref.config(text=get_text("pids_on_multiple_ports_label")) # Update title
+
+        found_any_process = False
+        for port_info in ports_to_query_info:
+            current_port = port_info["port"]
+            port_type_name = port_info["type_name"]
+            
+            processes_on_current_port = find_processes_on_port(current_port)
+            if processes_on_current_port:
+                found_any_process = True
+                for proc_info in processes_on_current_port:
+                    pid_display_info = f"{proc_info['pid']} - {proc_info['name']}"
+                    display_text = get_text("port_query_result_format",
+                                            port_type=port_type_name,
+                                            port_num=current_port,
+                                            pid_info=pid_display_info)
+                    pid_listbox_widget.insert(tk.END, display_text)
+            else:
+                display_text = get_text("port_not_in_use_format",
+                                        port_type=port_type_name,
+                                        port_num=current_port)
                 pid_listbox_widget.insert(tk.END, display_text)
-            # 不要在这里更新状态为 port_check_all_completed，因为这只是一个查询操作
-        else:
-            pid_listbox_widget.insert(tk.END, get_text("no_pids_found"))
-            # 同样，这里只表示未找到，不代表所有检查完成
+        
+        if not found_any_process and not any(find_processes_on_port(p["port"]) for p in ports_to_query_info): # Recheck if all are empty
+             # If after checking all, still no processes, we can add a general "no pids found on queried ports"
+             # but the per-port "not in use" message is usually clearer.
+             pass # Individual messages already cover this.
     else:
-        print("Error: pid_listbox_widget is None in query_port_and_display_pids_gui")
+        logger.error("pid_listbox_widget or pid_list_lbl_frame_ref is None in query_port_and_display_pids_gui")
+
+def _perform_proxy_test(proxy_address: str, test_url: str) -> Tuple[bool, str]:
+    """
+    Tries to connect to test_url via proxy_address.
+    Returns (success_status, message_or_error_string).
+    """
+    proxies = {
+        "http": proxy_address,
+        "https": proxy_address,
+    }
+    try:
+        logger.info(f"Testing proxy {proxy_address} with URL {test_url}")
+        response = requests.get(test_url, proxies=proxies, timeout=10, allow_redirects=True)
+        response.raise_for_status()  # Raises an HTTPError for bad responses (4XX or 5XX)
+        logger.info(f"Proxy test to {test_url} via {proxy_address} successful. Status: {response.status_code}")
+        return True, get_text("proxy_test_success", url=test_url)
+    except requests.exceptions.ProxyError as e:
+        logger.error(f"ProxyError connecting to {test_url} via {proxy_address}: {e}")
+        return False, get_text("proxy_test_failure", url=test_url, error=f"Proxy Error: {e}")
+    except requests.exceptions.ConnectTimeout as e:
+        logger.error(f"ConnectTimeout connecting to {test_url} via {proxy_address}: {e}")
+        return False, get_text("proxy_test_failure", url=test_url, error=f"Connection Timeout: {e}")
+    except requests.exceptions.ReadTimeout as e:
+        logger.error(f"ReadTimeout from {test_url} via {proxy_address}: {e}")
+        return False, get_text("proxy_test_failure", url=test_url, error=f"Read Timeout: {e}")
+    except requests.exceptions.SSLError as e:
+        logger.error(f"SSLError connecting to {test_url} via {proxy_address}: {e}")
+        return False, get_text("proxy_test_failure", url=test_url, error=f"SSL Error: {e}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"RequestException connecting to {test_url} via {proxy_address}: {e}")
+        return False, get_text("proxy_test_failure", url=test_url, error=str(e))
+    except Exception as e: # Catch any other unexpected errors
+        logger.error(f"Unexpected error during proxy test to {test_url} via {proxy_address}: {e}", exc_info=True)
+        return False, get_text("proxy_test_failure", url=test_url, error=f"Unexpected error: {e}")
+
+def test_proxy_connectivity_gui():
+    if not proxy_enabled_var.get() or not proxy_address_var.get().strip():
+        messagebox.showwarning(get_text("warning_title"), get_text("proxy_not_enabled_warn"), parent=root_widget)
+        return
+
+    proxy_addr_to_test = proxy_address_var.get().strip()
+    test_url = LANG_TEXTS["proxy_test_url_default"] # Use the default from LANG_TEXTS
+
+    update_status_bar("status_idle") # Clear previous status
+    # Show a temporary "testing" message if desired, or rely on messagebox
+    # process_status_text_var.set(f"Testing proxy {proxy_addr_to_test} with {test_url}...")
+
+    success, message = _perform_proxy_test(proxy_addr_to_test, test_url)
+
+    if success:
+        messagebox.showinfo(get_text("info_title"), message, parent=root_widget)
+    else:
+        messagebox.showerror(get_text("error_title"), message, parent=root_widget)
+    # update_status_bar("status_idle") # Reset status after test
 
 def stop_selected_pid_from_list_gui():
     if not pid_listbox_widget: return
@@ -1009,22 +1201,52 @@ def stop_selected_pid_from_list_gui():
     pid_to_stop = -1
     process_name_to_stop = get_text("unknown_process_name_placeholder")
     try:
-        match = re.match(r"(\d+)\s*-\s*(.*)", selected_text)
-        if match:
-            pid_to_stop = int(match.group(1))
-            process_name_to_stop = match.group(2).strip()
-        elif selected_text != get_text("no_pids_found") and selected_text.isdigit():
-            pid_to_stop = int(selected_text)
+        # Try to parse detailed format: "[Type - Port] PID - Name"
+        # Example: "[FastAPI服务 - 2048] 1234 - python.exe"
+        match_detailed = re.match(r"\[.*?\]\s*(\d+)\s*-\s*(.*)", selected_text)
+        if match_detailed:
+            pid_to_stop = int(match_detailed.group(1))
+            process_name_to_stop = match_detailed.group(2).strip()
         else:
-            if selected_text != get_text("no_pids_found"):
-                 messagebox.showerror(get_text("error_title"), get_text("error_parsing_pid", selection=selected_text), parent=root_widget)
-            return
-    except ValueError:
+            # Try to parse simple format: "PID - Name"
+            match_simple = re.match(r"(\d+)\s*-\s*(.*)", selected_text)
+            if match_simple:
+                pid_to_stop = int(match_simple.group(1))
+                process_name_to_stop = match_simple.group(2).strip()
+            elif selected_text.isdigit(): # Handles if the listbox item is just a PID
+                pid_to_stop = int(selected_text)
+                # process_name_to_stop remains the default unknown
+            else:
+                # If no regex matches and it's not just a PID, check if it's a "no process" entry
+                # Using placeholders for port_type and port_num as they are not critical for extracting the "no process" message part
+                no_process_indicator_zh = get_text("port_not_in_use_format", port_type="_", port_num="_").split("] ")[-1].strip()
+                no_process_indicator_en = LANG_TEXTS["port_not_in_use_format"]["en"].split("] ")[-1].strip()
+                
+                general_no_pids_msg_zh = get_text("no_pids_found")
+                general_no_pids_msg_en = LANG_TEXTS["no_pids_found"]["en"]
+
+                is_no_process_entry = (no_process_indicator_zh in selected_text or \
+                                       no_process_indicator_en in selected_text or \
+                                       selected_text == general_no_pids_msg_zh or \
+                                       selected_text == general_no_pids_msg_en)
+
+                if is_no_process_entry:
+                    logger.info(f"Selected item is a 'no process' entry: {selected_text}")
+                    return # Silently return for "no process" entries
+                else:
+                    # Genuine parsing error for an unexpected format
+                    messagebox.showerror(get_text("error_title"), get_text("error_parsing_pid", selection=selected_text), parent=root_widget)
+                    return
+    except ValueError: # Catches int() conversion errors
         messagebox.showerror(get_text("error_title"), get_text("error_parsing_pid", selection=selected_text), parent=root_widget)
         return
+
+    # If pid_to_stop is still -1 at this point, it means an unhandled case or logic error in parsing.
+    # The returns above should prevent reaching here with pid_to_stop == -1 if it's an error or "no process".
     if pid_to_stop == -1:
-        if selected_text != get_text("no_pids_found"):
-             messagebox.showerror(get_text("error_title"), get_text("error_parsing_pid", selection=selected_text), parent=root_widget)
+        # This path implies a non-parsable string that wasn't identified as a "no process" message and didn't raise ValueError.
+        logger.warning(f"PID parsing resulted in -1 for non-'no process' entry: {selected_text}. This indicates an unexpected format or logic gap.")
+        messagebox.showerror(get_text("error_title"), get_text("error_parsing_pid", selection=selected_text), parent=root_widget)
         return
     if messagebox.askyesno(get_text("confirm_stop_pid_title"), get_text("confirm_stop_pid_message", pid=pid_to_stop, name=process_name_to_stop), parent=root_widget):
         normal_kill_success = kill_process_pid(pid_to_stop)
@@ -1167,6 +1389,7 @@ def switch_language_gui(lang_code: str):
 def build_gui(root: tk.Tk):
     global process_status_text_var, port_entry_var, camoufox_debug_port_var, pid_listbox_widget, widgets_to_translate, managed_process_info, root_widget, menu_bar_ref, custom_pid_entry_var
     global stream_port_enabled_var, stream_port_var, helper_enabled_var, helper_endpoint_var, port_auto_check_var, proxy_address_var, proxy_enabled_var
+    global active_auth_file_display_var # 添加新的全局变量
     global pid_list_lbl_frame_ref # 确保全局变量在此处声明
 
     root_widget = root
@@ -1197,6 +1420,14 @@ def build_gui(root: tk.Tk):
     port_auto_check_var = tk.BooleanVar(value=True)
     proxy_address_var = tk.StringVar(value=config.get("proxy_address", "http://127.0.0.1:7890"))
     proxy_enabled_var = tk.BooleanVar(value=config.get("proxy_enabled", False))
+    active_auth_file_display_var = tk.StringVar() # 初始化为空，后续由 _update_active_auth_display 更新
+
+    # 联动逻辑：当流式代理启用时，强制启用浏览器代理
+    def on_stream_proxy_toggle(*args):
+        if stream_port_enabled_var.get():
+            proxy_enabled_var.set(True)
+    stream_port_enabled_var.trace_add("write", on_stream_proxy_toggle)
+
 
     menu_bar_ref = tk.Menu(root)
     lang_menu = tk.Menu(menu_bar_ref, tearoff=0)
@@ -1337,6 +1568,16 @@ def build_gui(root: tk.Tk):
     btn_manage_auth_left = ttk.Button(auth_section_left, text="", command=manage_auth_files_gui) # 重命名按钮
     btn_manage_auth_left.pack(fill=tk.X, padx=5, pady=5)
     widgets_to_translate.append({"widget": btn_manage_auth_left, "key": "manage_auth_files_btn"})
+    
+    # 显示当前认证文件
+    auth_display_frame = ttk.Frame(auth_section_left) # 放在认证管理部分内部
+    auth_display_frame.pack(fill=tk.X, padx=5, pady=(0,5)) # 调整pady使其更紧凑
+    lbl_current_auth_static = ttk.Label(auth_display_frame, text="")
+    lbl_current_auth_static.pack(side=tk.LEFT)
+    widgets_to_translate.append({"widget": lbl_current_auth_static, "key": "current_auth_file_display_label"})
+    lbl_current_auth_dynamic = ttk.Label(auth_display_frame, textvariable=active_auth_file_display_var, wraplength=180) # 允许换行
+    lbl_current_auth_dynamic.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    _update_active_auth_display() # 初始化时更新一次
 
     # 添加一个占位符Frame以推高左侧内容 (如果需要消除底部所有空白)
     spacer_frame_left = ttk.Frame(left_frame_container)
@@ -1380,7 +1621,12 @@ def build_gui(root: tk.Tk):
     btn_stop_pid.grid(row=0, column=1, sticky="ew", padx=(2,0))
     widgets_to_translate.append({"widget": btn_stop_pid, "key": "stop_selected_pid_btn"})
     
-    kill_custom_frame = ttk.LabelFrame(middle_frame_container, text="") 
+    # Test Proxy Connectivity Button
+    btn_test_proxy = ttk.Button(pid_buttons_frame, text="", command=test_proxy_connectivity_gui)
+    btn_test_proxy.grid(row=1, column=0, columnspan=2, sticky="ew", padx=0, pady=(3,0)) # Place below query/stop
+    widgets_to_translate.append({"widget": btn_test_proxy, "key": "test_proxy_btn"})
+
+    kill_custom_frame = ttk.LabelFrame(middle_frame_container, text="")
     kill_custom_frame.grid(row=middle_current_row, column=0, sticky="ew", padx=2, pady=5)
     widgets_to_translate.append({"widget": kill_custom_frame, "key": "kill_custom_pid_label", "property":"text"})
     middle_current_row += 1
@@ -1420,6 +1666,7 @@ def build_gui(root: tk.Tk):
 
     update_all_ui_texts_gui()
     query_port_and_display_pids_gui() # 初始化时查询一次FastAPI端口
+    _update_active_auth_display() # 初始化时更新认证文件显示
     root.protocol("WM_DELETE_WINDOW", on_app_close_main)
 
 pid_list_lbl_frame_ref: Optional[ttk.LabelFrame] = None

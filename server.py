@@ -95,7 +95,7 @@ ERROR_TOAST_SELECTOR = 'div.toast.warning, div.toast.error'
 CLEAR_CHAT_BUTTON_SELECTOR = 'button[data-test-clear="outside"][aria-label="Clear chat"]'
 CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR = 'button.mdc-button:has-text("Continue")'
 MORE_OPTIONS_BUTTON_SELECTOR = 'div.actions-container div ms-chat-turn-options div > button'
-COPY_MARKDOWN_BUTTON_SELECTOR = 'div[class*="mat-menu"] div > button:nth-child(4)'
+COPY_MARKDOWN_BUTTON_SELECTOR = 'button.mat-mdc-menu-item:nth-child(4)'
 COPY_MARKDOWN_BUTTON_SELECTOR_ALT = 'div[role="menu"] button:has-text("Copy Markdown")'
 MAX_OUTPUT_TOKENS_SELECTOR = 'input[aria-label="Maximum output tokens"]'
 STOP_SEQUENCE_INPUT_SELECTOR = 'input[aria-label="Add stop token"]'
@@ -1721,6 +1721,7 @@ async def queue_worker():
                                   try:
                                       # Check disconnect before starting the potentially long wait
                                       client_disco_checker("流式响应后等待发送按钮禁用 - 前置检查: ")
+                                      await asyncio.sleep(0.5) # Give UI a moment to update after stream completion
                                       await expect_async(submit_btn_loc).to_be_disabled(timeout=wait_timeout_ms)
                                       logger.info(f"[{req_id}] ✅ 发送按钮已禁用。")
                                   except PlaywrightAsyncError as e_pw_disabled:
@@ -1970,6 +1971,34 @@ async def _process_request_refactored(
                     await confirm_button_locator.click(timeout=5000)
                     check_client_disconnected("After Confirm Button Click: ")
                     logger.info(f"[{req_id}] 清空确认按钮已点击。")
+
+                    # 添加健壮性处理：等待确认按钮不可见，最多重试三次
+                    max_retries = 3
+                    for i in range(max_retries):
+                        try:
+                            logger.info(f"[{req_id}] 尝试 {i+1}/{max_retries}: 等待清空确认按钮变为不可见...")
+                            await expect_async(confirm_button_locator).to_be_hidden(timeout=CLEAR_CHAT_VERIFY_TIMEOUT_MS)
+                            logger.info(f"[{req_id}] ✅ 清空确认按钮已不可见。")
+                            break # 按钮已不可见，跳出循环
+                        except PlaywrightAsyncError as e_hidden:
+                            logger.warning(f"[{req_id}] ⚠️ 尝试 {i+1}/{max_retries}: 清空确认按钮仍可见或等待超时: {e_hidden}")
+                            if i < max_retries - 1:
+                                logger.info(f"[{req_id}] 再次点击清空确认按钮并重试...")
+                                await confirm_button_locator.click(timeout=5000)
+                                await asyncio.sleep(0.5) # 短暂延迟后重试
+                            else:
+                                logger.error(f"[{req_id}] ❌ 达到最大重试次数，清空确认按钮仍可见。")
+                                await save_error_snapshot(f"clear_chat_confirm_button_still_visible_{req_id}")
+                                raise PlaywrightAsyncError(f"Clear chat confirm button remained visible after {max_retries} retries.") from e_hidden
+                        except ClientDisconnectedError:
+                            logger.info(f"[{req_id}] 客户端在等待清空确认按钮不可见时断开连接。")
+                            raise
+                        except Exception as e_general:
+                            logger.exception(f"[{req_id}] ❌ 等待清空确认按钮不可见时发生意外错误。")
+                            await save_error_snapshot(f"clear_chat_confirm_button_unexpected_wait_error_{req_id}")
+                            raise PlaywrightAsyncError(f"Unexpected error waiting for clear chat confirm button to disappear: {e_general}") from e_general
+                        check_client_disconnected(f"清空确认按钮重试 {i+1} 后: ")
+
                     last_response_container = page.locator(RESPONSE_CONTAINER_SELECTOR).last
                     await asyncio.sleep(0.5)
                     check_client_disconnected("After Clear Post-Delay: ")

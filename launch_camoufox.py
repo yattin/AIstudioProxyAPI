@@ -612,74 +612,112 @@ if __name__ == "__main__":
     captured_ws_endpoint = None
     effective_active_auth_json_path = None # from dev
 
-    if args.active_auth_json: # from dev
+    if args.active_auth_json:
+        logger.info(f"  尝试使用 --active-auth-json 参数提供的路径: '{args.active_auth_json}'")
         candidate_path = os.path.expanduser(args.active_auth_json)
-        if os.path.isabs(candidate_path) and os.path.exists(candidate_path):
+        
+        # 尝试解析路径:
+        # 1. 作为绝对路径
+        if os.path.isabs(candidate_path) and os.path.exists(candidate_path) and os.path.isfile(candidate_path):
             effective_active_auth_json_path = candidate_path
-        else: 
-            rel_to_script = os.path.join(os.path.dirname(__file__), candidate_path)
-            rel_to_active = os.path.join(ACTIVE_AUTH_DIR, candidate_path)
-            rel_to_saved = os.path.join(SAVED_AUTH_DIR, candidate_path)
-            if os.path.exists(rel_to_script): effective_active_auth_json_path = rel_to_script
-            elif os.path.exists(rel_to_active): effective_active_auth_json_path = rel_to_active
-            elif os.path.exists(rel_to_saved): effective_active_auth_json_path = rel_to_saved
+        else:
+            # 2. 作为相对于当前工作目录的路径
+            path_rel_to_cwd = os.path.abspath(candidate_path)
+            if os.path.exists(path_rel_to_cwd) and os.path.isfile(path_rel_to_cwd):
+                effective_active_auth_json_path = path_rel_to_cwd
+            else:
+                # 3. 作为相对于脚本目录的路径
+                path_rel_to_script = os.path.join(os.path.dirname(__file__), candidate_path)
+                if os.path.exists(path_rel_to_script) and os.path.isfile(path_rel_to_script):
+                    effective_active_auth_json_path = path_rel_to_script
+                # 4. 如果它只是一个文件名，则在 ACTIVE_AUTH_DIR 然后 SAVED_AUTH_DIR 中检查
+                elif not os.path.sep in candidate_path: # 这是一个简单的文件名
+                    path_in_active = os.path.join(ACTIVE_AUTH_DIR, candidate_path)
+                    if os.path.exists(path_in_active) and os.path.isfile(path_in_active):
+                        effective_active_auth_json_path = path_in_active
+                    else:
+                        path_in_saved = os.path.join(SAVED_AUTH_DIR, candidate_path)
+                        if os.path.exists(path_in_saved) and os.path.isfile(path_in_saved):
+                            effective_active_auth_json_path = path_in_saved
         
-        if not effective_active_auth_json_path:
-            logger.error(f"❌ 指定的认证文件 (--active-auth-json='{args.active_auth_json}') 未找到。")
+        if effective_active_auth_json_path:
+            logger.info(f"  将使用通过 --active-auth-json 解析的认证文件: {effective_active_auth_json_path}")
+        else:
+            logger.error(f"❌ 指定的认证文件 (--active-auth-json='{args.active_auth_json}') 未找到或不是一个文件。")
             sys.exit(1)
-        logger.info(f"  将使用用户指定的认证文件: {effective_active_auth_json_path}")
-    elif final_launch_mode == 'headless' or final_launch_mode == 'virtual_headless': # from dev
+    else:
+        # --active-auth-json 未提供。
+        logger.info(f"  --active-auth-json 未提供。检查 '{ACTIVE_AUTH_DIR}' 中的默认认证文件...")
         try:
-            active_json_files = [f for f in os.listdir(ACTIVE_AUTH_DIR) if f.lower().endswith('.json')]
-            if not active_json_files:
-                logger.error(f"  ❌ {final_launch_mode} 模式错误: 在活动认证目录 '{ACTIVE_AUTH_DIR}' 中未找到任何 '.json' 认证文件。请先在调试模式下保存一个。")
+            if os.path.exists(ACTIVE_AUTH_DIR):
+                active_json_files = sorted([
+                    f for f in os.listdir(ACTIVE_AUTH_DIR)
+                    if f.lower().endswith('.json') and os.path.isfile(os.path.join(ACTIVE_AUTH_DIR, f))
+                ])
+                if active_json_files:
+                    effective_active_auth_json_path = os.path.join(ACTIVE_AUTH_DIR, active_json_files[0])
+                    logger.info(f"  将使用 '{ACTIVE_AUTH_DIR}' 中按名称排序的第一个JSON文件: {os.path.basename(effective_active_auth_json_path)}")
+                else:
+                    logger.info(f"  目录 '{ACTIVE_AUTH_DIR}' 为空或不包含JSON文件。")
+            else:
+                logger.info(f"  目录 '{ACTIVE_AUTH_DIR}' 不存在。")
+        except Exception as e_scan_active:
+            logger.warning(f"  扫描 '{ACTIVE_AUTH_DIR}' 时发生错误: {e_scan_active}", exc_info=True)
+
+        if not effective_active_auth_json_path:
+            # 如果在 active/ 中未找到默认认证文件，则回退到特定于模式的现有逻辑
+            logger.info(f"  未从 '{ACTIVE_AUTH_DIR}' 加载默认认证文件。遵循特定于模式的现有逻辑。")
+            if final_launch_mode == 'headless' or final_launch_mode == 'virtual_headless':
+                # 对于无头模式，如果 --active-auth-json 未提供且 active/ 为空，则报错
+                logger.error(f"  ❌ {final_launch_mode} 模式错误: --active-auth-json 未提供，且活动认证目录 '{ACTIVE_AUTH_DIR}' 中未找到任何 '.json' 认证文件。请先在调试模式下保存一个或通过参数指定。")
                 sys.exit(1)
-            effective_active_auth_json_path = os.path.join(ACTIVE_AUTH_DIR, sorted(active_json_files)[0]) 
-            logger.info(f"  {final_launch_mode} 模式: 将自动使用活动认证文件: {os.path.basename(effective_active_auth_json_path)}")
-        except FileNotFoundError:
-            logger.error(f"  ❌ {final_launch_mode} 模式错误: 活动认证目录 '{ACTIVE_AUTH_DIR}' 不存在。")
-            sys.exit(1)
-        except Exception as e_listdir:
-            logger.error(f"  ❌ {final_launch_mode} 模式错误: 扫描活动认证目录时发生错误: {e_listdir}", exc_info=True)
-            sys.exit(1)
-    elif final_launch_mode == 'debug' and not args.active_auth_json: # from dev (interactive selection)
-        logger.info(f"  调试模式: 检查可用的认证文件...")
-        available_profiles = []
-        for profile_dir_path_str, dir_label in [(ACTIVE_AUTH_DIR, "active"), (SAVED_AUTH_DIR, "saved")]:
-            if os.path.exists(profile_dir_path_str):
-                try:
-                    for filename in os.listdir(profile_dir_path_str):
-                        if filename.lower().endswith(".json"):
-                            full_path = os.path.join(profile_dir_path_str, filename)
-                            available_profiles.append({"name": f"{dir_label}/{filename}", "path": full_path})
-                except OSError as e: logger.warning(f"   ⚠️ 警告: 无法读取目录 '{profile_dir_path_str}': {e}")
-        
-        if available_profiles:
-            print('-'*60 + "\n   找到以下可用的认证文件:", flush=True)
-            for i, profile in enumerate(available_profiles): print(f"     {i+1}: {profile['name']}", flush=True)
-            print("     N: 不加载任何文件 (使用浏览器当前状态)\n" + '-'*60, flush=True)
-            choice = input_with_timeout(f"   请选择要加载的认证文件编号 (输入 N 或直接回车则不加载, {args.auth_save_timeout}s超时): ", args.auth_save_timeout)
-            if choice.strip().lower() not in ['n', '']:
-                try:
-                    choice_index = int(choice.strip()) - 1
-                    if 0 <= choice_index < len(available_profiles):
-                        selected_profile = available_profiles[choice_index]
-                        effective_active_auth_json_path = selected_profile["path"]
-                        logger.info(f"   已选择加载认证文件: {selected_profile['name']}")
-                        print(f"   已选择加载: {selected_profile['name']}", flush=True)
-                    else: 
-                        logger.info("   无效的选择编号或超时。将不加载认证文件。")
-                        print("   无效的选择编号或超时。将不加载认证文件。", flush=True)
-                except ValueError: 
-                    logger.info("   无效的输入。将不加载认证文件。")
-                    print("   无效的输入。将不加载认证文件。", flush=True)
-            else: 
-                logger.info("   好的，不加载认证文件或超时。")
-                print("   好的，不加载认证文件或超时。", flush=True)
-            print('-'*60, flush=True)
-        else: 
-            logger.info("   未找到认证文件。将使用浏览器当前状态。")
-            print("   未找到认证文件。将使用浏览器当前状态。", flush=True)
+            elif final_launch_mode == 'debug':
+                # 对于调试模式，如果 --active-auth-json 未提供且 active/ 为空，则提示用户选择
+                logger.info(f"  调试模式: 提示用户从可用认证文件中选择...")
+                available_profiles = []
+                # 首先扫描 ACTIVE_AUTH_DIR，然后是 SAVED_AUTH_DIR
+                for profile_dir_path_str, dir_label in [(ACTIVE_AUTH_DIR, "active"), (SAVED_AUTH_DIR, "saved")]:
+                    if os.path.exists(profile_dir_path_str):
+                        try:
+                            # 在每个目录中对文件名进行排序
+                            filenames = sorted([
+                                f for f in os.listdir(profile_dir_path_str)
+                                if f.lower().endswith(".json") and os.path.isfile(os.path.join(profile_dir_path_str, f))
+                            ])
+                            for filename in filenames:
+                                full_path = os.path.join(profile_dir_path_str, filename)
+                                available_profiles.append({"name": f"{dir_label}/{filename}", "path": full_path})
+                        except OSError as e:
+                            logger.warning(f"   ⚠️ 警告: 无法读取目录 '{profile_dir_path_str}': {e}")
+                
+                if available_profiles:
+                    # 对可用配置文件列表进行排序，以确保一致的显示顺序
+                    available_profiles.sort(key=lambda x: x['name'])
+                    print('-'*60 + "\n   找到以下可用的认证文件:", flush=True)
+                    for i, profile in enumerate(available_profiles): print(f"     {i+1}: {profile['name']}", flush=True)
+                    print("     N: 不加载任何文件 (使用浏览器当前状态)\n" + '-'*60, flush=True)
+                    choice = input_with_timeout(f"   请选择要加载的认证文件编号 (输入 N 或直接回车则不加载, {args.auth_save_timeout}s超时): ", args.auth_save_timeout)
+                    if choice.strip().lower() not in ['n', '']:
+                        try:
+                            choice_index = int(choice.strip()) - 1
+                            if 0 <= choice_index < len(available_profiles):
+                                selected_profile = available_profiles[choice_index]
+                                effective_active_auth_json_path = selected_profile["path"]
+                                logger.info(f"   已选择加载认证文件: {selected_profile['name']}")
+                                print(f"   已选择加载: {selected_profile['name']}", flush=True)
+                            else:
+                                logger.info("   无效的选择编号或超时。将不加载认证文件。")
+                                print("   无效的选择编号或超时。将不加载认证文件。", flush=True)
+                        except ValueError:
+                            logger.info("   无效的输入。将不加载认证文件。")
+                            print("   无效的输入。将不加载认证文件。", flush=True)
+                    else:
+                        logger.info("   好的，不加载认证文件或超时。")
+                        print("   好的，不加载认证文件或超时。", flush=True)
+                    print('-'*60, flush=True)
+                else:
+                    logger.info("   未找到认证文件。将使用浏览器当前状态。")
+                    print("   未找到认证文件。将使用浏览器当前状态。", flush=True)
 
     # 构建 Camoufox 内部启动命令 (from dev)
     camoufox_internal_cmd_args = [
