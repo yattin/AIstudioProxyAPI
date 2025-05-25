@@ -46,6 +46,7 @@ This project is generously sponsored by ZMTO. Visit their website: [https://zmto
 *   [重要提示 (Python 版本)](#重要提示-python-版本)
 *   [项目运行流程图](#项目运行流程图)
 *   [使用教程](#使用教程)
+*   [Docker 部署](#docker-部署)
     *   [1. 先决条件](#1-先决条件)
     *   [2. 安装](#2-安装)
     *   [3. 首次运行与认证 (关键!)](#3-首次运行与认证-关键)
@@ -629,6 +630,15 @@ python launch_camoufox.py --debug --server-port 2048 --stream-port 3120 --helper
 7.  保存设置。
 8.  现在，你应该可以在 Open WebUI 中选择你在第一步中配置的模型名称并开始聊天了。如果之前配置过，可能需要刷新或重新选择模型以应用新的 API 基地址。
 
+---
+
+## Docker 部署
+
+本项目支持通过 Docker 进行部署。详细的构建和运行说明，请参阅：
+
+- [Docker 部署指南 (README-Docker.md)](README-Docker.md)
+
+---
 ## 多平台指南 (Python 版本)
 
 *   **macOS / Linux**:
