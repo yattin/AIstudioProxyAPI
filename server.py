@@ -18,7 +18,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
-from playwright.async_api import Page as AsyncPage, Browser as AsyncBrowser, Playwright as AsyncPlaywright, Error as PlaywrightAsyncError, expect as expect_async, BrowserContext as AsyncBrowserContext, Locator
+from playwright.async_api import Page as AsyncPage, Browser as AsyncBrowser, Playwright as AsyncPlaywright, Error as PlaywrightAsyncError, expect as expect_async, BrowserContext as AsyncBrowserContext, Locator, TimeoutError
 from playwright.async_api import async_playwright
 from urllib.parse import urljoin, urlparse
 import uuid
@@ -41,6 +41,7 @@ TRACE_LOGS_ENABLED = os.environ.get('TRACE_LOGS_ENABLED', 'false').lower() in ('
 # --- Configuration ---
 AI_STUDIO_URL_PATTERN = 'aistudio.google.com/'
 RESPONSE_COMPLETION_TIMEOUT = 300000 # 5 minutes total timeout (in ms)
+INITIAL_WAIT_MS_BEFORE_POLLING = 500 # ms, initial wait before polling for response completion
 POLLING_INTERVAL = 300 # ms
 POLLING_INTERVAL_STREAM = 180 # ms
 SILENCE_TIMEOUT_MS = 40000 # ms
@@ -90,7 +91,9 @@ INPUT_SELECTOR2 = PROMPT_TEXTAREA_SELECTOR
 SUBMIT_BUTTON_SELECTOR = 'button[aria-label="Run"].run-button'
 RESPONSE_CONTAINER_SELECTOR = 'ms-chat-turn .chat-turn-container.model'
 RESPONSE_TEXT_SELECTOR = 'ms-cmark-node.cmark-node'
-# LOADING_SPINNER_SELECTOR = 'button[aria-label="Run"].run-button svg .stoppable-spinner'
+LOADING_SPINNER_SELECTOR = 'button[aria-label="Run"].run-button svg .stoppable-spinner'
+OVERLAY_SELECTOR = 'div.cdk-overlay-backdrop'
+WAIT_FOR_ELEMENT_TIMEOUT_MS = 10000 # Timeout for waiting for elements like overlays
 ERROR_TOAST_SELECTOR = 'div.toast.warning, div.toast.error'
 CLEAR_CHAT_BUTTON_SELECTOR = 'button[data-test-clear="outside"][aria-label="Clear chat"]'
 CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR = 'button.mdc-button:has-text("Continue")'
@@ -1464,132 +1467,111 @@ async def get_response_via_copy_button(
         return None
 
 # --- Wait for Response Completion ---
-async def _wait_for_response_completion(
+async def _wait_for_response_completion( # Renamed parameters for clarity from original user request context
     page: AsyncPage,
-    req_id: str,
-    response_element: Locator,
-    interruptible_wait_for: Callable,
-    check_client_disconnected: Callable,
-    interruptible_sleep: Callable
+    prompt_textarea_locator: Locator, # Was input_field / input_field2
+    submit_button_locator: Locator,   # Was submit_button
+    edit_button_locator: Locator,     # Was edit_button
+    req_id: str, # Was req_id_for_log
+    check_client_disconnected_func: Callable, # Was check_client_disconnected
+    current_chat_id: Optional[str], # New, for check_client_disconnected_func if it needs it
+    timeout_ms=RESPONSE_COMPLETION_TIMEOUT,
+    initial_wait_ms=INITIAL_WAIT_MS_BEFORE_POLLING
 ) -> bool:
-    logger.info(f"[{req_id}] (Helper Wait) 开始等待响应完成... (超时: {RESPONSE_COMPLETION_TIMEOUT}ms)")
-    start_time_ns = time.time()
-    # spinner_locator = page.locator(LOADING_SPINNER_SELECTOR) # SPINNER REMOVED
-    input_field = page.locator(INPUT_SELECTOR)
-    input_field2 = page.locator(INPUT_SELECTOR2)
-    submit_button = page.locator(SUBMIT_BUTTON_SELECTOR)
-    edit_button = page.locator(EDIT_MESSAGE_BUTTON_SELECTOR)
-    while time.time() - start_time_ns < RESPONSE_COMPLETION_TIMEOUT / 1000:
-        check_client_disconnected("等待完成循环开始: ")
+    spinner_locator = page.locator(LOADING_SPINNER_SELECTOR)
+    logger.info(f"[{req_id}] (WaitV2) 开始等待响应完成... (超时: {timeout_ms}ms)")
+    await asyncio.sleep(initial_wait_ms / 1000) # Initial brief wait
+    
+    start_time = time.time()
+    # Shorter timeout for individual checks, e.g., 1/20th of total, min 1s.
+    wait_timeout_ms_short = max(1000, int(timeout_ms / 20))
+    
+    consecutive_empty_input_submit_disabled_count = 0
+    
+    while True:
+        if await check_client_disconnected_func(current_chat_id, req_id): # Use current_chat_id if needed by func
+            logger.info(f"[{req_id}] (WaitV2) 客户端断开连接，中止等待。")
+            return False
 
-        # observed_spinner_hidden = False # SPINNER REMOVED
-        observed_input_empty = False
-        observed_button_disabled = False
-        current_state_check_error = None
+        current_time_elapsed_ms = (time.time() - start_time) * 1000
+        if current_time_elapsed_ms > timeout_ms:
+            logger.error(f"[{req_id}] (WaitV2) 等待响应完成超时 ({timeout_ms}ms)。")
+            try: # Final quick check for spinner before declaring timeout
+                if await spinner_locator.is_visible(timeout=100):
+                    logger.warning(f"[{req_id}] (WaitV2) 超时，且主响应 Spinner 仍然可见。")
+            except TimeoutError: pass # Ignore, just a final check
+            await save_error_snapshot(f"wait_completion_v2_overall_timeout_{req_id}")
+            return False
 
+        # --- Spinner Check (Primary Indicator of Active Generation) ---
+        spinner_is_currently_visible = False
         try:
+            if await spinner_locator.is_visible(timeout=100): # Quick check
+                spinner_is_currently_visible = True
+                if DEBUG_LOGS_ENABLED: logger.debug(f"[{req_id}] (WaitV2) 主响应 Spinner 可见。等待其消失...")
+                # If spinner is visible, we should prioritize waiting for it.
+                try:
+                    await expect_async(spinner_locator).to_be_hidden(timeout=wait_timeout_ms_short)
+                    if DEBUG_LOGS_ENABLED: logger.debug(f"[{req_id}] (WaitV2) 主响应 Spinner 已消失。")
+                    spinner_is_currently_visible = False
+                except TimeoutError:
+                    logger.warning(f"[{req_id}] (WaitV2) 等待主响应 Spinner 消失超时。将继续检查其他条件，但这可能表明问题。")
+                    # Spinner didn't disappear, but we'll proceed to check other conditions.
+            # If spinner was not visible or disappeared, spinner_is_currently_visible remains False or becomes False.
+        except TimeoutError: # Timeout on the initial is_visible(100) check
+            if DEBUG_LOGS_ENABLED: logger.debug(f"[{req_id}] (WaitV2) 初始 Spinner 可见性检查超时。假定其不可见。")
+            spinner_is_currently_visible = False # Assume not visible if check times out
+        except Exception as e_spinner_check:
+            logger.warning(f"[{req_id}] (WaitV2) 检查 Spinner 可见性时发生意外错误: {e_spinner_check}")
+            spinner_is_currently_visible = False # Assume not visible on error
 
-            # 2. 检查输入框是否为空
-            try:
-                autosize_wrapper_locator = page.locator('ms-prompt-input-wrapper ms-autosize-textarea')
-                current_data_value = await autosize_wrapper_locator.get_attribute("data-value", timeout=FINAL_STATE_CHECK_TIMEOUT_MS)
-                # 无论页面URL如何，只要输入框的 data-value 是空字符串 ""
-                # 或者 "Start typing a prompt"，都视为空（即已清空）。
-                if current_data_value == "" or current_data_value == "Start typing a prompt":
-                     observed_input_empty = True
-                else:
-                     observed_input_empty = False
-                     current_state_check_error = current_state_check_error or AssertionError(f"Input data-value ('{current_data_value}') not an expected empty state.")
-            except (PlaywrightAsyncError, asyncio.TimeoutError, AssertionError) as e:
-                  observed_input_empty = False
-                  current_state_check_error = current_state_check_error or e
-            check_client_disconnected("等待完成 - 输入框检查后: ")
+        if await check_client_disconnected_func(current_chat_id, req_id): return False
 
-            # 3. 检查提交按钮是否禁用
-            try:
-                 await expect_async(submit_button).to_be_disabled(timeout=FINAL_STATE_CHECK_TIMEOUT_MS)
-                 observed_button_disabled = True
-            except (PlaywrightAsyncError, asyncio.TimeoutError, AssertionError) as e:
-                 observed_button_disabled = False
-                 current_state_check_error = current_state_check_error or e
-            check_client_disconnected("等待完成 - 提交按钮检查后: ")
+        # --- Primary Conditions: Input Empty & Submit Disabled ---
+        is_input_empty = await prompt_textarea_locator.input_value() == ""
+        is_submit_disabled = False
+        try:
+            is_submit_disabled = await submit_button_locator.is_disabled(timeout=wait_timeout_ms_short)
+        except TimeoutError:
+            logger.warning(f"[{req_id}] (WaitV2) 检查提交按钮是否禁用超时。为本次检查假定其未禁用。")
+        
+        if await check_client_disconnected_func(current_chat_id, req_id): return False
 
-        except ClientDisconnectedError: raise
-        except Exception as unexpected_state_err:
-             logger.exception(f"[{req_id}] (Helper Wait) 状态检查中发生意外错误")
-             await save_error_snapshot(f"wait_completion_state_check_unexpected_{req_id}")
-             await asyncio.sleep(POLLING_INTERVAL_STREAM / 1000)
-             continue
+        if is_input_empty and is_submit_disabled:
+            consecutive_empty_input_submit_disabled_count += 1
+            if DEBUG_LOGS_ENABLED: logger.debug(f"[{req_id}] (WaitV2) 主要条件满足: 输入框空，提交按钮禁用 (计数: {consecutive_empty_input_submit_disabled_count})。")
 
-        # 主要完成条件：输入框空 且 按钮禁用
-        if observed_input_empty and observed_button_disabled:
-            logger.info(f"[{req_id}] (Helper Wait) 检测到主要完成状态 (输入框空 & 按钮禁用)。开始检查编辑按钮...")
-            
-            # if observed_spinner_hidden: # 如果 spinner 确实隐藏了，可以保留这个延迟 # SPINNER REMOVED
-            #     await asyncio.sleep(POST_SPINNER_CHECK_DELAY_MS / 1000) # SPINNER REMOVED
-            #     check_client_disconnected("等待完成 - Spinner消失且主要条件满足后延时后: ") # SPINNER REMOVED
-
-            edit_button_check_start = time.time()
-            edit_button_visible = False
-            # 移除 last_focus_attempt_time 和相关逻辑
-            while time.time() - edit_button_check_start < SILENCE_TIMEOUT_MS / 1000:
-                check_client_disconnected("等待完成 - 编辑按钮检查循环: ")
+            # --- Secondary Confirmation: Spinner MUST be hidden if primary conditions met ---
+            if spinner_is_currently_visible: # If spinner check above found it visible and didn't hide it
+                logger.warning(f"[{req_id}] (WaitV2) 主要条件满足，但 Spinner 仍然可见。这不符合预期，继续轮询。")
+                # Reset counter because this state is ambiguous / problematic
+                consecutive_empty_input_submit_disabled_count = 0
+            else: # Spinner is confirmed hidden (or was never seen)
+                # --- Final Confirmation: Edit Button Visible ---
+                try:
+                    if await edit_button_locator.is_visible(timeout=wait_timeout_ms_short):
+                        logger.info(f"[{req_id}] (WaitV2) ✅ 响应完成: 输入框空，提交按钮禁用，Spinner隐藏，编辑按钮可见。")
+                        return True # Definite completion
+                except TimeoutError:
+                    if DEBUG_LOGS_ENABLED: logger.debug(f"[{req_id}] (WaitV2) 检查编辑按钮可见性超时 (在Spinner检查后)。")
                 
-                # 在检查可见性之前，尝试悬停在最后一条消息上以触发按钮显示
-                last_message_turn = page.locator('ms-chat-turn').last
-                try:
-                    if DEBUG_LOGS_ENABLED:
-                        logger.debug(f"[{req_id}] (Helper Wait)   - 尝试悬停在最后一条消息上...")
-                    await last_message_turn.hover(timeout=1000) # 增加悬停操作
-                    await asyncio.sleep(0.2) # 短暂等待悬停效果生效
-                except (PlaywrightAsyncError, asyncio.TimeoutError) as hover_err:
-                    if DEBUG_LOGS_ENABLED:
-                        logger.debug(f"[{req_id}] (Helper Wait)   - 悬停最后一条消息失败 (忽略): {type(hover_err).__name__}")
-                except ClientDisconnectedError: raise
-                except Exception as unexpected_hover_err:
-                    logger.warning(f"[{req_id}] (Helper Wait)   - 悬停最后一条消息时发生意外错误 (忽略): {unexpected_hover_err}")
-                check_client_disconnected("等待完成 - 编辑按钮循环悬停后: ")
+                if await check_client_disconnected_func(current_chat_id, req_id): return False
 
-                try:
-                    is_visible = False
-                    try:
-                        is_visible = await edit_button.is_visible(timeout=500)
-                    except asyncio.TimeoutError:
-                        is_visible = False
-                    except PlaywrightAsyncError as pw_vis_err:
-                        logger.warning(f"[{req_id}] (Helper Wait)   - is_visible 检查Playwright错误(忽略): {pw_vis_err}")
-                        is_visible = False
-                    check_client_disconnected("等待完成 - 编辑按钮 is_visible 检查后: ")
-                    if is_visible:
-                        logger.info(f"[{req_id}] (Helper Wait) ✅ 编辑按钮已出现 (is_visible)，确认响应完成。")
-                        edit_button_visible = True
-                        return True # 响应完成
-                    else:
-                          if DEBUG_LOGS_ENABLED and (time.time() - edit_button_check_start) > 1.0:
-                               logger.debug(f"[{req_id}] (Helper Wait)   - 编辑按钮尚不可见... (is_visible returned False or timed out)")
-                except ClientDisconnectedError: raise
-                except Exception as unexpected_btn_err:
-                     logger.warning(f"[{req_id}] (Helper Wait)   - 检查编辑按钮时意外错误: {unexpected_btn_err}")
-                await asyncio.sleep(POLLING_INTERVAL_STREAM / 1000)
-            
-            if not edit_button_visible:
-                logger.warning(f"[{req_id}] (Helper Wait) 主要完成状态满足后，编辑按钮未在 {SILENCE_TIMEOUT_MS}ms 内出现。判定为超时。")
-                await save_error_snapshot(f"wait_completion_edit_button_timeout_after_primary_{req_id}")
-                return False # 特定超时，但比整体超时快
-        else: # 主要条件 (输入框空和按钮禁用) 未满足
+                # Heuristic: If primary conditions (empty input, disabled submit) AND hidden spinner persist
+                if consecutive_empty_input_submit_disabled_count >= 3: # e.g., for ~1.5s (3 * 0.5s polling)
+                    logger.warning(f"[{req_id}] (WaitV2) 响应可能已完成: 输入框空，提交按钮禁用，Spinner隐藏，但在 {consecutive_empty_input_submit_disabled_count} 次检查后编辑按钮仍未出现。假定完成。")
+                    await save_error_snapshot(f"wait_completion_v2_heuristic_no_edit_{req_id}")
+                    return True
+        else: # Primary conditions (empty input & disabled submit) NOT met
+            consecutive_empty_input_submit_disabled_count = 0 # Reset counter
             if DEBUG_LOGS_ENABLED:
                 reasons = []
-                if not observed_input_empty: reasons.append("Input not empty")
-                if not observed_button_disabled: reasons.append("Button not disabled")
-                # Spinner 状态在这里仅供参考
-                error_info = f" (Last Check Error in iter: {type(current_state_check_error).__name__})" if current_state_check_error else ""
-                logger.debug(f"[{req_id}] (Helper Wait) 主要完成状态未满足 ({', '.join(reasons)}{error_info}). 继续轮询...")
-            await asyncio.sleep(POLLING_INTERVAL_STREAM / 1000)
-            continue # 继续轮询
+                if not is_input_empty: reasons.append("输入框非空")
+                if not is_submit_disabled: reasons.append("提交按钮非禁用")
+                if spinner_is_currently_visible: reasons.append("Spinner可见")
+                logger.debug(f"[{req_id}] (WaitV2) 主要条件或Spinner条件未满足 ({', '.join(reasons)}). 继续轮询...")
 
-    logger.error(f"[{req_id}] (Helper Wait) 等待响应完成超时 ({RESPONSE_COMPLETION_TIMEOUT}ms)。")
-    await save_error_snapshot(f"wait_completion_overall_timeout_{req_id}")
-    return False
+        await asyncio.sleep(0.5) # Polling interval
 
 # --- Get Final Response Content ---
 async def _get_final_response_content(
@@ -1940,83 +1922,108 @@ async def _process_request_refactored(
         check_client_disconnected("After Prompt Prep: ")
         logger.info(f"[{req_id}] (Refactored Process) 开始清空聊天记录...")
         try:
-            clear_chat_button = page.locator(CLEAR_CHAT_BUTTON_SELECTOR)
-            confirm_button = page.locator(CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR)
-            overlay_locator = page.locator('div.cdk-overlay-backdrop')
-            proceed_with_clear_clicks = False
+            clear_chat_button_locator = page.locator(CLEAR_CHAT_BUTTON_SELECTOR)
+            confirm_button_locator = page.locator(CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR)
+            overlay_locator = page.locator(OVERLAY_SELECTOR)
+
+            can_attempt_clear = False
             try:
-                await expect_async(clear_chat_button).to_be_enabled(timeout=3000)
-                proceed_with_clear_clicks = True
-            except Exception as e:
+                await expect_async(clear_chat_button_locator).to_be_enabled(timeout=3000)
+                can_attempt_clear = True
+                logger.info(f"[{req_id}] “清空聊天”按钮可用，继续清空流程。")
+            except Exception as e_enable:
                 is_new_chat_url = '/prompts/new_chat' in page.url.rstrip('/')
                 if is_new_chat_url:
-                    logger.info(f"[{req_id}] 清空按钮不可用 (预期)。")
+                    logger.info(f"[{req_id}] “清空聊天”按钮不可用 (预期，因为在 new_chat 页面)。跳过清空操作。")
                 else:
-                    logger.warning(f"[{req_id}] 等待清空按钮失败: {e}。跳过点击。")
-            check_client_disconnected("After Clear Button Check: ")
-            if proceed_with_clear_clicks:
-                try:
-                    await expect_async(overlay_locator).to_be_hidden(timeout=3000)
-                except Exception as overlay_err:
-                    logger.warning(f"[{req_id}] Overlay did not disappear before clear click (ignored): {overlay_err}")
-                check_client_disconnected("After Overlay Check (Before Clear): ")
-                await clear_chat_button.click(timeout=5000)
-                check_client_disconnected("After Clear Button Click: ")
-                confirm_button_locator = page.locator(CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR)
-                try:
-                    logger.info(f"[{req_id}] 等待清空确认按钮 '{CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR}' 可见并可点击...")
-                    await expect_async(confirm_button_locator).to_be_enabled(timeout=10000)
-                    logger.info(f"[{req_id}] ✅ 清空确认按钮已准备好。")
-                    check_client_disconnected("After Confirm Button Enabled: ")
-                    await confirm_button_locator.click(timeout=5000)
-                    check_client_disconnected("After Confirm Button Click: ")
-                    logger.info(f"[{req_id}] 清空确认按钮已点击。")
+                    logger.warning(f"[{req_id}] 等待“清空聊天”按钮可用失败: {e_enable}。清空操作可能无法执行。")
+            
+            check_client_disconnected("清空聊天 - “清空聊天”按钮可用性检查后: ")
 
-                    # 添加健壮性处理：等待确认按钮不可见，最多重试三次
-                    max_retries = 3
-                    for i in range(max_retries):
-                        try:
-                            logger.info(f"[{req_id}] 尝试 {i+1}/{max_retries}: 等待清空确认按钮变为不可见...")
-                            await expect_async(confirm_button_locator).to_be_hidden(timeout=CLEAR_CHAT_VERIFY_TIMEOUT_MS)
-                            logger.info(f"[{req_id}] ✅ 清空确认按钮已不可见。")
-                            break # 按钮已不可见，跳出循环
-                        except PlaywrightAsyncError as e_hidden:
-                            logger.warning(f"[{req_id}] ⚠️ 尝试 {i+1}/{max_retries}: 清空确认按钮仍可见或等待超时: {e_hidden}")
-                            if i < max_retries - 1:
-                                logger.info(f"[{req_id}] 再次点击清空确认按钮并重试...")
-                                await confirm_button_locator.click(timeout=5000)
-                                await asyncio.sleep(0.5) # 短暂延迟后重试
-                            else:
-                                logger.error(f"[{req_id}] ❌ 达到最大重试次数，清空确认按钮仍可见。")
-                                await save_error_snapshot(f"clear_chat_confirm_button_still_visible_{req_id}")
-                                raise PlaywrightAsyncError(f"Clear chat confirm button remained visible after {max_retries} retries.") from e_hidden
-                        except ClientDisconnectedError:
-                            logger.info(f"[{req_id}] 客户端在等待清空确认按钮不可见时断开连接。")
-                            raise
-                        except Exception as e_general:
-                            logger.exception(f"[{req_id}] ❌ 等待清空确认按钮不可见时发生意外错误。")
-                            await save_error_snapshot(f"clear_chat_confirm_button_unexpected_wait_error_{req_id}")
-                            raise PlaywrightAsyncError(f"Unexpected error waiting for clear chat confirm button to disappear: {e_general}") from e_general
-                        check_client_disconnected(f"清空确认按钮重试 {i+1} 后: ")
+            if can_attempt_clear:
+                overlay_initially_visible = False
+                try:
+                    if await overlay_locator.is_visible(timeout=1000): # Short timeout for initial check
+                        overlay_initially_visible = True
+                        logger.info(f"[{req_id}] 清空聊天确认遮罩层已可见。直接点击“继续”。")
+                except TimeoutError:
+                    logger.info(f"[{req_id}] 清空聊天确认遮罩层初始不可见 (检查超时或未找到)。")
+                    overlay_initially_visible = False
+                except Exception as e_vis_check:
+                    logger.warning(f"[{req_id}] 检查遮罩层可见性时发生错误: {e_vis_check}。假定不可见。")
+                    overlay_initially_visible = False
+                
+                check_client_disconnected("清空聊天 - 初始遮罩层检查后 (can_attempt_clear=True): ")
 
-                    last_response_container = page.locator(RESPONSE_CONTAINER_SELECTOR).last
-                    await asyncio.sleep(0.5)
-                    check_client_disconnected("After Clear Post-Delay: ")
+                if overlay_initially_visible:
+                    logger.info(f"[{req_id}] 点击“继续”按钮 (遮罩层已存在): {CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR}")
+                    await confirm_button_locator.click(timeout=CLICK_TIMEOUT_MS)
+                else:
+                    logger.info(f"[{req_id}] 点击“清空聊天”按钮: {CLEAR_CHAT_BUTTON_SELECTOR}")
+                    await clear_chat_button_locator.click(timeout=CLICK_TIMEOUT_MS)
+                    check_client_disconnected("清空聊天 - 点击“清空聊天”后: ")
                     try:
-                        await expect_async(last_response_container).to_be_hidden(timeout=CLEAR_CHAT_VERIFY_TIMEOUT_MS - 500)
-                        logger.info(f"[{req_id}] ✅ 聊天已成功清空 (验证通过)。")
-                    except Exception as verify_err:
-                        logger.warning(f"[{req_id}] ⚠️ 警告: 清空聊天验证失败: {verify_err}")
-                except (PlaywrightAsyncError, asyncio.TimeoutError, ClientDisconnectedError) as confirm_err:
-                    if isinstance(confirm_err, ClientDisconnectedError): raise
-                    logger.error(f"[{req_id}] ❌ 等待或点击清空确认按钮时出错: {confirm_err}")
-                    await save_error_snapshot(f"clear_chat_confirm_button_error_{req_id}")
-                    raise PlaywrightAsyncError(f"Clear chat confirm button interaction failed: {confirm_err}") from confirm_err
-                except Exception as clear_exc:
-                    logger.exception(f"[{req_id}] ❌ 错误: 清空聊天确认阶段意外错误")
-                    await save_error_snapshot(f"clear_chat_confirm_unexpected_{req_id}")
-                    raise PlaywrightAsyncError(f"Unexpected error during clear chat confirmation: {clear_exc}") from clear_exc
-                check_client_disconnected("After Clear Chat Logic: ")
+                        logger.info(f"[{req_id}] 等待清空聊天确认遮罩层出现: {OVERLAY_SELECTOR}")
+                        await expect_async(overlay_locator).to_be_visible(timeout=WAIT_FOR_ELEMENT_TIMEOUT_MS)
+                        logger.info(f"[{req_id}] 清空聊天确认遮罩层已出现。")
+                    except TimeoutError:
+                        error_msg = f"等待清空聊天确认遮罩层超时 (点击清空按钮后)。请求 ID: {req_id}"
+                        logger.error(error_msg)
+                        await save_error_snapshot(f"clear_chat_overlay_timeout_{req_id}")
+                        raise PlaywrightAsyncError(error_msg)
+                    
+                    check_client_disconnected("清空聊天 - 遮罩层出现后: ")
+                    logger.info(f"[{req_id}] 点击“继续”按钮 (在对话框中): {CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR}")
+                    await confirm_button_locator.click(timeout=CLICK_TIMEOUT_MS)
+                
+                check_client_disconnected("清空聊天 - 点击“继续”后: ")
+
+                max_retries_disappear = 3
+                for attempt_disappear in range(max_retries_disappear):
+                    try:
+                        logger.info(f"[{req_id}] 等待清空聊天确认按钮/对话框消失 (尝试 {attempt_disappear + 1}/{max_retries_disappear})...")
+                        await expect_async(confirm_button_locator).to_be_hidden(timeout=CLEAR_CHAT_VERIFY_TIMEOUT_MS)
+                        await expect_async(overlay_locator).to_be_hidden(timeout=1000)
+                        logger.info(f"[{req_id}] ✅ 清空聊天确认对话框已成功消失。")
+                        break
+                    except TimeoutError:
+                        logger.warning(f"[{req_id}] ⚠️ 等待清空聊天确认对话框消失超时 (尝试 {attempt_disappear + 1}/{max_retries_disappear})。")
+                        if attempt_disappear < max_retries_disappear - 1:
+                            confirm_still_visible = False; overlay_still_visible = False
+                            try: confirm_still_visible = await confirm_button_locator.is_visible(timeout=200)
+                            except: pass
+                            try: overlay_still_visible = await overlay_locator.is_visible(timeout=200)
+                            except: pass
+                            if confirm_still_visible: logger.warning(f"[{req_id}] 确认按钮在点击和等待后仍可见。")
+                            if overlay_still_visible: logger.warning(f"[{req_id}] 遮罩层在点击和等待后仍可见。")
+                            await asyncio.sleep(1.0)
+                            check_client_disconnected(f"清空聊天 - 重试消失检查 {attempt_disappear + 1} 前: ")
+                            continue
+                        else:
+                            error_msg = f"达到最大重试次数。清空聊天确认对话框未消失。请求 ID: {req_id}"
+                            logger.error(error_msg)
+                            await save_error_snapshot(f"clear_chat_dialog_disappear_timeout_{req_id}")
+                            raise PlaywrightAsyncError(error_msg)
+                    except ClientDisconnectedError:
+                        logger.info(f"[{req_id}] 客户端在等待清空确认对话框消失时断开连接。")
+                        raise
+                    check_client_disconnected(f"清空聊天 - 消失检查尝试 {attempt_disappear + 1} 后: ")
+                
+                last_response_container = page.locator(RESPONSE_CONTAINER_SELECTOR).last
+                await asyncio.sleep(0.5)
+                check_client_disconnected("After Clear Post-Delay (New Logic): ")
+                try:
+                    await expect_async(last_response_container).to_be_hidden(timeout=CLEAR_CHAT_VERIFY_TIMEOUT_MS - 500)
+                    logger.info(f"[{req_id}] ✅ 聊天已成功清空 (验证通过 - 最后响应容器隐藏)。")
+                except Exception as verify_err:
+                    logger.warning(f"[{req_id}] ⚠️ 警告: 清空聊天验证失败 (最后响应容器未隐藏): {verify_err}")
+            else:
+                # If can_attempt_clear is False and it wasn't a new_chat_url, it means clear button wasn't enabled.
+                # Log this situation if not already handled by the e_enable exception logging.
+                if not ('/prompts/new_chat' in page.url.rstrip('/')): # Avoid logging if it was expected on new_chat
+                    logger.warning(f"[{req_id}] 由于“清空聊天”按钮初始不可用，未执行清空操作。")
+
+            check_client_disconnected("After Clear Chat Logic (New): ")
         except (PlaywrightAsyncError, asyncio.TimeoutError, ClientDisconnectedError) as clear_err:
             if isinstance(clear_err, ClientDisconnectedError): raise
             logger.error(f"[{req_id}] ❌ 错误: 清空聊天阶段出错: {clear_err}")
