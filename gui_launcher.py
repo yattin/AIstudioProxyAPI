@@ -1197,46 +1197,38 @@ def stop_selected_pid_from_list_gui():
     if not selected_indices:
         messagebox.showwarning(get_text("warning_title"), get_text("pid_list_empty_for_stop_warn"), parent=root_widget)
         return
-    selected_text = pid_listbox_widget.get(selected_indices[0])
+    selected_text = pid_listbox_widget.get(selected_indices[0]).strip()
     pid_to_stop = -1
     process_name_to_stop = get_text("unknown_process_name_placeholder")
     try:
-        # Try to parse detailed format: "[Type - Port] PID - Name"
-        # Example: "[FastAPI服务 - 2048] 1234 - python.exe"
-        match_detailed = re.match(r"\[.*?\]\s*(\d+)\s*-\s*(.*)", selected_text)
-        if match_detailed:
-            pid_to_stop = int(match_detailed.group(1))
-            process_name_to_stop = match_detailed.group(2).strip()
+        # Check for "no process" entry first, as it's a known non-PID format
+        no_process_indicator_zh = get_text("port_not_in_use_format", port_type="_", port_num="_").split("] ")[-1].strip()
+        no_process_indicator_en = LANG_TEXTS["port_not_in_use_format"]["en"].split("] ")[-1].strip()
+        general_no_pids_msg_zh = get_text("no_pids_found")
+        general_no_pids_msg_en = LANG_TEXTS["no_pids_found"]["en"]
+
+        is_no_process_entry = (no_process_indicator_zh in selected_text or \
+                               no_process_indicator_en in selected_text or \
+                               selected_text == general_no_pids_msg_zh or \
+                               selected_text == general_no_pids_msg_en)
+        if is_no_process_entry:
+            logger.info(f"Selected item is a 'no process' entry: {selected_text}")
+            return # Silently return for "no process" entries
+
+        # Try to parse the format: "[Type - Port] PID - Name (Path)" or "PID - Name (Path)"
+        # This regex will match either the detailed format or the simple "PID - Name" format
+        # It's flexible enough to handle the optional leading "[...]" part
+        match = re.match(r"^(?:\[[^\]]+\]\s*)?(\d+)\s*-\s*(.*)$", selected_text)
+        if match:
+            pid_to_stop = int(match.group(1))
+            process_name_to_stop = match.group(2).strip()
+        elif selected_text.isdigit(): # Handles if the listbox item is just a PID
+            pid_to_stop = int(selected_text)
+            # process_name_to_stop remains the default unknown
         else:
-            # Try to parse simple format: "PID - Name"
-            match_simple = re.match(r"(\d+)\s*-\s*(.*)", selected_text)
-            if match_simple:
-                pid_to_stop = int(match_simple.group(1))
-                process_name_to_stop = match_simple.group(2).strip()
-            elif selected_text.isdigit(): # Handles if the listbox item is just a PID
-                pid_to_stop = int(selected_text)
-                # process_name_to_stop remains the default unknown
-            else:
-                # If no regex matches and it's not just a PID, check if it's a "no process" entry
-                # Using placeholders for port_type and port_num as they are not critical for extracting the "no process" message part
-                no_process_indicator_zh = get_text("port_not_in_use_format", port_type="_", port_num="_").split("] ")[-1].strip()
-                no_process_indicator_en = LANG_TEXTS["port_not_in_use_format"]["en"].split("] ")[-1].strip()
-                
-                general_no_pids_msg_zh = get_text("no_pids_found")
-                general_no_pids_msg_en = LANG_TEXTS["no_pids_found"]["en"]
-
-                is_no_process_entry = (no_process_indicator_zh in selected_text or \
-                                       no_process_indicator_en in selected_text or \
-                                       selected_text == general_no_pids_msg_zh or \
-                                       selected_text == general_no_pids_msg_en)
-
-                if is_no_process_entry:
-                    logger.info(f"Selected item is a 'no process' entry: {selected_text}")
-                    return # Silently return for "no process" entries
-                else:
-                    # Genuine parsing error for an unexpected format
-                    messagebox.showerror(get_text("error_title"), get_text("error_parsing_pid", selection=selected_text), parent=root_widget)
-                    return
+            # Genuine parsing error for an unexpected format
+            messagebox.showerror(get_text("error_title"), get_text("error_parsing_pid", selection=selected_text), parent=root_widget)
+            return
     except ValueError: # Catches int() conversion errors
         messagebox.showerror(get_text("error_title"), get_text("error_parsing_pid", selection=selected_text), parent=root_widget)
         return
