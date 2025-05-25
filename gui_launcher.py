@@ -771,14 +771,27 @@ def _launch_process_gui(cmd: List[str], service_name_key: str, env_vars: Optiona
         script_path_quoted = shlex.quote(cmd[1])
         
         args_for_script_quoted = [shlex.quote(arg) for arg in cmd[2:]]
+
+        # 构建环境变量设置字符串
+        env_prefix_parts = []
+        if env_vars: # env_vars 应该是从 _configure_proxy_env_vars() 来的 proxy_env
+            for key, value in env_vars.items():
+                if value is not None: # 确保值存在且不为空字符串
+                    env_prefix_parts.append(f"{shlex.quote(key)}={shlex.quote(str(value))}")
+        env_prefix_str = " ".join(env_prefix_parts)
         
         # Construct the full shell command to be executed in the new terminal
         shell_command_parts = [
             f"cd {script_dir_quoted}",
-            "&&", # Ensure command separation
+            "&&" # Ensure command separation
+        ]
+        if env_prefix_str:
+            shell_command_parts.append(env_prefix_str)
+        
+        shell_command_parts.extend([
             python_executable_quoted,
             script_path_quoted
-        ]
+        ])
         shell_command_parts.extend(args_for_script_quoted)
         shell_command_str = " ".join(shell_command_parts)
 

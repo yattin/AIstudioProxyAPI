@@ -42,12 +42,12 @@ PYTHON_EXECUTABLE = sys.executable
 ENDPOINT_CAPTURE_TIMEOUT = 45 # 秒 (from dev)
 DEFAULT_SERVER_PORT = 2048 # FastAPI 服务器端口
 DEFAULT_CAMOUFOX_PORT = 9222 # Camoufox 调试端口 (如果内部启动需要)
-DEFAULT_HELPER_ENDPOINT = "" # 新增：默认 Helper 端点
-
+DEFAULT_HELPER_ENDPOINT = "" # 外部 Helper 端点
 AUTH_PROFILES_DIR = os.path.join(os.path.dirname(__file__), "auth_profiles")
 ACTIVE_AUTH_DIR = os.path.join(AUTH_PROFILES_DIR, "active")
 SAVED_AUTH_DIR = os.path.join(AUTH_PROFILES_DIR, "saved")
-
+HTTP_PROXY = ""
+HTTPS_PROXY = ""
 LOG_DIR = os.path.join(os.path.dirname(__file__), 'logs')
 LAUNCHER_LOG_FILE_PATH = os.path.join(LOG_DIR, 'launch_app.log')
 
@@ -450,7 +450,30 @@ if __name__ == "__main__":
         internal_mode_arg = args.internal_launch_mode
         auth_file = args.internal_auth_file
         camoufox_port_internal = args.internal_camoufox_port
-        camoufox_proxy_internal = args.internal_camoufox_proxy
+        # 代理确定逻辑
+        actual_proxy_to_use = None
+        if args.internal_camoufox_proxy:
+            actual_proxy_to_use = args.internal_camoufox_proxy
+            print(f"--- [内部Camoufox启动] 使用命令行参数 --internal-camoufox-proxy: {actual_proxy_to_use} ---", flush=True)
+        elif os.environ.get("HTTP_PROXY"):
+            actual_proxy_to_use = os.environ.get("HTTP_PROXY")
+            print(f"--- [内部Camoufox启动] 使用环境变量 HTTP_PROXY: {actual_proxy_to_use} ---", flush=True)
+        elif os.environ.get("HTTPS_PROXY"):
+            actual_proxy_to_use = os.environ.get("HTTPS_PROXY")
+            print(f"--- [内部Camoufox启动] 使用环境变量 HTTPS_PROXY: {actual_proxy_to_use} ---", flush=True)
+        else:
+            # 尝试从 gsettings 获取代理 (仅限 Linux)
+            if sys.platform.startswith('linux'):
+                gsettings_proxy = get_proxy_from_gsettings()
+                if gsettings_proxy:
+                    actual_proxy_to_use = gsettings_proxy
+                    print(f"--- [内部Camoufox启动] 使用 gsettings 系统代理: {actual_proxy_to_use} ---", flush=True)
+                else:
+                    print(f"--- [内部Camoufox启动] --internal-camoufox-proxy 未提供，环境变量 HTTP_PROXY/HTTPS_PROXY 未设置，gsettings 未找到代理。将不使用代理。 ---", flush=True)
+            else:
+                print(f"--- [内部Camoufox启动] --internal-camoufox-proxy 未提供，且环境变量 HTTP_PROXY/HTTPS_PROXY 未设置。将不使用代理。 ---", flush=True)
+        
+        camoufox_proxy_internal = actual_proxy_to_use # 更新此变量以供后续使用
         camoufox_os_internal = args.internal_camoufox_os
 
 
@@ -462,9 +485,14 @@ if __name__ == "__main__":
             launch_args_for_internal_camoufox = {
                 "port": camoufox_port_internal,
                 "addons": [],
-                "proxy": camoufox_proxy_internal,
+                # "proxy": camoufox_proxy_internal, # 已移除
                 "exclude_addons": [DefaultAddons.UBO], # Assuming DefaultAddons.UBO exists
             }
+
+            # 正确添加代理的方式
+            if camoufox_proxy_internal: # 如果代理字符串存在且不为空
+                launch_args_for_internal_camoufox["proxy"] = {"server": camoufox_proxy_internal}
+            # 如果 camoufox_proxy_internal 是 None 或空字符串，"proxy" 键就不会被添加。
             if auth_file:
                 launch_args_for_internal_camoufox["storage_state"] = auth_file
             

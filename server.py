@@ -1683,17 +1683,64 @@ async def queue_worker():
                 elif result_future.done():
                      logger.info(f"[{req_id}] (Worker) Future 在处理前已完成/取消。跳过。")
                 else:
-                    completion_event = await _process_request_refactored(
+                    returned_value = await _process_request_refactored(
                         req_id, request_data, http_request, result_future
                     )
-                    if completion_event:
+
+                    completion_event, submit_btn_loc, client_disco_checker = None, None, None
+                    current_request_was_streaming = False # Variable to track if the current request was streaming
+
+                    if isinstance(returned_value, tuple) and len(returned_value) == 3:
+                        completion_event, submit_btn_loc, client_disco_checker = returned_value
+                        # A non-None completion_event signifies a streaming request
+                        if completion_event is not None:
+                            current_request_was_streaming = True
+                            logger.info(f"[{req_id}] (Worker) _process_request_refactored returned stream info (event, locator, checker).")
+                        else:
+                            # This case (tuple of Nones) means it was likely a non-streaming path within _process_request_refactored
+                            # or an early exit where stream-specific objects weren't fully initialized.
+                            current_request_was_streaming = False # Explicitly false
+                            logger.info(f"[{req_id}] (Worker) _process_request_refactored returned a tuple, but completion_event is None (likely non-stream or early exit).")
+                    elif returned_value is None:
+                        # Explicit None return is for non-streaming success from _process_request_refactored
+                        current_request_was_streaming = False
+                        logger.info(f"[{req_id}] (Worker) _process_request_refactored returned non-stream completion (None).")
+                    else:
+                        current_request_was_streaming = False
+                        logger.warning(f"[{req_id}] (Worker) _process_request_refactored returned unexpected type: {type(returned_value)}")
+
+                    if completion_event: # This implies current_request_was_streaming is True
                          logger.info(f"[{req_id}] (Worker) 等待流式生成器完成信号...")
                          try:
                               await asyncio.wait_for(completion_event.wait(), timeout=RESPONSE_COMPLETION_TIMEOUT/1000 + 60)
                               logger.info(f"[{req_id}] (Worker) ✅ 流式生成器完成信号收到。")
+
+                              if submit_btn_loc and client_disco_checker:
+                                  logger.info(f"[{req_id}] (Worker) 流式响应完成，等待发送按钮禁用...")
+                                  wait_timeout_ms = 15000  # 15 seconds
+                                  try:
+                                      # Check disconnect before starting the potentially long wait
+                                      client_disco_checker("流式响应后等待发送按钮禁用 - 前置检查: ")
+                                      await expect_async(submit_btn_loc).to_be_disabled(timeout=wait_timeout_ms)
+                                      logger.info(f"[{req_id}] ✅ 发送按钮已禁用。")
+                                  except PlaywrightAsyncError as e_pw_disabled:
+                                      logger.warning(f"[{req_id}] ⚠️ 流式响应后等待发送按钮禁用超时或错误: {e_pw_disabled}")
+                                      await save_error_snapshot(f"stream_post_submit_button_disabled_timeout_{req_id}")
+                                  except ClientDisconnectedError:
+                                      logger.info(f"[{req_id}] 客户端在流式响应后等待发送按钮禁用时断开连接。")
+                                      # This error will be caught by the outer try/except in the worker loop if it needs to propagate
+                                  except Exception as e_disable_wait:
+                                      logger.exception(f"[{req_id}] ❌ 流式响应后等待发送按钮禁用时发生意外错误。")
+                                      await save_error_snapshot(f"stream_post_submit_button_disabled_unexpected_{req_id}")
+                              elif current_request_was_streaming: # Log if stream but no locators/checker
+                                  logger.warning(f"[{req_id}] (Worker) 流式请求但 submit_btn_loc 或 client_disco_checker 未提供。跳过按钮禁用等待。")
+
                          except asyncio.TimeoutError:
                               logger.warning(f"[{req_id}] (Worker) ⚠️ 等待流式生成器完成信号超时。")
                               if not result_future.done(): result_future.set_exception(HTTPException(status_code=504, detail=f"[{req_id}] Stream generation timed out waiting for completion signal."))
+                         except ClientDisconnectedError as cd_err: # Catch disconnect during event.wait()
+                              logger.info(f"[{req_id}] (Worker) 客户端在等待流式完成事件时断开: {cd_err}")
+                              if not result_future.done(): result_future.set_exception(HTTPException(status_code=499, detail=f"[{req_id}] Client disconnected during stream event wait."))
                          except Exception as ev_wait_err:
                               logger.error(f"[{req_id}] (Worker) ❌ 等待流式完成事件时出错: {ev_wait_err}")
                               if not result_future.done(): result_future.set_exception(HTTPException(status_code=500, detail=f"[{req_id}] Error waiting for stream completion: {ev_wait_err}"))
@@ -1771,7 +1818,7 @@ async def _process_request_refactored(
     request: ChatCompletionRequest,
     http_request: Request,
     result_future: Future
-) -> Optional[Event]:
+) -> Optional[Tuple[Event, Locator, Callable[[str], bool]]]:
     model_actually_switched_in_current_api_call = False
     logger.info(f"[{req_id}] (Refactored Process) 开始处理请求...")
     logger.info(f"[{req_id}]   请求参数 - Model: {request.model}, Stream: {request.stream}")
@@ -2185,9 +2232,28 @@ async def _process_request_refactored(
             await autosize_wrapper_locator.evaluate('(element, text) => { element.setAttribute("data-value", text); }', prepared_prompt)
             logger.info(f"[{req_id}]   - JavaScript evaluate 填充完成，data-value 已尝试更新。")
             check_client_disconnected("After Input Fill (evaluate): ")
-            await expect_async(submit_button_locator).to_be_enabled(timeout=10000)
-            check_client_disconnected("After Submit Button Enabled: ")
-            await asyncio.sleep(0.3)
+
+            logger.info(f"[{req_id}]   - 等待发送按钮启用 (填充提示后)...")
+            wait_timeout_ms_submit_enabled = 15000 # 15 seconds
+            try:
+                # Check disconnect before starting the potentially long wait
+                check_client_disconnected("填充提示后等待发送按钮启用 - 前置检查: ")
+                await expect_async(submit_button_locator).to_be_enabled(timeout=wait_timeout_ms_submit_enabled)
+                logger.info(f"[{req_id}]   - ✅ 发送按钮已启用。")
+            except PlaywrightAsyncError as e_pw_enabled:
+                logger.error(f"[{req_id}]   - ❌ 等待发送按钮启用超时或错误: {e_pw_enabled}")
+                await save_error_snapshot(f"submit_button_enable_timeout_{req_id}")
+                raise # Re-raise to be caught by the main try-except block for prompt submission
+            except ClientDisconnectedError:
+                logger.info(f"[{req_id}] 客户端在等待发送按钮启用时断开连接。")
+                raise
+            except Exception as e_enable_wait:
+                logger.exception(f"[{req_id}]   - ❌ 等待发送按钮启用时发生意外错误。")
+                await save_error_snapshot(f"submit_button_enable_unexpected_{req_id}")
+                raise
+
+            check_client_disconnected("After Submit Button Enabled (Post-Wait): ")
+            await asyncio.sleep(0.3) # Small delay after button is enabled, before pressing shortcut
             check_client_disconnected("After Submit Pre-Shortcut-Delay: ")
             submitted_successfully_via_shortcut = False
             user_prompt_autosize_locator = page.locator('ms-prompt-input-wrapper ms-autosize-textarea').nth(1)
@@ -2254,6 +2320,8 @@ async def _process_request_refactored(
                     except Exception as step_err:
                         logger.error(f"[{req_id}]   - 分步按键也失败: {step_err}")
                 check_client_disconnected("After Keyboard Press: ")
+                await asyncio.sleep(0.75) # <--- 新增此行以提供UI反应时间
+                check_client_disconnected("After Keyboard Press Post-Delay: ") # <--- 新增此行日志
                 user_prompt_actual_textarea_locator = page.locator(
                     'ms-prompt-input-wrapper textarea[aria-label="Start typing a prompt"]'
                 )
@@ -2313,9 +2381,10 @@ async def _process_request_refactored(
         check_client_disconnected("After Submit Logic: ")
 
         stream_port = os.environ.get('STREAM_PORT')
+        use_stream = stream_port != '0' # 判断是否使用你的辅助流
 
-        use_stream = stream_port != '0'
         if use_stream:
+            # 确保 generate_random_string 函数已定义或可访问
             def generate_random_string(length):
                 charset = "abcdefghijklmnopqrstuvwxyz0123456789"
                 return ''.join(random.choice(charset) for _ in range(length))
@@ -2323,98 +2392,117 @@ async def _process_request_refactored(
             if is_streaming:
                 try:
                     completion_event = Event()
+                    # 确保 create_stream_generator_from_helper 函数已定义或可访问
                     async def create_stream_generator_from_helper(event_to_set: Event) -> AsyncGenerator[str, None]:
                         last_reason_pos = 0
                         last_body_pos = 0
+                        # 使用当前AI Studio模型ID或默认模型名称
+                        model_name_for_stream = current_ai_studio_model_id or MODEL_NAME
                         chat_completion_id = f"{CHAT_COMPLETION_ID_PREFIX}{req_id}-{int(time.time())}-{random.randint(100, 999)}"
-                        created = int(time.time())
+                        created_timestamp = int(time.time())
 
-                        async for data in use_stream_response():
-                            if len(data["reason"])>last_reason_pos:
+                        async for data in use_stream_response(): # 确保 use_stream_response 是异步生成器
+                            if client_disconnected_event.is_set(): # 检查客户端是否断开
+                                logger.info(f"[{req_id}] (Helper Stream Gen) 客户端已断开，停止流。")
+                                break
+                            # --- 开始处理从 use_stream_response 获取的 data ---
+                            # (这里是你现有的解析 data 并生成 SSE 块的逻辑)
+                            # 例如:
+                            if len(data["reason"]) > last_reason_pos:
                                 output = {
                                     "id": chat_completion_id,
                                     "object": "chat.completion.chunk",
-                                    "model":"model",
-                                    "created":created,
+                                    "model": model_name_for_stream,
+                                    "created": created_timestamp,
                                     "choices":[{
                                         "delta":{
                                             "role": "assistant",
                                             "content": None,
-                                            "reasoning_content":data["reason"][last_reason_pos:],
+                                            "reasoning_content": data["reason"][last_reason_pos:],
                                         },
-                                        "finish_reason":None,
-                                        "native_finish_reason":None,
+                                        "finish_reason": None,
+                                        "native_finish_reason": None, # 保持与OpenAI兼容
                                     }]
                                 }
-
                                 last_reason_pos = len(data["reason"])
                                 yield f"data: {json.dumps(output, ensure_ascii=False, separators=(',', ':'))}\n\n"
-                            elif len(data["body"])>last_body_pos:
-                                finish_reason = None
+                            elif len(data["body"]) > last_body_pos:
+                                finish_reason_val = None
                                 if data["done"]:
-                                    finish_reason = "stop"
+                                    finish_reason_val = "stop"
+                                
+                                delta_content = {"role": "assistant", "content": data["body"][last_body_pos:]}
+                                choice_item = {
+                                    "delta": delta_content,
+                                    "finish_reason": finish_reason_val,
+                                    "native_finish_reason": finish_reason_val,
+                                }
+
+                                if data["done"] and data.get("function") and len(data["function"]) > 0:
+                                    tool_calls_list = []
+                                    for func_idx, function_call_data in enumerate(data["function"]):
+                                        tool_calls_list.append({
+                                            "id": f"call_{generate_random_string(24)}", # 确保ID唯一
+                                            "index": func_idx, # 使用实际索引
+                                            "type": "function",
+                                            "function": {
+                                                "name": function_call_data["name"],
+                                                "arguments": json.dumps(function_call_data["params"]),
+                                            },
+                                        })
+                                    delta_content["tool_calls"] = tool_calls_list
+                                    # 如果有工具调用，finish_reason 应该是 tool_calls
+                                    choice_item["finish_reason"] = "tool_calls"
+                                    choice_item["native_finish_reason"] = "tool_calls"
+                                    # 根据OpenAI规范，当有tool_calls时，content通常为null
+                                    delta_content["content"] = None
+
+
                                 output = {
                                     "id": chat_completion_id,
                                     "object": "chat.completion.chunk",
-                                    "model":"model",
-                                    "created":created,
-                                    "choices": [{
-                                        "delta": {
-                                            "role": "assistant",
-                                            "content": data["body"][last_body_pos:],
-                                            "reasoning_content": None,
-                                        },
-                                        "finish_reason": finish_reason,
-                                        "native_finish_reason": finish_reason,
-                                    }]
+                                    "model": model_name_for_stream,
+                                    "created": created_timestamp,
+                                    "choices": [choice_item]
                                 }
                                 last_body_pos = len(data["body"])
+                                yield f"data: {json.dumps(output, ensure_ascii=False, separators=(',', ':'))}\n\n"
+                            elif data["done"]: # 处理仅 'done' 为 true 的情况，可能包含函数调用但无新内容
+                                delta_content = {"role": "assistant"} # 至少需要 role
+                                choice_item = {
+                                    "delta": delta_content,
+                                    "finish_reason": "stop",
+                                    "native_finish_reason": "stop",
+                                }
 
-                                if data["done"] and len(data["function"]) > 0:
-                                    output["choices"][0]["delta"]["tool_calls"] = []
-                                    for function in data["function"]:
-                                        output["choices"][0]["delta"]["tool_calls"].append({
-                                            "id": f"call_{generate_random_string(22)}",
-                                            "index": 0,
+                                if data.get("function") and len(data["function"]) > 0:
+                                    tool_calls_list = []
+                                    for func_idx, function_call_data in enumerate(data["function"]):
+                                        tool_calls_list.append({
+                                            "id": f"call_{generate_random_string(24)}",
+                                            "index": func_idx,
                                             "type": "function",
                                             "function": {
-                                                "name": function["name"],
-                                                "arguments": json.dumps(function["params"]),
+                                                "name": function_call_data["name"],
+                                                "arguments": json.dumps(function_call_data["params"]),
                                             },
                                         })
-                                yield f"data: {json.dumps(output, ensure_ascii=False, separators=(',', ':'))}\n\n"
-                            elif data["done"]:
+                                    delta_content["tool_calls"] = tool_calls_list
+                                    choice_item["finish_reason"] = "tool_calls"
+                                    choice_item["native_finish_reason"] = "tool_calls"
+                                    delta_content["content"] = None # 有 tool_calls 时 content 为 null
+
                                 output = {
                                     "id": chat_completion_id,
                                     "object": "chat.completion.chunk",
-                                    "model":"model",
-                                    "created":created,
-                                    "choices": [{
-                                        "delta": {
-                                            "role": "assistant",
-                                            "content": None,
-                                            "reasoning_content": None,
-                                        },
-                                        "finish_reason": "stop",
-                                        "native_finish_reason": "stop",
-                                    }]
+                                    "model": model_name_for_stream,
+                                    "created": created_timestamp,
+                                    "choices": [choice_item]
                                 }
-
-                                if len(data["function"]) > 0:
-                                    #{"id":"","index":0,"type":"function","function":{"name":"","arguments":""}}
-                                    output["choices"][0]["delta"]["tool_calls"] = []
-                                    for function in data["function"]:
-                                        output["choices"][0]["delta"]["tool_calls"].append({
-                                            "id": f"call_{generate_random_string(22)}",
-                                            "index": 0,
-                                            "type": "function",
-                                            "function": {
-                                                "name": function["name"],
-                                                "arguments": json.dumps(function["params"]),
-                                            },
-                                        })
                                 yield f"data: {json.dumps(output, ensure_ascii=False, separators=(',', ':'))}\n\n"
-                        yield "data: [DONE]\n\n"
+                        # --- 结束处理从 use_stream_response 获取的 data ---
+                        
+                        yield "data: [DONE]\n\n" # 确保发送最终的 [DONE] 标记
 
                         if not event_to_set.is_set():
                             event_to_set.set()
@@ -2422,53 +2510,80 @@ async def _process_request_refactored(
                     stream_gen_func = create_stream_generator_from_helper(completion_event)
                     if not result_future.done():
                         result_future.set_result(StreamingResponse(stream_gen_func, media_type="text/event-stream"))
-                    else:
-                        if not completion_event.is_set(): completion_event.set()  # Ensure event is set if future already done
-                    return completion_event  # Return the event for the worker to wait on
+                    else: # 如果 future 已经完成（例如，被取消）
+                        if not completion_event.is_set(): completion_event.set() # 确保事件被设置
+                    
+                    # 修改后的返回语句:
+                    return completion_event, submit_button_locator, check_client_disconnected
 
                 except Exception as e:
-                    logger.error(f"[{req_id}] (Stream Gen) 从队列获取流式数据时出错: {e}")
+                    logger.error(f"[{req_id}] (Stream Gen) 从队列获取流式数据时出错: {e}", exc_info=True) # 添加 exc_info
+                    # 如果在流生成过程中出错，确保 completion_event 被设置，以防 worker 卡住
+                    if completion_event and not completion_event.is_set():
+                        completion_event.set()
+                    # 此处错误处理：当前代码会将 use_stream 设为 False 并尝试回退到 Playwright 交互。
+                    # 如果辅助流是主要方式且失败，可能直接抛出错误更合适，而不是静默回退。
+                    # 但根据现有逻辑，我们保持回退。
                     use_stream = False
-            else:
+                    logger.warning(f"[{req_id}] 辅助流处理失败，将尝试回退到 Playwright 页面交互（如果适用）。")
+
+
+            else: # 非流式辅助路径 (use_stream 为 True, is_streaming 为 False)
                 content = None
                 reasoning_content = None
                 functions = None
+                # 确保 use_stream_response 是异步迭代器
                 async for data in use_stream_response():
-                    if data["done"]:
-                        content = data["body"]
-                        reasoning_content = data["reason"]
-                        functions = data["function"]
+                    if client_disconnected_event.is_set(): # 检查客户端是否断开
+                        logger.info(f"[{req_id}] (Helper Non-Stream) 客户端已断开。")
+                        raise ClientDisconnectedError(f"[{req_id}] 客户端在非流式辅助获取期间断开。")
+                    if data["done"]: # 对于非流式，我们期望一个包含所有数据的 "done" 消息
+                        content = data.get("body") # 使用 .get() 避免 KeyError
+                        reasoning_content = data.get("reason")
+                        functions = data.get("function")
+                        break # 获取到数据后即中断
+
+                model_name_for_json = current_ai_studio_model_id or MODEL_NAME
+                message_payload = {"role": "assistant", "content": content}
+                finish_reason_val = "stop"
+
+                if functions and len(functions) > 0:
+                    tool_calls_list = []
+                    for func_idx, function_call_data in enumerate(functions):
+                        tool_calls_list.append({
+                            "id": f"call_{generate_random_string(24)}",
+                            "index": func_idx,
+                            "type": "function",
+                            "function": {
+                                "name": function_call_data["name"],
+                                "arguments": json.dumps(function_call_data["params"]),
+                            },
+                        })
+                    message_payload["tool_calls"] = tool_calls_list
+                    finish_reason_val = "tool_calls"
+                    # 当有 tool_calls 时，OpenAI 规范通常将 content 设为 null
+                    message_payload["content"] = None
+                
+                if reasoning_content: # 如果有思考过程内容，也加入到 message 中
+                    message_payload["reasoning_content"] = reasoning_content
+
 
                 response_payload = {
                     "id": f"{CHAT_COMPLETION_ID_PREFIX}{req_id}-{int(time.time())}",
-                    "object": "chat.completion", "created": int(time.time()), "model": MODEL_NAME,
+                    "object": "chat.completion", "created": int(time.time()),
+                    "model": model_name_for_json,
                     "choices": [{
                         "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "content": content,
-                            "reasoning_content":reasoning_content
-                        },
-                        "finish_reason": "stop",
-                        "native_finish_reason": "stop"
+                        "message": message_payload,
+                        "finish_reason": finish_reason_val,
+                        "native_finish_reason": finish_reason_val, # 添加 native_finish_reason
                     }],
-                    "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+                    "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0} # 伪使用数据
                 }
-                if len(functions)>0:
-                    response_payload["choices"][0]["tool_calls"] = []
-                    for function in functions:
-                        response_payload["choices"][0]["tool_calls"].append({
-                            "id": f"call_{generate_random_string(22)}",
-                            "index": 0,
-                            "type": "function",
-                            "function": {
-                                "name": function["name"],
-                                "arguments": json.dumps(function["params"]),
-                            },
-                        })
+
                 if not result_future.done():
                     result_future.set_result(JSONResponse(content=response_payload))
-                return None  # No event for non-streaming
+                return None # 非流式请求返回 None
 
 
         if not use_stream:
@@ -2718,7 +2833,7 @@ async def _process_request_refactored(
         if is_streaming and completion_event and not completion_event.is_set() and (result_future.done() and result_future.exception() is not None):
              logger.warning(f"[{req_id}] (Refactored Process) 流式请求异常，确保完成事件已设置。")
              completion_event.set()
-        return completion_event
+        return completion_event, submit_button_locator, check_client_disconnected
 
 # --- Main Chat Endpoint ---
 @app.post("/v1/chat/completions")
