@@ -2438,9 +2438,6 @@ async def _process_request_refactored(
                         created_timestamp = int(time.time())
 
                         async for data in use_stream_response(): # 确保 use_stream_response 是异步生成器
-                            if client_disconnected_event.is_set(): # 检查客户端是否断开
-                                logger.info(f"[{req_id}] (Helper Stream Gen) 客户端已断开，停止流。")
-                                break
                             # --- 开始处理从 use_stream_response 获取的 data ---
                             # (这里是你现有的解析 data 并生成 SSE 块的逻辑)
                             # 例如:
