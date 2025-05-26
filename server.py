@@ -515,7 +515,7 @@ async def _initialize_page_logic(browser: AsyncBrowser):
     launch_mode = os.environ.get('LAUNCH_MODE', 'debug')
     logger.info(f"   检测到启动模式: {launch_mode}")
     loop = asyncio.get_running_loop()
-    if launch_mode == 'headless':
+    if launch_mode == 'headless' or launch_mode == 'virtual_headless':
         auth_filename = os.environ.get('ACTIVE_AUTH_JSON_PATH')
         if auth_filename:
             constructed_path = auth_filename
@@ -523,11 +523,11 @@ async def _initialize_page_logic(browser: AsyncBrowser):
                 storage_state_path_to_use = constructed_path
                 logger.info(f"   无头模式将使用的认证文件: {constructed_path}")
             else:
-                logger.error(f"无头模式认证文件无效或不存在: '{constructed_path}'")
-                raise RuntimeError(f"无头模式认证文件无效: '{constructed_path}'")
+                logger.error(f"{launch_mode} 模式认证文件无效或不存在: '{constructed_path}'")
+                raise RuntimeError(f"{launch_mode} 模式认证文件无效: '{constructed_path}'")
         else:
-            logger.error("无头模式需要 ACTIVE_AUTH_JSON_PATH 环境变量，但未设置或为空。")
-            raise RuntimeError("无头模式需要 ACTIVE_AUTH_JSON_PATH。")
+            logger.error(f"{launch_mode} 模式需要 ACTIVE_AUTH_JSON_PATH 环境变量，但未设置或为空。")
+            raise RuntimeError(f"{launch_mode} 模式需要 ACTIVE_AUTH_JSON_PATH。")
     elif launch_mode == 'debug':
         logger.info(f"   调试模式: 尝试从环境变量 ACTIVE_AUTH_JSON_PATH 加载认证文件...")
         auth_filepath_from_env = os.environ.get('ACTIVE_AUTH_JSON_PATH')
@@ -555,6 +555,8 @@ async def _initialize_page_logic(browser: AsyncBrowser):
             logger.info(f"   (浏览器上下文将使用代理: {PLAYWRIGHT_PROXY_SETTINGS['server']})")
         else:
             logger.info("   (浏览器上下文不使用显式代理配置)")
+        context_options['ignore_https_errors'] = True
+        logger.info("   (浏览器上下文将忽略 HTTPS 错误)")
         temp_context = await browser.new_context(**context_options)
         found_page: Optional[AsyncPage] = None
         pages = temp_context.pages
@@ -1699,7 +1701,7 @@ async def queue_worker():
 
                               if submit_btn_loc and client_disco_checker:
                                   logger.info(f"[{req_id}] (Worker) 流式响应完成，等待发送按钮禁用...")
-                                  wait_timeout_ms = 15000  # 15 seconds
+                                  wait_timeout_ms = 30000  # 30 seconds
                                   try:
                                       # Check disconnect before starting the potentially long wait
                                       client_disco_checker("流式响应后等待发送按钮禁用 - 前置检查: ")
