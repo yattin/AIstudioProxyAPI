@@ -2731,7 +2731,13 @@ async def _process_request_refactored(
                 completion_detected_via_edit_button = False
                 page_model_error_message: Optional[str] = None
                 completion_detected_via_edit_button = await _wait_for_response_completion(
-                    page, req_id, response_element, None, check_client_disconnected, None
+                    page,
+                    input_field_locator,
+                    submit_button_locator,
+                    page.locator(EDIT_MESSAGE_BUTTON_SELECTOR), # edit_button_locator
+                    req_id, # req_id for _wait_for_response_completion
+                    check_client_disconnected, # check_client_disconnected_func
+                    req_id, # current_chat_id
                 )
                 check_client_disconnected("After _wait_for_response_completion attempt: ")
                 if not completion_detected_via_edit_button:
