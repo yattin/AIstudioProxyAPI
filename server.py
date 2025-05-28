@@ -1792,8 +1792,11 @@ async def use_stream_response() -> AsyncGenerator[Any, None]:
         except:
             total_empty = total_empty + 1
 
-        if total_empty > 150:
-            raise Exception("获得流式数据超时")
+        if total_empty > 1500:
+            # raise Exception("获得流式数据超时")
+            logger.error("获得流式数据超时")
+            yield {"done": True,"reason": "","body": ""}
+            return
 
         time.sleep(0.1)
 
