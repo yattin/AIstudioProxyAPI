@@ -25,6 +25,8 @@ import uuid
 import datetime
 import aiohttp
 import stream
+import queue
+
 
 # --- stream queue ---
 STREAM_QUEUE:Optional[multiprocessing.Queue] = None
@@ -1729,6 +1731,9 @@ async def queue_worker():
                          except Exception as ev_wait_err:
                               logger.error(f"[{req_id}] (Worker) ❌ 等待流式完成事件时出错: {ev_wait_err}")
                               if not result_future.done(): result_future.set_exception(HTTPException(status_code=500, detail=f"[{req_id}] Error waiting for stream completion: {ev_wait_err}"))
+            # 清空流式队列缓存
+            logger.info(f"[{req_id}] (Worker) 尝试清空流式队列缓存...")
+            await clear_stream_queue()   
             logger.info(f"[{req_id}] (Worker) 释放处理锁。")
             was_last_request_streaming = is_streaming_request
             last_request_completion_time = time.time()
@@ -1792,13 +1797,26 @@ async def use_stream_response() -> AsyncGenerator[Any, None]:
         except:
             total_empty = total_empty + 1
 
-        if total_empty > 1500:
+        if total_empty > 150:
             # raise Exception("获得流式数据超时")
             logger.error("获得流式数据超时")
             yield {"done": True,"reason": "","body": ""}
             return
 
         time.sleep(0.1)
+async def clear_stream_queue():
+    while True:
+        try:
+            data_chunk = await asyncio.to_thread(STREAM_QUEUE.get_nowait)
+            # logger.info(f"清空流式队列缓存，丢弃数据: {data_chunk}")
+        except queue.Empty:
+            logger.info("流式队列已清空 (捕获到 queue.Empty)。")
+            break
+        except Exception as e:
+            logger.error(f"清空流式队列时发生意外错误: {e}", exc_info=True)
+            break
+    logger.info("流式队列缓存清空完毕。")
+
 
 # --- Core Request Processing Logic ---
 async def _process_request_refactored(
