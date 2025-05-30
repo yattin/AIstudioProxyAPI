@@ -2293,7 +2293,7 @@ async def _process_request_refactored(
             check_client_disconnected("After Input Fill (evaluate): ")
 
             logger.info(f"[{req_id}]   - 等待发送按钮启用 (填充提示后)...")
-            wait_timeout_ms_submit_enabled = 15000 # 15 seconds
+            wait_timeout_ms_submit_enabled = 40000 # 40 seconds
             try:
                 # Check disconnect before starting the potentially long wait
                 check_client_disconnected("填充提示后等待发送按钮启用 - 前置检查: ")
@@ -3263,13 +3263,24 @@ async def _handle_initial_model_state_and_storage(page: AsyncPage):
             await _set_model_from_page_display(page, set_storage=True)
             current_page_url = page.url
             logger.info(f"   步骤 2: 重新加载页面 ({current_page_url}) 以应用 isAdvancedOpen=true...")
-            try:
-                await page.goto(current_page_url, wait_until="domcontentloaded", timeout=30000)
-                await expect_async(page.locator(INPUT_SELECTOR)).to_be_visible(timeout=30000)
-                logger.info(f"   ✅ 页面已成功重新加载到: {page.url}")
-            except Exception as reload_err:
-                logger.error(f"   ❌ 页面重新加载失败: {reload_err}. 后续模型状态可能不准确。", exc_info=True)
-                await save_error_snapshot("initial_storage_reload_fail")
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    logger.info(f"   尝试重新加载页面 (第 {attempt + 1}/{max_retries} 次): {current_page_url}")
+                    await page.goto(current_page_url, wait_until="domcontentloaded", timeout=40000)
+                    await expect_async(page.locator(INPUT_SELECTOR)).to_be_visible(timeout=30000)
+                    logger.info(f"   ✅ 页面已成功重新加载到: {page.url}")
+                    break  # 成功则跳出循环
+                except Exception as reload_err:
+                    logger.warning(f"   ⚠️ 页面重新加载尝试 {attempt + 1}/{max_retries} 失败: {reload_err}")
+                    if attempt < max_retries - 1:
+                        logger.info(f"   将在5秒后重试...")
+                        await asyncio.sleep(5)
+                    else:
+                        logger.error(f"   ❌ 页面重新加载在 {max_retries} 次尝试后最终失败: {reload_err}. 后续模型状态可能不准确。", exc_info=True)
+                        await save_error_snapshot(f"initial_storage_reload_fail_attempt_{attempt+1}")
+                        # Consider re-raising or handling more gracefully if critical
+                        # 例如，如果这是关键步骤，可能需要: raise reload_err
             logger.info("   步骤 3: 重新加载后，再次调用 _set_model_from_page_display(set_storage=False) 以同步全局模型 ID...")
             await _set_model_from_page_display(page, set_storage=False)
             logger.info(f"   ✅ 刷新和存储更新流程完成。最终全局模型 ID: {current_ai_studio_model_id}")
