@@ -32,6 +32,15 @@ import queue
 STREAM_QUEUE:Optional[multiprocessing.Queue] = None
 STREAM_PROCESS = None
 
+STREAM_TIMEOUT_LOG_STATE = {
+    "consecutive_timeouts": 0,
+    "last_error_log_time": 0.0, # 使用 time.monotonic()
+    "suppress_until_time": 0.0, # 使用 time.monotonic()
+    "max_initial_errors": 3,
+    "warning_interval_after_suppress": 60.0, # seconds
+    "suppress_duration_after_initial_burst": 300.0, # seconds
+}
+
 # --- 全局添加标记常量 ---
 USER_INPUT_START_MARKER_SERVER = "__USER_INPUT_START__"
 USER_INPUT_END_MARKER_SERVER = "__USER_INPUT_END__"
@@ -287,6 +296,7 @@ def setup_server_logging(log_level_name: str = "INFO", redirect_print_str: str =
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("websockets").setLevel(logging.WARNING)
     logging.getLogger("playwright").setLevel(logging.WARNING)
+    logging.getLogger("asyncio").setLevel(logging.ERROR) # <-- 添加此行
     logger.info("=" * 5 + " AIStudioProxyServer 日志系统已在 lifespan 中初始化 " + "=" * 5)
     logger.info(f"日志级别设置为: {logging.getLevelName(log_level)}")
     logger.info(f"日志文件路径: {APP_LOG_FILE_PATH}")
@@ -1471,111 +1481,78 @@ async def get_response_via_copy_button(
         return None
 
 # --- Wait for Response Completion ---
-async def _wait_for_response_completion( # Renamed parameters for clarity from original user request context
+async def _wait_for_response_completion(
     page: AsyncPage,
-    prompt_textarea_locator: Locator, # Was input_field / input_field2
-    submit_button_locator: Locator,   # Was submit_button
-    edit_button_locator: Locator,     # Was edit_button
-    req_id: str, # Was req_id_for_log
-    check_client_disconnected_func: Callable, # Was check_client_disconnected
-    current_chat_id: Optional[str], # New, for check_client_disconnected_func if it needs it
+    prompt_textarea_locator: Locator,
+    submit_button_locator: Locator,
+    edit_button_locator: Locator,
+    req_id: str,
+    check_client_disconnected_func: Callable,
+    current_chat_id: Optional[str],
     timeout_ms=RESPONSE_COMPLETION_TIMEOUT,
     initial_wait_ms=INITIAL_WAIT_MS_BEFORE_POLLING
 ) -> bool:
-    spinner_locator = page.locator(LOADING_SPINNER_SELECTOR)
-    logger.info(f"[{req_id}] (WaitV2) 开始等待响应完成... (超时: {timeout_ms}ms)")
+    logger.info(f"[{req_id}] (WaitV3) 开始等待响应完成... (超时: {timeout_ms}ms)")
     await asyncio.sleep(initial_wait_ms / 1000) # Initial brief wait
     
     start_time = time.time()
-    # Shorter timeout for individual checks, e.g., 1/20th of total, min 1s.
-    wait_timeout_ms_short = max(1000, int(timeout_ms / 20))
+    wait_timeout_ms_short = 3000 # 3 seconds for individual element checks
     
     consecutive_empty_input_submit_disabled_count = 0
     
     while True:
-        if check_client_disconnected_func(current_chat_id, req_id): # Use current_chat_id if needed by func
-            logger.info(f"[{req_id}] (WaitV2) 客户端断开连接，中止等待。")
+        if check_client_disconnected_func(current_chat_id, req_id):
+            logger.info(f"[{req_id}] (WaitV3) 客户端断开连接，中止等待。")
             return False
 
         current_time_elapsed_ms = (time.time() - start_time) * 1000
         if current_time_elapsed_ms > timeout_ms:
-            logger.error(f"[{req_id}] (WaitV2) 等待响应完成超时 ({timeout_ms}ms)。")
-            try: # Final quick check for spinner before declaring timeout
-                if await spinner_locator.is_visible(timeout=100):
-                    logger.warning(f"[{req_id}] (WaitV2) 超时，且主响应 Spinner 仍然可见。")
-            except TimeoutError: pass # Ignore, just a final check
-            await save_error_snapshot(f"wait_completion_v2_overall_timeout_{req_id}")
+            logger.error(f"[{req_id}] (WaitV3) 等待响应完成超时 ({timeout_ms}ms)。")
+            await save_error_snapshot(f"wait_completion_v3_overall_timeout_{req_id}")
             return False
-
-        # --- Spinner Check (Primary Indicator of Active Generation) ---
-        spinner_is_currently_visible = False
-        try:
-            if await spinner_locator.is_visible(timeout=100): # Quick check
-                spinner_is_currently_visible = True
-                if DEBUG_LOGS_ENABLED: logger.debug(f"[{req_id}] (WaitV2) 主响应 Spinner 可见。等待其消失...")
-                # If spinner is visible, we should prioritize waiting for it.
-                try:
-                    await expect_async(spinner_locator).to_be_hidden(timeout=wait_timeout_ms_short)
-                    if DEBUG_LOGS_ENABLED: logger.debug(f"[{req_id}] (WaitV2) 主响应 Spinner 已消失。")
-                    spinner_is_currently_visible = False
-                except TimeoutError:
-                    logger.warning(f"[{req_id}] (WaitV2) 等待主响应 Spinner 消失超时。将继续检查其他条件，但这可能表明问题。")
-                    # Spinner didn't disappear, but we'll proceed to check other conditions.
-            # If spinner was not visible or disappeared, spinner_is_currently_visible remains False or becomes False.
-        except TimeoutError: # Timeout on the initial is_visible(100) check
-            if DEBUG_LOGS_ENABLED: logger.debug(f"[{req_id}] (WaitV2) 初始 Spinner 可见性检查超时。假定其不可见。")
-            spinner_is_currently_visible = False # Assume not visible if check times out
-        except Exception as e_spinner_check:
-            logger.warning(f"[{req_id}] (WaitV2) 检查 Spinner 可见性时发生意外错误: {e_spinner_check}")
-            spinner_is_currently_visible = False # Assume not visible on error
 
         if check_client_disconnected_func(current_chat_id, req_id): return False
 
-        # --- Primary Conditions: Input Empty & Submit Disabled ---
+        # --- 主要条件: 输入框空 & 提交按钮禁用 ---
         is_input_empty = await prompt_textarea_locator.input_value() == ""
         is_submit_disabled = False
         try:
             is_submit_disabled = await submit_button_locator.is_disabled(timeout=wait_timeout_ms_short)
         except TimeoutError:
-            logger.warning(f"[{req_id}] (WaitV2) 检查提交按钮是否禁用超时。为本次检查假定其未禁用。")
+            logger.warning(f"[{req_id}] (WaitV3) 检查提交按钮是否禁用超时。为本次检查假定其未禁用。")
         
         if check_client_disconnected_func(current_chat_id, req_id): return False
 
         if is_input_empty and is_submit_disabled:
             consecutive_empty_input_submit_disabled_count += 1
-            if DEBUG_LOGS_ENABLED: logger.debug(f"[{req_id}] (WaitV2) 主要条件满足: 输入框空，提交按钮禁用 (计数: {consecutive_empty_input_submit_disabled_count})。")
+            if DEBUG_LOGS_ENABLED:
+                logger.debug(f"[{req_id}] (WaitV3) 主要条件满足: 输入框空，提交按钮禁用 (计数: {consecutive_empty_input_submit_disabled_count})。")
 
-            # --- Secondary Confirmation: Spinner MUST be hidden if primary conditions met ---
-            if spinner_is_currently_visible: # If spinner check above found it visible and didn't hide it
-                logger.warning(f"[{req_id}] (WaitV2) 主要条件满足，但 Spinner 仍然可见。这不符合预期，继续轮询。")
-                # Reset counter because this state is ambiguous / problematic
-                consecutive_empty_input_submit_disabled_count = 0
-            else: # Spinner is confirmed hidden (or was never seen)
-                # --- Final Confirmation: Edit Button Visible ---
-                try:
-                    if await edit_button_locator.is_visible(timeout=wait_timeout_ms_short):
-                        logger.info(f"[{req_id}] (WaitV2) ✅ 响应完成: 输入框空，提交按钮禁用，Spinner隐藏，编辑按钮可见。")
-                        return True # Definite completion
-                except TimeoutError:
-                    if DEBUG_LOGS_ENABLED: logger.debug(f"[{req_id}] (WaitV2) 检查编辑按钮可见性超时 (在Spinner检查后)。")
-                
-                if check_client_disconnected_func(current_chat_id, req_id): return False
+            # --- 最终确认: 编辑按钮可见 ---
+            try:
+                if await edit_button_locator.is_visible(timeout=wait_timeout_ms_short):
+                    logger.info(f"[{req_id}] (WaitV3) ✅ 响应完成: 输入框空，提交按钮禁用，编辑按钮可见。")
+                    return True # 明确完成
+            except TimeoutError:
+                if DEBUG_LOGS_ENABLED:
+                    logger.debug(f"[{req_id}] (WaitV3) 主要条件满足后，检查编辑按钮可见性超时。")
+            
+            if check_client_disconnected_func(current_chat_id, req_id): return False
 
-                # Heuristic: If primary conditions (empty input, disabled submit) AND hidden spinner persist
-                if consecutive_empty_input_submit_disabled_count >= 3: # e.g., for ~1.5s (3 * 0.5s polling)
-                    logger.warning(f"[{req_id}] (WaitV2) 响应可能已完成: 输入框空，提交按钮禁用，Spinner隐藏，但在 {consecutive_empty_input_submit_disabled_count} 次检查后编辑按钮仍未出现。假定完成。")
-                    await save_error_snapshot(f"wait_completion_v2_heuristic_no_edit_{req_id}")
-                    return True
-        else: # Primary conditions (empty input & disabled submit) NOT met
-            consecutive_empty_input_submit_disabled_count = 0 # Reset counter
+            # 启发式完成: 如果主要条件持续满足，但编辑按钮仍未出现
+            if consecutive_empty_input_submit_disabled_count >= 3: # 例如，大约 1.5秒 (3 * 0.5秒轮询)
+                logger.warning(f"[{req_id}] (WaitV3) 响应可能已完成 (启发式): 输入框空，提交按钮禁用，但在 {consecutive_empty_input_submit_disabled_count} 次检查后编辑按钮仍未出现。假定完成。后续若内容获取失败，可能与此有关。")
+                # 不再在此处保存快照: await save_error_snapshot(f"wait_completion_v3_heuristic_no_edit_{req_id}")
+                return True # 启发式完成
+        else: # 主要条件 (输入框空 & 提交按钮禁用) 未满足
+            consecutive_empty_input_submit_disabled_count = 0 # 重置计数器
             if DEBUG_LOGS_ENABLED:
                 reasons = []
                 if not is_input_empty: reasons.append("输入框非空")
                 if not is_submit_disabled: reasons.append("提交按钮非禁用")
-                if spinner_is_currently_visible: reasons.append("Spinner可见")
-                logger.debug(f"[{req_id}] (WaitV2) 主要条件或Spinner条件未满足 ({', '.join(reasons)}). 继续轮询...")
+                logger.debug(f"[{req_id}] (WaitV3) 主要条件未满足 ({', '.join(reasons)}). 继续轮询...")
 
-        await asyncio.sleep(0.5) # Polling interval
+        await asyncio.sleep(0.5) # 轮询间隔
 
 # --- Get Final Response Content ---
 async def _get_final_response_content(
@@ -1781,29 +1758,59 @@ async def use_helper_get_response(helper_endpoint, helper_sapisid) -> AsyncGener
         raise # Re-raise
 
 
-async def use_stream_response() -> AsyncGenerator[Any, None]:
+async def use_stream_response(req_id: str) -> AsyncGenerator[Any, None]: # 添加 req_id
     total_empty = 0
+    log_state = STREAM_TIMEOUT_LOG_STATE # Access global state
+
     while True:
+        data_chunk = None
         try:
+            if STREAM_QUEUE is None: # 检查 STREAM_QUEUE 是否为 None
+                logger.error(f"[{req_id}] STREAM_QUEUE is None in use_stream_response.")
+                yield {"done": True, "reason": "stream_system_error", "body": "Auxiliary stream not available.", "function": []}
+                return
             data_chunk = await asyncio.to_thread(STREAM_QUEUE.get_nowait)
+
             if data_chunk is not None:
-                total_empty = 0
+                total_empty = 0 # Reset counter on successful read
+                if log_state["consecutive_timeouts"] > 0: # 使用字典访问
+                    logger.info(f"[{req_id}] Auxiliary stream data received after {log_state['consecutive_timeouts']} consecutive empty reads/timeouts. Resetting.")
+                    log_state["consecutive_timeouts"] = 0
+                    log_state["suppress_until_time"] = 0.0
+                
                 data = json.loads(data_chunk)
-                if data["done"]:
-                    yield data
+                yield data
+                if data.get("done") is True:
                     return
-                else:
-                    yield data
-        except:
-            total_empty = total_empty + 1
+        except queue.Empty: # 更具体的异常
+            total_empty += 1
+        except json.JSONDecodeError as json_e: # 更具体的异常
+            logger.error(f"[{req_id}] JSONDecodeError in use_stream_response: {json_e}. Data: '{data_chunk}'")
+            total_empty += 1
+        except Exception as e_q_get: # 通用异常作为后备
+            logger.error(f"[{req_id}] Unexpected error getting from STREAM_QUEUE: {e_q_get}", exc_info=True)
+            total_empty += 1
 
-        if total_empty > 300:
-            # raise Exception("获得流式数据超时")
-            logger.error("获得流式数据超时")
-            yield {"done": True,"reason": "","body": ""}
+        if total_empty > 300: # Timeout condition
+            log_state["consecutive_timeouts"] += 1
+            current_time = time.monotonic() # 使用 monotonic time
+
+            if log_state["consecutive_timeouts"] <= log_state["max_initial_errors"]:
+                logger.error(f"[{req_id}] Auxiliary stream data timeout (Attempt {total_empty}, Consecutive global: {log_state['consecutive_timeouts']}). Helper service might be down.")
+                log_state["last_error_log_time"] = current_time
+                # Set suppress_until_time only after the initial burst of errors.
+                if log_state["consecutive_timeouts"] == log_state["max_initial_errors"]:
+                    log_state["suppress_until_time"] = current_time + log_state["suppress_duration_after_initial_burst"]
+            elif current_time >= log_state["suppress_until_time"]:
+                logger.warning(f"[{req_id}] Auxiliary stream continues to time out (Global consecutive: {log_state['consecutive_timeouts']}). Last error log ~{current_time - log_state['last_error_log_time']:.0f}s ago. Next warning in {log_state['warning_interval_after_suppress']:.0f}s.")
+                log_state["last_error_log_time"] = current_time
+                log_state["suppress_until_time"] = current_time + log_state["warning_interval_after_suppress"]
+            # Else: Log is suppressed
+
+            yield {"done": True, "reason": "internal_timeout", "body": "", "function": []} # 特定超时信号
             return
-
-        time.sleep(0.1)
+        
+        await asyncio.sleep(0.1) # 异步休眠
 async def clear_stream_queue():
     if STREAM_QUEUE is None:
         logger.info("流队列未初始化或已被禁用，跳过清空操作。")
@@ -2468,7 +2475,7 @@ async def _process_request_refactored(
                         chat_completion_id = f"{CHAT_COMPLETION_ID_PREFIX}{req_id}-{int(time.time())}-{random.randint(100, 999)}"
                         created_timestamp = int(time.time())
 
-                        async for data in use_stream_response(): # 确保 use_stream_response 是异步生成器
+                        async for data in use_stream_response(req_id): # 确保 use_stream_response 是异步生成器
                             # --- 开始处理从 use_stream_response 获取的 data ---
                             # (这里是你现有的解析 data 并生成 SSE 块的逻辑)
                             # 例如:
@@ -2596,16 +2603,27 @@ async def _process_request_refactored(
                 content = None
                 reasoning_content = None
                 functions = None
+                final_data_from_aux_stream = None # 初始化
+
                 # 确保 use_stream_response 是异步迭代器
-                async for data in use_stream_response():
-                    if client_disconnected_event.is_set(): # 检查客户端是否断开
-                        logger.info(f"[{req_id}] (Helper Non-Stream) 客户端已断开。")
-                        raise ClientDisconnectedError(f"[{req_id}] 客户端在非流式辅助获取期间断开。")
-                    if data["done"]: # 对于非流式，我们期望一个包含所有数据的 "done" 消息
+                async for data in use_stream_response(req_id): # 传递 req_id
+                    check_client_disconnected(f"非流式辅助流 - 循环中 ({req_id}): ")
+
+                    final_data_from_aux_stream = data # 存储最后收到的数据
+                    if data.get("done"): # 对于非流式，我们期望一个包含所有数据的 "done" 消息
                         content = data.get("body") # 使用 .get() 避免 KeyError
                         reasoning_content = data.get("reason")
                         functions = data.get("function")
                         break # 获取到数据后即中断
+                
+                if final_data_from_aux_stream and final_data_from_aux_stream.get("reason") == "internal_timeout":
+                    logger.error(f"[{req_id}] Non-streaming request via auxiliary stream failed: Internal Timeout from aux stream.")
+                    #确保 HTTPException 已导入: from fastapi import HTTPException
+                    raise HTTPException(status_code=502, detail=f"[{req_id}] Auxiliary stream processing error for non-streaming request (internal_timeout).")
+
+                if final_data_from_aux_stream and final_data_from_aux_stream.get("done") is True and content is None and final_data_from_aux_stream.get("reason") != "internal_timeout":
+                     logger.error(f"[{req_id}] Non-streaming request via auxiliary stream finished but provided no content. Reason: {final_data_from_aux_stream.get('reason')}.")
+                     raise HTTPException(status_code=502, detail=f"[{req_id}] Auxiliary stream finished for non-streaming request but provided no content (Reason: {final_data_from_aux_stream.get('reason')}).")
 
                 model_name_for_json = current_ai_studio_model_id or MODEL_NAME
                 message_payload = {"role": "assistant", "content": content}
