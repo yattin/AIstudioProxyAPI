@@ -737,9 +737,9 @@ python launch_camoufox.py --debug --server-port 2048 --stream-port 3120 --helper
 项目中包含了预生成的 CA 证书和密钥。如果您需要重新生成它们，可以使用以下命令：
 
 ```bash
-openssl genrsa -out cert/ca.key 2048
-openssl req -new -x509 -days 3650 -key cert/ca.key -out cert/ca.crt -subj "/C=CN/ST=Shanghai/L=Shanghai/O=AiStudioProxyHelper/OU=CA/CN=AiStudioProxyHelper CA/emailAddress=ca@example.com"
-openssl rsa -in cert/ca.key -out cert/ca.key
+openssl genrsa -out certs/ca.key 2048
+openssl req -new -x509 -days 3650 -key certs/ca.key -out certs/ca.crt -subj "/C=CN/ST=Shanghai/L=Shanghai/O=AiStudioProxyHelper/OU=CA/CN=AiStudioProxyHelper CA/emailAddress=ca@example.com"
+openssl rsa -in certs/ca.key -out certs/ca.key
 ```
 *   **认证失败 (特别是无头模式)**:
     *   **最常见**: `auth_profiles/active/` 下的 `.json` 文件已过期或无效。
