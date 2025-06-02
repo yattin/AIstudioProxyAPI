@@ -166,7 +166,7 @@ async function initializePlaywright() {
     console.log(`--- 初始化 Playwright: 连接到 ${CDP_ADDRESS} ---`);
 
     try {
-        browser = await playwright.chromium.connectOverCDP(CDP_ADDRESS, { timeout: 20000 });
+        browser = await playwright.chromium.connectOverCDP(CDP_ADDRESS, { timeout: 20000, ignoreHTTPSErrors: true });
         console.log('✅ 成功连接到正在运行的 Chrome 实例！');
 
         browser.once('disconnected', () => {
