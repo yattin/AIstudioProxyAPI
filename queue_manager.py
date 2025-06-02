@@ -14,6 +14,7 @@ from utils import (
     ChatCompletionRequest, generate_sse_chunk, generate_sse_stop_chunk,
     generate_sse_error_chunk, ClientDisconnectedError
 )
+from contextlib import asynccontextmanager
 
 
 # --- 全局状态变量 ---
@@ -24,6 +25,68 @@ page_params_cache: Dict[str, Any] = {}
 params_cache_lock: Optional[asyncio.Lock] = None
 
 logger = logging.getLogger("AIStudioProxyServer")
+
+
+def _get_future_state(future: asyncio.Future) -> str:
+    """
+    获取 Future 对象的状态描述
+
+    Args:
+        future: asyncio.Future 对象
+
+    Returns:
+        状态描述字符串
+    """
+    if future.cancelled():
+        return "cancelled"
+    elif future.done():
+        if future.exception() is not None:
+            return f"done_with_exception({type(future.exception()).__name__})"
+        else:
+            return "done_with_result"
+    else:
+        return "pending"
+
+
+@asynccontextmanager
+async def _managed_background_task(task_coro, req_id: str, task_name: str):
+    """
+    异步上下文管理器，用于管理后台任务的生命周期
+
+    Args:
+        task_coro: 要执行的协程
+        req_id: 请求ID
+        task_name: 任务名称（用于日志）
+    """
+    task = asyncio.create_task(task_coro)
+    try:
+        yield task
+    except asyncio.CancelledError:
+        logger.info(f"[{req_id}] {task_name} 被取消，清理后台任务")
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        raise
+    except Exception as e:
+        logger.error(f"[{req_id}] {task_name} 出错，清理后台任务: {e}")
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        raise
+    finally:
+        # 确保任务完成
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
 
 async def queue_worker():
@@ -45,13 +108,31 @@ async def queue_worker():
                 # 处理请求（延迟导入避免循环导入）
                 import request_processor
                 result = await request_processor.process_chat_request(request, req_id)
-                response_future.set_result(result)
-                logger.info(f"[{req_id}] 队列工作器完成请求处理")
-                
+
+                # 安全地设置 Future 结果，检查状态避免 InvalidStateError
+                if not response_future.done():
+                    response_future.set_result(result)
+                    logger.info(f"[{req_id}] 队列工作器完成请求处理")
+                else:
+                    logger.warning(f"[{req_id}] 队列工作器完成处理，但 Future 已经完成 (状态: {_get_future_state(response_future)})")
+
             except Exception as e:
                 logger.error(f"[{req_id}] 队列工作器处理请求时出错: {e}", exc_info=True)
-                response_future.set_exception(e)
+
+                # 安全地设置 Future 异常，检查状态避免 InvalidStateError
+                if not response_future.done():
+                    response_future.set_exception(e)
+                else:
+                    logger.warning(f"[{req_id}] 队列工作器处理异常，但 Future 已经完成 (状态: {_get_future_state(response_future)})")
             finally:
+                # 关键修复：每次请求处理完成后清理流式队列缓存，防止消息错位
+                logger.info(f"[{req_id}] 队列工作器尝试清空流式队列缓存...")
+                try:
+                    await clear_stream_queue()
+                    logger.debug(f"[{req_id}] 流式队列缓存清理完成")
+                except Exception as clear_err:
+                    logger.warning(f"[{req_id}] 清理流式队列缓存时出错: {clear_err}")
+
                 request_queue.task_done()
                 
         except asyncio.CancelledError:
@@ -62,25 +143,56 @@ async def queue_worker():
             await asyncio.sleep(1)  # 避免快速循环
 
 
-async def add_request_to_queue(request: ChatCompletionRequest, req_id: str) -> Any:
+async def add_request_to_queue(request: ChatCompletionRequest, req_id: str, timeout: float = 300.0) -> Any:
     """
     将请求添加到队列并等待处理结果
-    
+
     Args:
         request: 聊天完成请求
         req_id: 请求ID
-        
+        timeout: 等待超时时间（秒），默认5分钟
+
     Returns:
         处理结果
+
+    Raises:
+        RuntimeError: 队列未初始化
+        asyncio.TimeoutError: 等待超时
+        asyncio.CancelledError: 请求被取消
     """
     if not request_queue:
         raise RuntimeError("请求队列未初始化")
-    
+
     response_future = asyncio.Future()
-    await request_queue.put((req_id, request, response_future))
-    logger.info(f"[{req_id}] 请求已添加到队列，当前队列大小: {request_queue.qsize()}")
-    
-    return await response_future
+
+    try:
+        await request_queue.put((req_id, request, response_future))
+        logger.info(f"[{req_id}] 请求已添加到队列，当前队列大小: {request_queue.qsize()}")
+
+        # 使用超时等待结果
+        try:
+            result = await asyncio.wait_for(response_future, timeout=timeout)
+            logger.debug(f"[{req_id}] 队列请求处理完成")
+            return result
+        except asyncio.TimeoutError:
+            logger.error(f"[{req_id}] 队列请求处理超时 ({timeout}秒)")
+            # 取消 Future 以避免后续的状态错误
+            if not response_future.done():
+                response_future.cancel()
+            raise
+        except asyncio.CancelledError:
+            logger.info(f"[{req_id}] 队列请求被取消")
+            # 确保 Future 被取消
+            if not response_future.done():
+                response_future.cancel()
+            raise
+
+    except Exception as e:
+        logger.error(f"[{req_id}] 添加请求到队列时出错: {e}")
+        # 清理 Future
+        if not response_future.done():
+            response_future.cancel()
+        raise
 
 
 async def stream_response_generator(request: ChatCompletionRequest, req_id: str) -> AsyncGenerator[str, None]:
@@ -122,21 +234,25 @@ async def stream_response_generator(request: ChatCompletionRequest, req_id: str)
                 stream=False  # 关键：设置为非流式
             )
 
-            # 启动后台任务来触发 Playwright 操作
-            playwright_task = asyncio.create_task(add_request_to_queue(non_stream_request, req_id))
+            # 使用上下文管理器启动后台任务来触发 Playwright 操作
+            async with _managed_background_task(
+                add_request_to_queue(non_stream_request, req_id),
+                req_id,
+                "Playwright 后台任务"
+            ) as playwright_task:
+                # 等待一小段时间让 Playwright 操作开始
+                await asyncio.sleep(0.5)
 
-            # 等待一小段时间让 Playwright 操作开始
-            await asyncio.sleep(0.5)
+                # 使用流式代理服务获取数据
+                async for chunk in _generate_stream_from_helper(request, req_id):
+                    yield chunk
 
-            # 使用流式代理服务获取数据
-            async for chunk in _generate_stream_from_helper(request, req_id):
-                yield chunk
-
-            # 确保 Playwright 任务完成
-            try:
-                await playwright_task
-            except Exception as e:
-                logger.warning(f"[{req_id}] Playwright 后台任务完成时出错: {e}")
+                # 确保 Playwright 任务完成
+                try:
+                    await playwright_task
+                    logger.debug(f"[{req_id}] Playwright 后台任务已完成")
+                except Exception as e:
+                    logger.warning(f"[{req_id}] Playwright 后台任务完成时出错: {e}")
         else:
             logger.info(f"[{req_id}] 使用 Playwright 页面交互进行流式响应")
             # 获取完整响应
@@ -220,7 +336,10 @@ async def _generate_stream_from_helper(request: ChatCompletionRequest, req_id: s
         # 从流式代理服务获取数据
         from request_processor import use_stream_response
         async for data in use_stream_response(req_id):
-            # 处理思考内容
+            # 添加调试日志来跟踪function call处理
+            if data.get("function"):
+                logger.info(f"[{req_id}] 流式生成器收到function call数据: {len(data['function'])} 个函数调用, done={data.get('done')}")
+            # 处理思考内容（reasoning content）
             if len(data.get("reason", "")) > last_reason_pos:
                 reasoning_content = data["reason"][last_reason_pos:]
                 output = {
@@ -241,7 +360,7 @@ async def _generate_stream_from_helper(request: ChatCompletionRequest, req_id: s
                 last_reason_pos = len(data["reason"])
                 yield f"data: {json.dumps(output, ensure_ascii=False, separators=(',', ':'))}\n\n"
 
-            # 处理主要内容
+            # 处理主要内容（body content）
             elif len(data.get("body", "")) > last_body_pos:
                 finish_reason_val = None
                 if data.get("done"):
@@ -254,7 +373,7 @@ async def _generate_stream_from_helper(request: ChatCompletionRequest, req_id: s
                     "native_finish_reason": finish_reason_val,
                 }
 
-                # 处理函数调用
+                # 关键修复：只在 done=True 时处理函数调用，与参考文件逻辑完全一致
                 if data.get("done") and data.get("function") and len(data["function"]) > 0:
                     tool_calls_list = []
                     for func_idx, function_call_data in enumerate(data["function"]):
@@ -268,8 +387,10 @@ async def _generate_stream_from_helper(request: ChatCompletionRequest, req_id: s
                             },
                         })
                     delta_content["tool_calls"] = tool_calls_list
+                    # 如果有工具调用，finish_reason 应该是 tool_calls
                     choice_item["finish_reason"] = "tool_calls"
                     choice_item["native_finish_reason"] = "tool_calls"
+                    # 根据 OpenAI 规范，当有 tool_calls 时，content 应为 null
                     delta_content["content"] = None
 
                 output = {
@@ -282,7 +403,7 @@ async def _generate_stream_from_helper(request: ChatCompletionRequest, req_id: s
                 last_body_pos = len(data["body"])
                 yield f"data: {json.dumps(output, ensure_ascii=False, separators=(',', ':'))}\n\n"
 
-            # 处理仅done为true的情况
+            # 处理仅 done=true 的情况（没有新的 body 内容）
             elif data.get("done"):
                 delta_content = {"role": "assistant"}
                 choice_item = {
@@ -291,6 +412,7 @@ async def _generate_stream_from_helper(request: ChatCompletionRequest, req_id: s
                     "native_finish_reason": "stop",
                 }
 
+                # 处理函数调用（仅在 done=true 时），与参考文件逻辑完全一致
                 if data.get("function") and len(data["function"]) > 0:
                     tool_calls_list = []
                     for func_idx, function_call_data in enumerate(data["function"]):
@@ -306,6 +428,7 @@ async def _generate_stream_from_helper(request: ChatCompletionRequest, req_id: s
                     delta_content["tool_calls"] = tool_calls_list
                     choice_item["finish_reason"] = "tool_calls"
                     choice_item["native_finish_reason"] = "tool_calls"
+                    # 有 tool_calls 时 content 为 null
                     delta_content["content"] = None
 
                 output = {
@@ -326,22 +449,58 @@ async def _generate_stream_from_helper(request: ChatCompletionRequest, req_id: s
         yield "data: [DONE]\n\n"
 
 
-def clear_stream_queue():
-    """清理流队列"""
+async def clear_stream_queue():
+    """
+    清理流队列缓存（异步版本，与原始 server.py 一致）
+
+    这个函数用于清理流式队列中的缓存数据，防止旧的响应数据
+    影响新的请求，这是修复消息错位问题的关键步骤。
+    """
+    from config import STREAM_QUEUE
+    import queue
+
+    if STREAM_QUEUE is None:
+        logger.info("流队列未初始化或已被禁用，跳过清空操作。")
+        return
+
+    cleared_count = 0
+    while True:
+        try:
+            _ = await asyncio.to_thread(STREAM_QUEUE.get_nowait)  # 丢弃缓存数据
+            cleared_count += 1
+            # 可选：记录被清理的数据（调试时有用）
+            # logger.debug(f"清空流式队列缓存，丢弃数据: {_}")
+        except queue.Empty:
+            logger.info(f"流式队列已清空 (清理了 {cleared_count} 个缓存项)。")
+            break
+        except Exception as e:
+            logger.error(f"清空流式队列时发生意外错误: {e}", exc_info=True)
+            break
+
+    if cleared_count > 0:
+        logger.info(f"流式队列缓存清空完毕，共清理 {cleared_count} 个项目。")
+
+
+def clear_stream_queue_sync():
+    """
+    同步版本的流队列清理（保留原有功能）
+    """
     global STREAM_QUEUE, STREAM_PROCESS
-    
+
     if STREAM_QUEUE:
         try:
             # 清空队列
+            cleared_count = 0
             while not STREAM_QUEUE.empty():
                 try:
                     STREAM_QUEUE.get_nowait()
+                    cleared_count += 1
                 except:
                     break
-            logger.info("流队列已清空")
+            logger.info(f"流队列已清空 (同步方式，清理了 {cleared_count} 个项目)")
         except Exception as e:
             logger.warning(f"清空流队列时出错: {e}")
-    
+
     if STREAM_PROCESS and STREAM_PROCESS.is_alive():
         try:
             STREAM_PROCESS.terminate()
@@ -353,7 +512,7 @@ def clear_stream_queue():
             logger.warning(f"终止流进程时出错: {e}")
         finally:
             STREAM_PROCESS = None
-    
+
     STREAM_QUEUE = None
 
 

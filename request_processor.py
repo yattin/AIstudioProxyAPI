@@ -77,21 +77,50 @@ async def process_chat_request(request: ChatCompletionRequest, req_id: str) -> D
 
         if use_stream:
             # 使用流式服务时，仍需要通过 Playwright 触发响应生成
-            # 但响应内容将通过流式队列获取
-            response_content = await _send_request_and_get_response_for_stream(
+            # 但响应内容将通过流式队列获取，包括function call数据
+            await _send_request_and_get_response_for_stream(
                 page_instance, combined_prompt, req_id
             )
+
+            # 从流式代理服务获取完整响应数据，包括function call
+            content = None
+            reasoning_content = None
+            functions = None
+            final_data_from_aux_stream = None
+
+            # 确保 use_stream_response 是异步迭代器，与参考文件逻辑一致
+            async for data in use_stream_response(req_id):
+                final_data_from_aux_stream = data  # 存储最后收到的数据
+                if data.get("done"):  # 对于非流式，我们期望一个包含所有数据的 "done" 消息
+                    content = data.get("body")  # 使用 .get() 避免 KeyError
+                    reasoning_content = data.get("reason")
+                    functions = data.get("function")
+                    break  # 获取到数据后即中断
+
+            if final_data_from_aux_stream and final_data_from_aux_stream.get("reason") == "internal_timeout":
+                logger.error(f"[{req_id}] Non-streaming request via auxiliary stream failed: Internal Timeout from aux stream.")
+                return _create_error_response("辅助流处理超时", req_id)
+
+            if final_data_from_aux_stream and final_data_from_aux_stream.get("done") is True and content is None and final_data_from_aux_stream.get("reason") != "internal_timeout":
+                logger.error(f"[{req_id}] Non-streaming request via auxiliary stream finished but provided no content. Reason: {final_data_from_aux_stream.get('reason')}.")
+                return _create_error_response("辅助流完成但未提供内容", req_id)
+
+            if not content:
+                return _create_error_response("AI Studio 响应为空", req_id)
+
+            # 构建成功响应，包含function call数据
+            return _create_success_response(content, target_model_id, req_id, functions, reasoning_content)
         else:
             # 传统模式：通过 Playwright 发送请求并直接获取响应
             response_content = await _send_request_and_get_response(
                 page_instance, combined_prompt, req_id
             )
 
-        if not response_content:
-            return _create_error_response("AI Studio 响应为空", req_id)
+            if not response_content:
+                return _create_error_response("AI Studio 响应为空", req_id)
 
-        # 构建成功响应
-        return _create_success_response(response_content, target_model_id, req_id)
+            # 构建成功响应（传统模式不支持function call）
+            return _create_success_response(response_content, target_model_id, req_id)
         
     except Exception as e:
         logger.error(f"[{req_id}] 处理请求时发生错误: {e}", exc_info=True)
@@ -370,8 +399,47 @@ def _create_error_response(message: str, req_id: str) -> Dict[str, Any]:
     }
 
 
-def _create_success_response(content: str, model_id: str, req_id: str) -> Dict[str, Any]:
-    """创建成功响应"""
+def _create_success_response(content: str, model_id: str, req_id: str,
+                           functions: Optional[List[Dict[str, Any]]] = None,
+                           reasoning_content: Optional[str] = None) -> Dict[str, Any]:
+    """
+    创建成功响应，支持function call和reasoning content
+
+    Args:
+        content: 响应内容
+        model_id: 模型ID
+        req_id: 请求ID
+        functions: 函数调用列表（可选）
+        reasoning_content: 思考过程内容（可选）
+
+    Returns:
+        响应字典
+    """
+    message_payload = {"role": "assistant", "content": content}
+    finish_reason_val = "stop"
+
+    # 处理function call，与参考文件逻辑完全一致
+    if functions and len(functions) > 0:
+        tool_calls_list = []
+        for func_idx, function_call_data in enumerate(functions):
+            tool_calls_list.append({
+                "id": f"call_{generate_random_string(24)}",
+                "index": func_idx,
+                "type": "function",
+                "function": {
+                    "name": function_call_data["name"],
+                    "arguments": json.dumps(function_call_data["params"]),
+                },
+            })
+        message_payload["tool_calls"] = tool_calls_list
+        finish_reason_val = "tool_calls"
+        # 当有 tool_calls 时，OpenAI 规范通常将 content 设为 null
+        message_payload["content"] = None
+
+    # 如果有思考过程内容，也加入到 message 中
+    if reasoning_content:
+        message_payload["reasoning_content"] = reasoning_content
+
     return {
         "id": f"{CHAT_COMPLETION_ID_PREFIX}{req_id}-{int(time.time())}-{generate_random_string(3)}",
         "object": "chat.completion",
@@ -379,11 +447,9 @@ def _create_success_response(content: str, model_id: str, req_id: str) -> Dict[s
         "model": model_id,
         "choices": [{
             "index": 0,
-            "message": {
-                "role": "assistant",
-                "content": content
-            },
-            "finish_reason": "stop"
+            "message": message_payload,
+            "finish_reason": finish_reason_val,
+            "native_finish_reason": finish_reason_val,  # 添加 native_finish_reason
         }],
         "usage": {
             "prompt_tokens": 0,  # AI Studio 不提供令牌计数
@@ -492,128 +558,154 @@ async def _input_prompt(page: AsyncPage, prompt: str, req_id: str):
         raise
 
 
-async def _submit_request(page: AsyncPage, req_id: str):
-    """提交请求"""
-    logger.info(f"[{req_id}] 提交请求")
+async def _submit_request(page: AsyncPage, req_id: str, max_retries: int = 3):
+    """
+    提交请求，支持重试机制
 
-    try:
-        # 使用与重构前完全相同的实现方式
-        from config import PROMPT_TEXTAREA_SELECTOR
-        prompt_textarea_locator = page.locator(PROMPT_TEXTAREA_SELECTOR)
-        submit_button_locator = page.locator(SUBMIT_BUTTON_SELECTOR)
+    Args:
+        page: Playwright 页面实例
+        req_id: 请求ID
+        max_retries: 最大重试次数，默认3次
 
-        logger.info(f"[{req_id}]   - 等待发送按钮启用 (填充提示后)...")
-        wait_timeout_ms_submit_enabled = 40000  # 40 seconds
+    Raises:
+        RuntimeError: 提交失败且重试次数用尽
+    """
+    logger.info(f"[{req_id}] 提交请求 (最大重试次数: {max_retries})")
 
-        await expect_async(submit_button_locator).to_be_enabled(timeout=wait_timeout_ms_submit_enabled)
-        logger.info(f"[{req_id}]   - ✅ 发送按钮已启用。")
-
-        await asyncio.sleep(0.3)  # Small delay after button is enabled, before pressing shortcut
-        submitted_successfully_via_shortcut = False
-
-        # 检测操作系统类型以确定快捷键
-        import os
-        host_os_from_launcher = os.environ.get('HOST_OS_FOR_SHORTCUT')
-        is_mac_determined = False
-
-        if host_os_from_launcher:
-            logger.info(f"[{req_id}]   - 从启动器环境变量 HOST_OS_FOR_SHORTCUT 获取到操作系统提示: '{host_os_from_launcher}'")
-            if host_os_from_launcher == "Darwin":
-                is_mac_determined = True
-            elif host_os_from_launcher in ["Windows", "Linux"]:
-                is_mac_determined = False
-            else:
-                logger.warning(f"[{req_id}]   - 未知的 HOST_OS_FOR_SHORTCUT 值: '{host_os_from_launcher}'。将回退到浏览器检测。")
-                host_os_from_launcher = None
-
-        if not host_os_from_launcher:
-            logger.info(f"[{req_id}]   - HOST_OS_FOR_SHORTCUT 未设置或值未知，将进行浏览器内部操作系统检测。")
-            user_agent_data_platform = None
-            try:
-                user_agent_data_platform = await page.evaluate("() => navigator.userAgentData?.platform || ''")
-            except Exception as e_ua_data:
-                logger.warning(f"[{req_id}]   - navigator.userAgentData.platform 读取失败 ({e_ua_data})，尝试 navigator.userAgent。")
-                user_agent_string = await page.evaluate("() => navigator.userAgent || ''")
-                user_agent_string_lower = user_agent_string.lower()
-                if "macintosh" in user_agent_string_lower or "mac os x" in user_agent_string_lower or "macintel" in user_agent_string_lower:
-                    user_agent_data_platform = "macOS"
-                elif "windows" in user_agent_string_lower:
-                    user_agent_data_platform = "Windows"
-                elif "linux" in user_agent_string_lower:
-                    user_agent_data_platform = "Linux"
-                else:
-                    user_agent_data_platform = "Other"
-
-            if user_agent_data_platform and user_agent_data_platform != "Other":
-                user_agent_data_platform_lower = user_agent_data_platform.lower()
-                is_mac_determined = "mac" in user_agent_data_platform_lower or "macos" in user_agent_data_platform_lower or "macintel" in user_agent_data_platform_lower
-                logger.info(f"[{req_id}]   - 浏览器内部检测到平台: '{user_agent_data_platform}', 推断 is_mac: {is_mac_determined}")
-            else:
-                logger.warning(f"[{req_id}]   - 浏览器平台信息获取失败、为空或为'Other' ('{user_agent_data_platform}')。默认使用非Mac快捷键。")
-                is_mac_determined = False
-
-        shortcut_modifier = "Meta" if is_mac_determined else "Control"
-        shortcut_key = "Enter"
-        logger.info(f"[{req_id}]   - 最终选择快捷键: {shortcut_modifier}+{shortcut_key} (基于 is_mac_determined: {is_mac_determined})")
-
-        logger.info(f"[{req_id}]   - 尝试将焦点设置到输入框...")
-        await prompt_textarea_locator.focus(timeout=5000)
-        await asyncio.sleep(0.1)
-
-        logger.info(f"[{req_id}]   - 焦点设置完成，准备按下快捷键...")
+    for attempt in range(max_retries + 1):
         try:
-            await page.keyboard.press(f'{shortcut_modifier}+{shortcut_key}')
-            logger.info(f"[{req_id}]   - 已使用组合键方式模拟按下: {shortcut_modifier}+{shortcut_key}")
-        except Exception as combo_err:
-            logger.warning(f"[{req_id}]   - 组合键方式失败: {combo_err}，尝试分步按键...")
+            logger.info(f"[{req_id}] 提交尝试 {attempt + 1}/{max_retries + 1}")
+
+            # 使用与重构前完全相同的实现方式
+            from config import PROMPT_TEXTAREA_SELECTOR
+            prompt_textarea_locator = page.locator(PROMPT_TEXTAREA_SELECTOR)
+            submit_button_locator = page.locator(SUBMIT_BUTTON_SELECTOR)
+
+            logger.info(f"[{req_id}]   - 等待发送按钮启用 (填充提示后)...")
+            wait_timeout_ms_submit_enabled = 40000  # 40 seconds
+
+            await expect_async(submit_button_locator).to_be_enabled(timeout=wait_timeout_ms_submit_enabled)
+            logger.info(f"[{req_id}]   - ✅ 发送按钮已启用。")
+
+            await asyncio.sleep(0.3)  # Small delay after button is enabled, before pressing shortcut
+            submitted_successfully_via_shortcut = False
+
+            # 检测操作系统类型以确定快捷键
+            import os
+            host_os_from_launcher = os.environ.get('HOST_OS_FOR_SHORTCUT')
+            is_mac_determined = False
+
+            if host_os_from_launcher:
+                logger.info(f"[{req_id}]   - 从启动器环境变量 HOST_OS_FOR_SHORTCUT 获取到操作系统提示: '{host_os_from_launcher}'")
+                if host_os_from_launcher == "Darwin":
+                    is_mac_determined = True
+                elif host_os_from_launcher in ["Windows", "Linux"]:
+                    is_mac_determined = False
+                else:
+                    logger.warning(f"[{req_id}]   - 未知的 HOST_OS_FOR_SHORTCUT 值: '{host_os_from_launcher}'。将回退到浏览器检测。")
+                    host_os_from_launcher = None
+
+            if not host_os_from_launcher:
+                logger.info(f"[{req_id}]   - HOST_OS_FOR_SHORTCUT 未设置或值未知，将进行浏览器内部操作系统检测。")
+                user_agent_data_platform = None
+                try:
+                    user_agent_data_platform = await page.evaluate("() => navigator.userAgentData?.platform || ''")
+                except Exception as e_ua_data:
+                    logger.warning(f"[{req_id}]   - navigator.userAgentData.platform 读取失败 ({e_ua_data})，尝试 navigator.userAgent。")
+                    user_agent_string = await page.evaluate("() => navigator.userAgent || ''")
+                    user_agent_string_lower = user_agent_string.lower()
+                    if "macintosh" in user_agent_string_lower or "mac os x" in user_agent_string_lower or "macintel" in user_agent_string_lower:
+                        user_agent_data_platform = "macOS"
+                    elif "windows" in user_agent_string_lower:
+                        user_agent_data_platform = "Windows"
+                    elif "linux" in user_agent_string_lower:
+                        user_agent_data_platform = "Linux"
+                    else:
+                        user_agent_data_platform = "Other"
+
+                if user_agent_data_platform and user_agent_data_platform != "Other":
+                    user_agent_data_platform_lower = user_agent_data_platform.lower()
+                    is_mac_determined = "mac" in user_agent_data_platform_lower or "macos" in user_agent_data_platform_lower or "macintel" in user_agent_data_platform_lower
+                    logger.info(f"[{req_id}]   - 浏览器内部检测到平台: '{user_agent_data_platform}', 推断 is_mac: {is_mac_determined}")
+                else:
+                    logger.warning(f"[{req_id}]   - 浏览器平台信息获取失败、为空或为'Other' ('{user_agent_data_platform}')。默认使用非Mac快捷键。")
+                    is_mac_determined = False
+
+            shortcut_modifier = "Meta" if is_mac_determined else "Control"
+            shortcut_key = "Enter"
+            logger.info(f"[{req_id}]   - 最终选择快捷键: {shortcut_modifier}+{shortcut_key} (基于 is_mac_determined: {is_mac_determined})")
+
+            logger.info(f"[{req_id}]   - 尝试将焦点设置到输入框...")
+            await prompt_textarea_locator.focus(timeout=5000)
+            await asyncio.sleep(0.1)
+
+            logger.info(f"[{req_id}]   - 焦点设置完成，准备按下快捷键...")
             try:
-                await page.keyboard.down(shortcut_modifier)
-                await asyncio.sleep(0.05)
-                await page.keyboard.down(shortcut_key)
-                await asyncio.sleep(0.05)
-                await page.keyboard.up(shortcut_key)
-                await asyncio.sleep(0.05)
-                await page.keyboard.up(shortcut_modifier)
-                logger.info(f"[{req_id}]   - 已使用分步按键方式模拟: {shortcut_modifier}+{shortcut_key}")
-            except Exception as step_err:
-                logger.error(f"[{req_id}]   - 分步按键也失败: {step_err}")
+                await page.keyboard.press(f'{shortcut_modifier}+{shortcut_key}')
+                logger.info(f"[{req_id}]   - 已使用组合键方式模拟按下: {shortcut_modifier}+{shortcut_key}")
+            except Exception as combo_err:
+                logger.warning(f"[{req_id}]   - 组合键方式失败: {combo_err}，尝试分步按键...")
+                try:
+                    await page.keyboard.down(shortcut_modifier)
+                    await asyncio.sleep(0.05)
+                    await page.keyboard.down(shortcut_key)
+                    await asyncio.sleep(0.05)
+                    await page.keyboard.up(shortcut_key)
+                    await asyncio.sleep(0.05)
+                    await page.keyboard.up(shortcut_modifier)
+                    logger.info(f"[{req_id}]   - 已使用分步按键方式模拟: {shortcut_modifier}+{shortcut_key}")
+                except Exception as step_err:
+                    logger.error(f"[{req_id}]   - 分步按键也失败: {step_err}")
 
-        await asyncio.sleep(0.75)  # 提供UI反应时间
+            await asyncio.sleep(0.75)  # 提供UI反应时间
 
-        # 验证提交成功
-        user_prompt_actual_textarea_locator = page.locator(
-            'ms-prompt-input-wrapper textarea[aria-label="Start typing a prompt"]'
-        )
-        validation_attempts = 7
-        validation_interval = 0.2
+            # 验证提交成功
+            user_prompt_actual_textarea_locator = page.locator(
+                'ms-prompt-input-wrapper textarea[aria-label="Start typing a prompt"]'
+            )
+            validation_attempts = 7
+            validation_interval = 0.2
 
-        for i in range(validation_attempts):
-            try:
-                current_value = await user_prompt_actual_textarea_locator.input_value(timeout=500)
-                if current_value == "":
-                    submitted_successfully_via_shortcut = True
-                    logger.info(f"[{req_id}]   - ✅ 快捷键提交成功确认 (用户输入 textarea value 已清空 after {i+1} attempts)。")
-                    break
-            except Exception as e_val:
-                logger.debug(f"[{req_id}]   - 获取用户输入 textarea value 时出错 (尝试 {i+1}): {e_val}")
+            for i in range(validation_attempts):
+                try:
+                    current_value = await user_prompt_actual_textarea_locator.input_value(timeout=500)
+                    if current_value == "":
+                        submitted_successfully_via_shortcut = True
+                        logger.info(f"[{req_id}]   - ✅ 快捷键提交成功确认 (用户输入 textarea value 已清空 after {i+1} attempts)。")
+                        break
+                except Exception as e_val:
+                    logger.debug(f"[{req_id}]   - 获取用户输入 textarea value 时出错 (尝试 {i+1}): {e_val}")
 
-            if i < validation_attempts - 1:
-                await asyncio.sleep(validation_interval)
+                if i < validation_attempts - 1:
+                    await asyncio.sleep(validation_interval)
 
-        if not submitted_successfully_via_shortcut:
-            final_value_for_log = "(无法获取或未清空)"
-            try:
-                final_value_for_log = await user_prompt_actual_textarea_locator.input_value(timeout=300)
-            except:
-                pass
-            logger.warning(f"[{req_id}]   - ⚠️ 快捷键提交后用户输入 textarea value ('{final_value_for_log}') 未在预期时间内 ({validation_attempts * validation_interval:.1f}s) 清空。")
-            raise RuntimeError("Failed to confirm prompt submission via shortcut.")
+            if submitted_successfully_via_shortcut:
+                logger.info(f"[{req_id}] 请求已提交 (尝试 {attempt + 1}/{max_retries + 1})")
+                return  # 成功提交，退出重试循环
+            else:
+                final_value_for_log = "(无法获取或未清空)"
+                try:
+                    final_value_for_log = await user_prompt_actual_textarea_locator.input_value(timeout=300)
+                except:
+                    pass
+                error_msg = f"快捷键提交后用户输入 textarea value ('{final_value_for_log}') 未在预期时间内 ({validation_attempts * validation_interval:.1f}s) 清空"
+                logger.warning(f"[{req_id}]   - ⚠️ {error_msg}")
 
-        logger.info(f"[{req_id}] 请求已提交")
+                if attempt < max_retries:
+                    logger.info(f"[{req_id}] 提交失败，将在 1 秒后重试 (尝试 {attempt + 2}/{max_retries + 1})")
+                    await asyncio.sleep(1)  # 重试前等待
+                    continue
+                else:
+                    raise RuntimeError(f"Failed to confirm prompt submission via shortcut after {max_retries + 1} attempts: {error_msg}")
 
-    except Exception as e:
-        logger.error(f"[{req_id}] 提交请求失败: {e}")
-        raise
+        except Exception as e:
+            if attempt < max_retries:
+                logger.warning(f"[{req_id}] 提交尝试 {attempt + 1} 失败: {e}，将在 1 秒后重试")
+                await asyncio.sleep(1)
+                continue
+            else:
+                logger.error(f"[{req_id}] 提交请求失败，已用尽所有重试次数: {e}")
+                raise
 
 
 async def _wait_for_response(page: AsyncPage, req_id: str) -> Optional[str]:
@@ -825,7 +917,7 @@ async def _get_response_via_copy_button(page: AsyncPage, req_id: str) -> Optiona
 async def use_stream_response(req_id: str) -> AsyncGenerator[Dict[str, Any], None]:
     """
     从流式代理服务获取响应数据的异步生成器
-    （与重构前完全一致的实现）
+    改进版本，包含更好的错误处理和消息过滤机制
 
     Args:
         req_id: 请求ID
@@ -839,46 +931,78 @@ async def use_stream_response(req_id: str) -> AsyncGenerator[Dict[str, Any], Non
     total_empty = 0
     log_state = STREAM_TIMEOUT_LOG_STATE  # 访问全局状态
 
-    while True:
-        data_chunk = None
-        try:
-            if STREAM_QUEUE is None:  # 检查 STREAM_QUEUE 是否为 None
-                logger.error(f"[{req_id}] STREAM_QUEUE is None in use_stream_response.")
-                yield {"done": True, "reason": "stream_system_error", "body": "Auxiliary stream not available.", "function": []}
+    logger.debug(f"[{req_id}] 开始从流式代理服务获取响应数据")
+
+    try:
+        while True:
+            data_chunk = None
+            try:
+                if STREAM_QUEUE is None:  # 检查 STREAM_QUEUE 是否为 None
+                    logger.error(f"[{req_id}] STREAM_QUEUE is None in use_stream_response.")
+                    yield {"done": True, "reason": "stream_system_error", "body": "Auxiliary stream not available.", "function": []}
+                    return
+
+                data_chunk = await asyncio.to_thread(STREAM_QUEUE.get_nowait)
+
+                if data_chunk is not None:
+                    total_empty = 0  # 成功读取时重置计数器
+                    if log_state["consecutive_timeouts"] > 0:  # 使用字典访问
+                        logger.info(f"[{req_id}] Auxiliary stream data received after {log_state['consecutive_timeouts']} consecutive empty reads/timeouts. Resetting.")
+                        log_state["consecutive_timeouts"] = 0  # 重置计数器
+
+                    try:
+                        data = json.loads(data_chunk)
+
+                        # 关键修复：只过滤掉包含 XML 格式工具调用的中间消息，但保留最终的function call结果
+                        # 这些消息通常包含 <function_calls> 等 XML 标签，不应发送给用户
+                        # 但是，如果消息已经完成(done=True)且包含function数据，则不应过滤
+                        body_content = data.get("body", "")
+                        if (body_content and
+                            ("<function_calls>" in body_content or
+                             "<invoke" in body_content or
+                             "<parameter>" in body_content or
+                             "antml:parameter>" in body_content) and
+                            not (data.get("done") and data.get("function"))):
+                            # 跳过包含工具调用 XML 的中间消息，但保留最终完成的function call
+                            logger.debug(f"[{req_id}] 过滤掉包含工具调用 XML 的中间消息")
+                            continue
+
+                        # 添加调试日志来跟踪function call数据
+                        if data.get("function"):
+                            logger.info(f"[{req_id}] 检测到function call数据: {len(data['function'])} 个函数调用, done={data.get('done')}")
+
+                        yield data
+                        if data.get("done") is True:
+                            logger.debug(f"[{req_id}] 流式响应完成")
+                            return
+                    except json.JSONDecodeError as json_e:
+                        logger.error(f"[{req_id}] JSONDecodeError in use_stream_response: {json_e}. Data: '{data_chunk}'")
+                        total_empty += 1
+
+            except queue.Empty:  # 更具体的异常
+                total_empty += 1
+            except json.JSONDecodeError as json_e:  # 更具体的异常
+                logger.error(f"[{req_id}] JSONDecodeError in use_stream_response: {json_e}. Data: '{data_chunk}'")
+                total_empty += 1
+            except Exception as e_q_get:  # 通用异常作为后备
+                logger.error(f"[{req_id}] Unexpected error getting from STREAM_QUEUE: {e_q_get}", exc_info=True)
+                total_empty += 1
+
+            # 超时检查逻辑（与重构前一致）
+            if total_empty >= 300:  # 300次空读取后超时
+                from queue_manager import log_stream_timeout_with_suppression
+                log_stream_timeout_with_suppression(f"[{req_id}] Auxiliary stream timeout after {total_empty} empty reads.")
+                yield {"done": True, "reason": "internal_timeout", "body": "", "function": []}
                 return
 
-            data_chunk = await asyncio.to_thread(STREAM_QUEUE.get_nowait)
+            await asyncio.sleep(0.1)  # 异步休眠
 
-            if data_chunk is not None:
-                total_empty = 0  # 成功读取时重置计数器
-                if log_state["consecutive_timeouts"] > 0:  # 使用字典访问
-                    logger.info(f"[{req_id}] Auxiliary stream data received after {log_state['consecutive_timeouts']} consecutive empty reads/timeouts. Resetting.")
-                    log_state["consecutive_timeouts"] = 0  # 重置计数器
-
-                try:
-                    data = json.loads(data_chunk)
-                    yield data
-                    if data.get("done") is True:
-                        return
-                except json.JSONDecodeError as json_e:
-                    logger.error(f"[{req_id}] JSONDecodeError in use_stream_response: {json_e}. Data: '{data_chunk}'")
-                    total_empty += 1
-
-        except queue.Empty:  # 更具体的异常
-            total_empty += 1
-        except json.JSONDecodeError as json_e:  # 更具体的异常
-            logger.error(f"[{req_id}] JSONDecodeError in use_stream_response: {json_e}. Data: '{data_chunk}'")
-            total_empty += 1
-        except Exception as e_q_get:  # 通用异常作为后备
-            logger.error(f"[{req_id}] Unexpected error getting from STREAM_QUEUE: {e_q_get}", exc_info=True)
-            total_empty += 1
-
-        # 超时检查逻辑（与重构前一致）
-        if total_empty >= 300:  # 300次空读取后超时
-            from queue_manager import log_stream_timeout_with_suppression
-            log_stream_timeout_with_suppression(f"[{req_id}] Auxiliary stream timeout after {total_empty} empty reads.")
-            yield {"done": True, "reason": "internal_timeout", "body": "", "function": []}
-            return
-
-        await asyncio.sleep(0.1)  # 异步休眠
+    except asyncio.CancelledError:
+        logger.info(f"[{req_id}] 流式响应获取被取消")
+        raise
+    except Exception as e:
+        logger.error(f"[{req_id}] 流式响应获取出现未预期错误: {e}", exc_info=True)
+        yield {"done": True, "reason": "stream_error", "body": f"Stream error: {str(e)}", "function": []}
+    finally:
+        logger.debug(f"[{req_id}] 流式响应获取结束")
 
