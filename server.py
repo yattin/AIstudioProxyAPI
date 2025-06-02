@@ -5,23 +5,28 @@ import time
 import json
 from typing import List, Optional, Dict, Any, Union, AsyncGenerator, Tuple, Callable, Set
 import os
+import traceback
 from contextlib import asynccontextmanager
 import sys
+import platform
 import logging
 import logging.handlers
+import socket # 保留 socket 以便在 __main__ 中进行简单的直接运行提示
 from asyncio import Queue, Lock, Future, Task, Event
 
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from playwright.async_api import Page as AsyncPage, Browser as AsyncBrowser, Playwright as AsyncPlaywright, Error as PlaywrightAsyncError, expect as expect_async, BrowserContext as AsyncBrowserContext, Locator, TimeoutError
 from playwright.async_api import async_playwright
+from urllib.parse import urljoin, urlparse
 import uuid
 import datetime
 import aiohttp
 import stream
 import queue
+
 
 # --- stream queue ---
 STREAM_QUEUE:Optional[multiprocessing.Queue] = None
