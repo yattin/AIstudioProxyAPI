@@ -61,14 +61,10 @@ def start_stream_proxy_server():
         config.STREAM_QUEUE = multiprocessing.Queue()
         logger.info("✅ 流队列已创建")
 
-        # 启动流式代理服务器进程（传递队列）
+        # 启动流式代理服务器进程（与参考文件完全一致的位置参数方式）
         stream_proxy_process = multiprocessing.Process(
             target=stream.start,
-            kwargs={
-                'queue': config.STREAM_QUEUE,  # 修复：传递实际的队列而不是None
-                'port': stream_port,
-                'proxy': upstream_proxy
-            }
+            args=(config.STREAM_QUEUE, stream_port, upstream_proxy)
         )
         stream_proxy_process.start()
 

@@ -12,13 +12,14 @@ from typing import Dict, Any, Optional, List, Union, AsyncGenerator
 from playwright.async_api import Page as AsyncPage, Error as PlaywrightAsyncError, TimeoutError, expect as expect_async
 
 from config import (
-    INPUT_SELECTOR, SUBMIT_BUTTON_SELECTOR, RESPONSE_CONTAINER_SELECTOR,
-    RESPONSE_TEXT_SELECTOR, LOADING_SPINNER_SELECTOR, ERROR_TOAST_SELECTOR,
-    RESPONSE_COMPLETION_TIMEOUT, INITIAL_WAIT_MS_BEFORE_POLLING, POLLING_INTERVAL,
-    SILENCE_TIMEOUT_MS, POST_SPINNER_CHECK_DELAY_MS, FINAL_STATE_CHECK_TIMEOUT_MS,
-    POST_COMPLETION_BUFFER, TEMPERATURE_INPUT_SELECTOR, MAX_OUTPUT_TOKENS_SELECTOR,
-    TOP_P_INPUT_SELECTOR, STOP_SEQUENCE_INPUT_SELECTOR, MAT_CHIP_REMOVE_BUTTON_SELECTOR,
-    CHAT_COMPLETION_ID_PREFIX, MODEL_NAME, DEFAULT_FALLBACK_MODEL_ID
+    STREAM_QUEUE, STREAM_TIMEOUT_LOG_STATE, INPUT_SELECTOR, SUBMIT_BUTTON_SELECTOR,
+    RESPONSE_CONTAINER_SELECTOR, RESPONSE_TEXT_SELECTOR, LOADING_SPINNER_SELECTOR,
+    ERROR_TOAST_SELECTOR, RESPONSE_COMPLETION_TIMEOUT, INITIAL_WAIT_MS_BEFORE_POLLING,
+    POLLING_INTERVAL, SILENCE_TIMEOUT_MS, POST_SPINNER_CHECK_DELAY_MS,
+    FINAL_STATE_CHECK_TIMEOUT_MS, POST_COMPLETION_BUFFER, TEMPERATURE_INPUT_SELECTOR,
+    MAX_OUTPUT_TOKENS_SELECTOR, TOP_P_INPUT_SELECTOR, STOP_SEQUENCE_INPUT_SELECTOR,
+    MAT_CHIP_REMOVE_BUTTON_SELECTOR, CHAT_COMPLETION_ID_PREFIX, MODEL_NAME,
+    DEFAULT_FALLBACK_MODEL_ID
 )
 from utils import (
     ChatCompletionRequest, Message, validate_chat_request, prepare_combined_prompt,
@@ -925,7 +926,6 @@ async def use_stream_response(req_id: str) -> AsyncGenerator[Dict[str, Any], Non
     Yields:
         包含响应数据的字典
     """
-    from config import STREAM_QUEUE, STREAM_TIMEOUT_LOG_STATE
     import queue
 
     total_empty = 0
@@ -949,28 +949,13 @@ async def use_stream_response(req_id: str) -> AsyncGenerator[Dict[str, Any], Non
                     if log_state["consecutive_timeouts"] > 0:  # 使用字典访问
                         logger.info(f"[{req_id}] Auxiliary stream data received after {log_state['consecutive_timeouts']} consecutive empty reads/timeouts. Resetting.")
                         log_state["consecutive_timeouts"] = 0  # 重置计数器
+                        log_state["suppress_until_time"] = 0.0  # 重置抑制时间，与参考文件一致
 
                     try:
                         data = json.loads(data_chunk)
 
-                        # 关键修复：只过滤掉包含 XML 格式工具调用的中间消息，但保留最终的function call结果
-                        # 这些消息通常包含 <function_calls> 等 XML 标签，不应发送给用户
-                        # 但是，如果消息已经完成(done=True)且包含function数据，则不应过滤
-                        body_content = data.get("body", "")
-                        if (body_content and
-                            ("<function_calls>" in body_content or
-                             "<invoke" in body_content or
-                             "<parameter>" in body_content or
-                             "antml:parameter>" in body_content) and
-                            not (data.get("done") and data.get("function"))):
-                            # 跳过包含工具调用 XML 的中间消息，但保留最终完成的function call
-                            logger.debug(f"[{req_id}] 过滤掉包含工具调用 XML 的中间消息")
-                            continue
-
-                        # 添加调试日志来跟踪function call数据
-                        if data.get("function"):
-                            logger.info(f"[{req_id}] 检测到function call数据: {len(data['function'])} 个函数调用, done={data.get('done')}")
-
+                        # 恢复与参考文件完全一致的简洁逻辑
+                        # 不在此层进行任何过滤，保持数据传输的完整性
                         yield data
                         if data.get("done") is True:
                             logger.debug(f"[{req_id}] 流式响应完成")
@@ -988,11 +973,24 @@ async def use_stream_response(req_id: str) -> AsyncGenerator[Dict[str, Any], Non
                 logger.error(f"[{req_id}] Unexpected error getting from STREAM_QUEUE: {e_q_get}", exc_info=True)
                 total_empty += 1
 
-            # 超时检查逻辑（与重构前一致）
-            if total_empty >= 300:  # 300次空读取后超时
-                from queue_manager import log_stream_timeout_with_suppression
-                log_stream_timeout_with_suppression(f"[{req_id}] Auxiliary stream timeout after {total_empty} empty reads.")
-                yield {"done": True, "reason": "internal_timeout", "body": "", "function": []}
+            # 超时检查逻辑（与参考文件完全一致）
+            if total_empty > 300:  # 修复：使用 > 而不是 >=，与参考文件一致
+                log_state["consecutive_timeouts"] += 1
+                current_time = time.monotonic()  # 使用 monotonic time
+
+                if log_state["consecutive_timeouts"] <= log_state["max_initial_errors"]:
+                    logger.error(f"[{req_id}] Auxiliary stream data timeout (Attempt {total_empty}, Consecutive global: {log_state['consecutive_timeouts']}). Helper service might be down.")
+                    log_state["last_error_log_time"] = current_time
+                    # Set suppress_until_time only after the initial burst of errors.
+                    if log_state["consecutive_timeouts"] == log_state["max_initial_errors"]:
+                        log_state["suppress_until_time"] = current_time + log_state["suppress_duration_after_initial_burst"]
+                elif current_time >= log_state["suppress_until_time"]:
+                    logger.warning(f"[{req_id}] Auxiliary stream continues to time out (Global consecutive: {log_state['consecutive_timeouts']}). Last error log ~{current_time - log_state['last_error_log_time']:.0f}s ago. Next warning in {log_state['warning_interval_after_suppress']:.0f}s.")
+                    log_state["last_error_log_time"] = current_time
+                    log_state["suppress_until_time"] = current_time + log_state["warning_interval_after_suppress"]
+                # Else: Log is suppressed
+
+                yield {"done": True, "reason": "internal_timeout", "body": "", "function": []}  # 特定超时信号
                 return
 
             await asyncio.sleep(0.1)  # 异步休眠
