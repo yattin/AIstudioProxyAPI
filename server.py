@@ -5,13 +5,13 @@ import time
 import json
 from typing import List, Optional, Dict, Any, Union, AsyncGenerator, Tuple, Callable, Set
 import os
-import traceback
+
 from contextlib import asynccontextmanager
 import sys
-import platform
+
 import logging
 import logging.handlers
-import socket # 保留 socket 以便在 __main__ 中进行简单的直接运行提示
+
 from asyncio import Queue, Lock, Future, Task, Event
 
 from fastapi import FastAPI, Request, HTTPException

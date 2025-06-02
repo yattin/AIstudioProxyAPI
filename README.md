@@ -665,6 +665,8 @@ python launch_camoufox.py --debug --server-port 2048 --stream-port 3120 --helper
 
 - [Docker 部署指南 (README-Docker.md)](README-Docker.md)
 
+请注意，首次运行获取认证文件目前不能在docker环境完成，必须在主机完成，因此docker方式安装当前仅仅是为了方便云端部署项目。在主机部署本项目成功取得json认证文件后，日常运行通过挂载json可以使用docker来运行本项目。后续会尝试退出工具来实现其他方式获取json。
+
 ---
 ## 多平台指南 (Python 版本)
 
