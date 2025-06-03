@@ -1,253 +1,129 @@
-# 重构后的 server.py - 主服务器文件
-# 负责应用启动、生命周期管理和模块协调
-
 import asyncio
-import os
-import sys
 import multiprocessing
+import random
+import time
+import json
+from typing import List, Optional, Dict, Any, Union, AsyncGenerator, Tuple, Callable, Set
+import os
+import traceback
 from contextlib import asynccontextmanager
-
-from fastapi import FastAPI
-
-# 导入重构后的模块
-from config import *
-from logging_utils import (
-    setup_server_logging, restore_original_streams,
-    WebSocketConnectionManager, log_ws_manager
-)
-from browser_manager import (
-    initialize_browser_and_page, cleanup_browser_and_page
-)
-from model_manager import (
-    parsed_model_list, wait_for_model_list, initialize_model_manager,
-    handle_initial_model_state_and_storage
-)
-from queue_manager import start_queue_worker, cleanup_queue_worker
-from routes import setup_routes
-import stream
-
-# 初始化全局日志管理器
-if log_ws_manager is None:
-    import logging_utils
-    logging_utils.log_ws_manager = WebSocketConnectionManager()
-
+import sys
+import platform
 import logging
+import logging.handlers
+import socket # 保留 socket 以便在 __main__ 中进行简单的直接运行提示
+from asyncio import Queue, Lock, Future, Task, Event
+
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
+from fastapi import WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
+from playwright.async_api import Page as AsyncPage, Browser as AsyncBrowser, Playwright as AsyncPlaywright, Error as PlaywrightAsyncError, expect as expect_async, BrowserContext as AsyncBrowserContext, Locator, TimeoutError
+from playwright.async_api import async_playwright
+from urllib.parse import urljoin, urlparse
+import uuid
+import datetime
+import aiohttp
+import stream
+import queue
+
+# --- 配置模块导入 ---
+from config import *
+
+# --- models模块导入 ---
+from models import (
+    FunctionCall,
+    ToolCall,
+    MessageContentItem, 
+    Message,
+    ChatCompletionRequest,
+    ClientDisconnectedError,
+    StreamToLogger,
+    WebSocketConnectionManager,
+    WebSocketLogHandler
+)
+
+# --- logging_utils模块导入 ---
+from logging_utils import setup_server_logging, restore_original_streams
+
+# --- browser_utils模块导入 ---
+from browser_utils import (
+    _initialize_page_logic,
+    _close_page_logic,
+    signal_camoufox_shutdown,
+    _handle_model_list_response,
+    detect_and_extract_page_error,
+    save_error_snapshot,
+    get_response_via_edit_button,
+    get_response_via_copy_button,
+    _wait_for_response_completion,
+    _get_final_response_content,
+    get_raw_text_content,
+    switch_ai_studio_model,
+    load_excluded_models,
+    _handle_initial_model_state_and_storage,
+    _set_model_from_page_display
+)
+
+# --- api_utils模块导入 ---
+from api_utils import (
+    generate_sse_chunk,
+    generate_sse_stop_chunk, 
+    generate_sse_error_chunk,
+    use_helper_get_response,
+    use_stream_response,
+    clear_stream_queue,
+    prepare_combined_prompt,
+    validate_chat_request,
+    _process_request_refactored,
+    create_app,
+    queue_worker
+)
+
+# --- stream queue ---
+STREAM_QUEUE:Optional[multiprocessing.Queue] = None
+STREAM_PROCESS = None
+
+# --- Global State ---
+playwright_manager: Optional[AsyncPlaywright] = None
+browser_instance: Optional[AsyncBrowser] = None
+page_instance: Optional[AsyncPage] = None
+is_playwright_ready = False
+is_browser_connected = False
+is_page_ready = False
+is_initializing = False
+
+global_model_list_raw_json: Optional[List[Any]] = None
+parsed_model_list: List[Dict[str, Any]] = []
+model_list_fetch_event = asyncio.Event()
+
+current_ai_studio_model_id: Optional[str] = None
+model_switching_lock: Optional[Lock] = None
+
+excluded_model_ids: Set[str] = set()
+
+request_queue: Optional[Queue] = None
+processing_lock: Optional[Lock] = None
+worker_task: Optional[Task] = None
+
+page_params_cache: Dict[str, Any] = {}
+params_cache_lock: Optional[Lock] = None
+
 logger = logging.getLogger("AIStudioProxyServer")
-
-# 全局变量用于管理流式代理服务器
-stream_proxy_process = None
+log_ws_manager = None
 
 
-def start_stream_proxy_server():
-    """启动流式代理服务器"""
-    global stream_proxy_process
-
-    # 从环境变量获取流式代理端口
-    stream_port = int(os.environ.get('STREAM_PORT', '3120'))
-
-    # 如果端口为0，则禁用流式代理
-    if stream_port == 0:
-        logger.info("流式代理服务器已禁用 (STREAM_PORT=0)")
-        return False
-
-    try:
-        logger.info(f"启动流式代理服务器 (端口: {stream_port})...")
-
-        # 获取上游代理配置
-        upstream_proxy = os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
-
-        # 创建流队列（关键修复：与重构前保持一致）
-        import config
-        config.STREAM_QUEUE = multiprocessing.Queue()
-        logger.info("✅ 流队列已创建")
-
-        # 启动流式代理服务器进程（与参考文件完全一致的位置参数方式）
-        stream_proxy_process = multiprocessing.Process(
-            target=stream.start,
-            args=(config.STREAM_QUEUE, stream_port, upstream_proxy)
-        )
-        stream_proxy_process.start()
-
-        # 设置流进程到配置中
-        config.STREAM_PROCESS = stream_proxy_process
-
-        logger.info(f"✅ 流式代理服务器已启动 (PID: {stream_proxy_process.pid}, 端口: {stream_port})")
-
-        # 更新配置以使用启动的代理服务器
-        config.PROXY_SERVER_ENV = f"http://127.0.0.1:{stream_port}/"
-        config.PLAYWRIGHT_PROXY_SETTINGS = {'server': config.PROXY_SERVER_ENV}
-
-        logger.info(f"✅ 已更新 Playwright 代理配置: {config.PLAYWRIGHT_PROXY_SETTINGS}")
-        logger.info(f"✅ 流队列和流进程已正确初始化")
-
-        return True
-
-    except Exception as e:
-        logger.error(f"❌ 启动流式代理服务器失败: {e}", exc_info=True)
-        return False
-
-
-def stop_stream_proxy_server():
-    """停止流式代理服务器"""
-    global stream_proxy_process
-
-    if stream_proxy_process and stream_proxy_process.is_alive():
-        try:
-            logger.info("正在停止流式代理服务器...")
-            stream_proxy_process.terminate()
-            stream_proxy_process.join(timeout=5)
-
-            if stream_proxy_process.is_alive():
-                logger.warning("流式代理服务器未在超时时间内停止，强制终止...")
-                stream_proxy_process.kill()
-                stream_proxy_process.join()
-
-            logger.info("✅ 流式代理服务器已停止")
-
-        except Exception as e:
-            logger.error(f"❌ 停止流式代理服务器时出错: {e}", exc_info=True)
-        finally:
-            stream_proxy_process = None
-
-    # 清理流队列和流进程（关键修复：与重构前保持一致）
-    import config
-    if config.STREAM_QUEUE:
-        try:
-            # 清空队列
-            while not config.STREAM_QUEUE.empty():
-                try:
-                    config.STREAM_QUEUE.get_nowait()
-                except:
-                    break
-            logger.info("✅ 流队列已清空")
-        except Exception as e:
-            logger.warning(f"清空流队列时出错: {e}")
-        finally:
-            config.STREAM_QUEUE = None
-
-    # 清理流进程引用
-    config.STREAM_PROCESS = None
-    logger.info("✅ 流队列和流进程已清理")
-
-
-# --- 应用生命周期管理 ---
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """应用生命周期管理器"""
-    logger.info("=" * 50)
-    logger.info("🚀 AI Studio Proxy Server 正在启动...")
-    logger.info("=" * 50)
-    
-    # 启动时的初始化
-    original_stdout, original_stderr = None, None
-    
-    try:
-        # 设置日志系统
-        log_level = os.environ.get('SERVER_LOG_LEVEL', 'INFO')
-        redirect_print = os.environ.get('SERVER_REDIRECT_PRINT', 'false')
-        original_stdout, original_stderr = setup_server_logging(log_level, redirect_print)
-
-        # 启动流式代理服务器
-        stream_success = start_stream_proxy_server()
-        if stream_success:
-            logger.info("✅ 流式代理服务器启动成功")
-            # 等待一下让代理服务器完全启动
-            await asyncio.sleep(2)
-        else:
-            logger.warning("⚠️ 流式代理服务器启动失败，将使用直接连接模式")
-
-        # 初始化模型管理器
-        initialize_model_manager()
-
-        # 启动队列工作器
-        start_queue_worker()
-
-        # 初始化浏览器和页面
-        browser_success = await initialize_browser_and_page()
-        
-        if browser_success:
-            # 等待模型列表加载
-            logger.info("等待模型列表加载...")
-            model_success = await wait_for_model_list(timeout=30.0)
-            
-            if model_success:
-                logger.info(f"✅ 模型列表加载成功，共 {len(parsed_model_list)} 个模型")
-                
-                # 处理初始模型状态
-                await handle_initial_model_state_and_storage()
-            else:
-                logger.warning("⚠️ 模型列表加载失败或超时")
-        else:
-            logger.warning("⚠️ 浏览器初始化失败")
-        
-        logger.info("=" * 50)
-        logger.info("✅ AI Studio Proxy Server 启动完成")
-        logger.info("=" * 50)
-        
-        yield  # 应用运行期间
-        
-    except Exception as e:
-        logger.error(f"❌ 启动过程中发生错误: {e}", exc_info=True)
-        raise
-    finally:
-        # 关闭时的清理
-        logger.info("=" * 50)
-        logger.info("🛑 AI Studio Proxy Server 正在关闭...")
-        logger.info("=" * 50)
-        
-        try:
-            # 清理队列工作器
-            await cleanup_queue_worker()
-
-            # 清理浏览器和页面
-            await cleanup_browser_and_page()
-
-            # 停止流式代理服务器
-            stop_stream_proxy_server()
-
-            # 恢复原始流
-            if original_stdout and original_stderr:
-                restore_original_streams(original_stdout, original_stderr)
-
-            logger.info("✅ AI Studio Proxy Server 已安全关闭")
-            
-        except Exception as e:
-            logger.error(f"❌ 关闭过程中发生错误: {e}", exc_info=True)
-
-
-# --- FastAPI 应用创建 ---
-def create_app() -> FastAPI:
-    """创建 FastAPI 应用实例"""
-    app = FastAPI(
-        title="AI Studio Proxy Server",
-        description="AI Studio 代理服务器，提供 OpenAI 兼容的 API",
-        version="1.0.0",
-        lifespan=lifespan
-    )
-    
-    # 设置路由
-    setup_routes(app)
-    
-    return app
-
-
-# --- 应用实例 ---
+# --- FastAPI App 定义 ---
 app = create_app()
 
-
+# --- Main Guard ---
 if __name__ == "__main__":
     import uvicorn
-    
-    # 从环境变量获取配置
-    host = os.environ.get('SERVER_HOST', '127.0.0.1')
-    port = int(os.environ.get('SERVER_PORT', '8000'))
-    
-    print(f"启动服务器: {host}:{port}")
-    
+    port = int(os.environ.get("PORT", 8000))
     uvicorn.run(
         "server:app",
-        host=host,
+        host="0.0.0.0",
         port=port,
-        reload=False,
-        log_level="warning"  # 使用我们自己的日志系统
+        log_level="info",
+        access_log=False
     )
