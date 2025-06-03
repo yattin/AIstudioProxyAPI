@@ -1,10 +1,11 @@
-# Docker 部署教程 (freegoogleapi)
+# Docker 部署教程 (AI Studio Proxy API)
 
-本文档提供了使用 Docker 构建和运行 `freegoogleapi` 项目的详细步骤。
+本文档提供了使用 Docker 构建和运行 AI Studio Proxy API 项目的详细步骤。
 
 **先决条件:**
 *   确保您的系统已正确安装并正在运行 Docker。您可以从 [Docker 官方网站](https://www.docker.com/get-started) 下载并安装 Docker Desktop (适用于 Windows 和 macOS) 或 Docker Engine (适用于 Linux)。
 *   项目代码已下载到本地。
+*   **重要**: 首次运行需要在主机上完成认证文件获取，Docker环境目前仅支持日常运行。
 
 ## 1. 理解项目中的 Docker 相关文件
 
@@ -19,18 +20,18 @@
 要构建 Docker 镜像，请在项目根目录下打开终端或命令行界面，然后执行以下命令：
 
 ```bash
-docker build -t freegoogleapi:latest .
+docker build -t ai-studio-proxy:latest .
 ```
 
 **命令解释:**
 
 *   `docker build`: 这是 Docker CLI 中用于构建镜像的命令。
-*   `-t freegoogleapi:latest`: `-t` 参数用于为镜像指定一个名称和可选的标签 (tag)，格式为 `name:tag`。
-    *   `freegoogleapi`: 是您为镜像选择的名称。
-    *   `latest`: 是标签，通常表示这是该镜像的最新版本。您可以根据版本控制策略选择其他标签，例如 `freegoogleapi:1.0`。
+*   `-t ai-studio-proxy:latest`: `-t` 参数用于为镜像指定一个名称和可选的标签 (tag)，格式为 `name:tag`。
+    *   `ai-studio-proxy`: 是您为镜像选择的名称。
+    *   `latest`: 是标签，通常表示这是该镜像的最新版本。您可以根据版本控制策略选择其他标签，例如 `ai-studio-proxy:1.0`。
 *   `.`: (末尾的点号) 指定了 Docker 构建上下文的路径。构建上下文是指包含 [`Dockerfile`](./Dockerfile:1) 以及构建镜像所需的所有其他文件和目录的本地文件系统路径。点号表示当前目录。Docker 守护进程会访问此路径下的文件来执行构建。
 
-构建过程可能需要一些时间，具体取决于您的网络速度和项目依赖项的多少。成功构建后，您可以使用 `docker images` 命令查看本地已有的镜像列表，其中应包含 `freegoogleapi:latest`。
+构建过程可能需要一些时间，具体取决于您的网络速度和项目依赖项的多少。成功构建后，您可以使用 `docker images` 命令查看本地已有的镜像列表，其中应包含 `ai-studio-proxy:latest`。
 
 ## 3. 运行 Docker 容器
 
@@ -49,8 +50,8 @@ docker run -d \
     # 可选: 如果您需要设置内部 Camoufox 代理，请取消下面一行的注释，
     # 并将 "http://your_proxy_address:port" 替换为您的代理实际地址和端口。
     # -e INTERNAL_CAMOUFOX_PROXY="http://your_proxy_address:port" \
-    --name freegoogleapi_container \
-    freegoogleapi:latest
+    --name ai-studio-proxy-container \
+    ai-studio-proxy:latest
 ```
 
 **命令解释:**
@@ -78,10 +79,10 @@ docker run -d \
 *   `-e STREAM_PORT=3120`: 类似地，设置 `STREAM_PORT` 环境变量为 `3120`，供应用程序的流服务使用。
 *   `# -e INTERNAL_CAMOUFOX_PROXY="http://your_proxy_address:port"` (可选，已注释): 设置内部 Camoufox 代理。
     *   如果您的应用程序需要通过一个特定的内部代理服务器来访问 Camoufox 或其他外部服务，可以取消此行的注释，并将 `"http://your_proxy_address:port"` 替换为实际的代理服务器地址和端口 (例如 `http://10.0.0.5:7890` 或 `socks5://proxy-user:proxy-pass@10.0.0.10:1080`)。
-*   `--name freegoogleapi_container`: 为正在运行的容器指定一个名称。
-    *   这使得管理容器更加方便。例如，您可以使用 `docker stop freegoogleapi_container` 来停止这个容器，或使用 `docker logs freegoogleapi_container` 来查看其日志。
+*   `--name ai-studio-proxy-container`: 为正在运行的容器指定一个名称。
+    *   这使得管理容器更加方便。例如，您可以使用 `docker stop ai-studio-proxy-container` 来停止这个容器，或使用 `docker logs ai-studio-proxy-container` 来查看其日志。
     *   如果您不指定名称，Docker 会自动为容器生成一个随机名称。
-*   `freegoogleapi:latest`: 指定要运行的镜像的名称和标签。这必须与您在 `docker build` 命令中使用的名称和标签相匹配。
+*   `ai-studio-proxy:latest`: 指定要运行的镜像的名称和标签。这必须与您在 `docker build` 命令中使用的名称和标签相匹配。
 
 **首次运行前的重要准备:**
 *   **创建 `auth_profiles/` 目录:** 在项目根目录下 (与 [`Dockerfile`](./Dockerfile:1) 同级)，手动创建一个名为 `auth_profiles` 的目录。如果您的应用程序需要初始的认证配置文件，请将它们放入此目录中。
@@ -99,38 +100,38 @@ docker run -d \
 
 *   **查看容器日志:**
     ```bash
-    docker logs freegoogleapi_container
+    docker logs ai-studio-proxy-container
     ```
-    (如果您想持续跟踪日志输出，可以使用 `-f` 参数: `docker logs -f freegoogleapi_container`)
+    (如果您想持续跟踪日志输出，可以使用 `-f` 参数: `docker logs -f ai-studio-proxy-container`)
 
 *   **停止容器:**
     ```bash
-    docker stop freegoogleapi_container
+    docker stop ai-studio-proxy-container
     ```
 
 *   **启动已停止的容器:**
     ```bash
-    docker start freegoogleapi_container
+    docker start ai-studio-proxy-container
     ```
 
 *   **重启容器:**
     ```bash
-    docker restart freegoogleapi_container
+    docker restart ai-studio-proxy-container
     ```
 
 *   **进入容器内部 (获取一个交互式 shell):**
     ```bash
-    docker exec -it freegoogleapi_container /bin/bash
+    docker exec -it ai-studio-proxy-container /bin/bash
     ```
     (或者 `/bin/sh`，取决于容器基础镜像中可用的 shell。这对于调试非常有用。)
 
 *   **删除容器:**
     首先需要停止容器，然后才能删除它。
     ```bash
-    docker stop freegoogleapi_container
-    docker rm freegoogleapi_container
+    docker stop ai-studio-proxy-container
+    docker rm ai-studio-proxy-container
     ```
-    (如果您想强制删除正在运行的容器，可以使用 `docker rm -f freegoogleapi_container`，但不建议这样做，除非您知道自己在做什么。)
+    (如果您想强制删除正在运行的容器，可以使用 `docker rm -f ai-studio-proxy-container`，但不建议这样做，除非您知道自己在做什么。)
 
 ## 5. 更新应用程序
 
@@ -138,27 +139,27 @@ docker run -d \
 
 1.  **停止并删除旧的容器** (如果它正在使用相同的端口或名称)：
     ```bash
-    docker stop freegoogleapi_container
-    docker rm freegoogleapi_container
+    docker stop ai-studio-proxy-container
+    docker rm ai-studio-proxy-container
     ```
 2.  **重新构建 Docker 镜像** (确保您在包含最新代码和 [`Dockerfile`](./Dockerfile:1) 的目录中)：
     ```bash
-    docker build -t freegoogleapi:latest .
+    docker build -t ai-studio-proxy:latest .
     ```
 3.  **使用新的镜像运行新的容器** (使用与之前相同的 `docker run` 命令，或根据需要进行调整)：
     ```bash
     docker run -d \
         -p <宿主机_服务端口>:2048 \
         # ... (其他参数与之前相同) ...
-        --name freegoogleapi_container \
-        freegoogleapi:latest
+        --name ai-studio-proxy-container \
+        ai-studio-proxy:latest
     ```
 
 ## 6. 清理
 
 *   **删除指定的 Docker 镜像:**
     ```bash
-    docker rmi freegoogleapi:latest
+    docker rmi ai-studio-proxy:latest
     ```
     (注意：如果存在基于此镜像的容器，您需要先删除这些容器。)
 
@@ -169,4 +170,11 @@ docker run -d \
     (如果想删除所有未使用的镜像，不仅仅是悬空的，可以使用 `docker system prune -a`)
     **警告:** `prune` 命令会删除数据，请谨慎使用。
 
-希望本教程能帮助您成功地通过 Docker 部署和运行 `freegoogleapi` 项目！
+希望本教程能帮助您成功地通过 Docker 部署和运行 AI Studio Proxy API 项目！
+
+## 注意事项
+
+1. **认证文件**: Docker 部署需要预先在主机上获取有效的认证文件，并将其放置在 `auth_profiles/active/` 目录中。
+2. **模块化架构**: 项目采用模块化设计，所有配置和代码都已经过优化，无需手动修改。
+3. **端口配置**: 确保宿主机上的端口未被占用，默认使用 2048 (主服务) 和 3120 (流式代理)。
+4. **日志查看**: 可以通过 `docker logs` 命令查看容器运行日志，便于调试和监控。
