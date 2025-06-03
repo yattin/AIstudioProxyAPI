@@ -288,7 +288,7 @@ async def _clear_chat_history(req_id: str, page: AsyncPage, check_client_disconn
     logger.info(f"[{req_id}] 开始清空聊天记录...")
     try:
         # 一般是使用流式代理时遇到,流式输出已结束,但页面上AI仍回复个不停,此时会锁住清空按钮,但页面仍是/new_chat,而跳过后续清空操作
-        # 导致后续请求无法发出而卡主,故先检查并点击发送按钮(此时是停止功能)
+        # 导致后续请求无法发出而卡住,故先检查并点击发送按钮(此时是停止功能)
         submit_button_locator = page.locator(SUBMIT_BUTTON_SELECTOR)
         try:
             logger.info(f"[{req_id}] 尝试检查发送按钮状态...")
@@ -301,7 +301,6 @@ async def _clear_chat_history(req_id: str, page: AsyncPage, check_client_disconn
         except Exception as e_submit:
             # 如果发送按钮不可用、超时或发生Playwright相关错误，记录日志并继续
             logger.info(f"[{req_id}] 发送按钮不可用或检查/点击时发生Playwright错误。符合预期,继续检查清空按钮。")
-    
 
         clear_chat_button_locator = page.locator(CLEAR_CHAT_BUTTON_SELECTOR)
         confirm_button_locator = page.locator(CLEAR_CHAT_CONFIRM_BUTTON_SELECTOR)
