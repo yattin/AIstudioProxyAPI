@@ -37,6 +37,7 @@ This project is generously sponsored by ZMTO. Visit their website: [https://zmto
 *   [致谢 (Acknowledgements)](#致谢-acknowledgements)
 *   [项目概述](#项目概述)
 *   [工作原理](#工作原理)
+*   [项目结构说明](#项目结构说明)
 *   [免责声明](#免责声明)
 *   [核心特性 (Python 版本)](#核心特性-python-版本)
 *   [重要提示 (Python 版本)](#重要提示-python-版本)
@@ -67,39 +68,63 @@ This project is generously sponsored by ZMTO. Visit their website: [https://zmto
 
 这是一个基于 **Python + FastAPI + Playwright + Camoufox** 的代理服务器，旨在通过模拟 OpenAI API 的方式间接访问 Google AI Studio 网页版。
 
-项目核心优势在于结合了：
+项目采用**模块化架构设计**，具有清晰的职责分离：
 
 *   **FastAPI**: 提供高性能、兼容 OpenAI 标准的 API 接口，现已支持模型参数传递和动态模型切换。
 *   **Playwright**: 强大的浏览器自动化库，用于与 AI Studio 页面交互。
 *   **Camoufox**: 一个经过修改和优化的 Firefox 浏览器，专注于**反指纹检测和反机器人探测**。它通过底层修改而非 JS 注入来伪装浏览器指纹，旨在模拟真实用户流量，提高自动化操作的隐蔽性和成功率。
 *   **请求队列**: 保证请求按顺序处理，提高稳定性。
+*   **模块化设计**: 项目采用清晰的模块分离，包括配置管理、API处理、浏览器操作、日志系统等独立模块。
 
 通过此代理，支持 OpenAI API 的各种客户端（如 Open WebUI, LobeChat, NextChat 等）可以连接并使用 Google AI Studio 的模型。
 ## 工作原理
 
 本项目作为一个智能代理层，核心目标是允许用户通过标准的 OpenAI API 格式与 Google AI Studio 进行交互。其工作流程和关键组件如下：
 
-1.  **API 兼容层 ([`server.py`](server.py:1) 与 FastAPI)**:
+1.  **API 兼容层 (模块化架构)**:
+    *   **主服务器** ([`server.py`](server.py:1)): 协调各个模块，管理全局状态和生命周期。
+    *   **API路由模块** ([`api_utils/routes.py`](api_utils/routes.py:1)): 处理所有API端点，包括 `/v1/chat/completions`、`/v1/models`、`/health` 等。
+    *   **请求处理模块** ([`api_utils/request_processor.py`](api_utils/request_processor.py:1)): 负责请求验证、处理和响应生成。
+    *   **队列工作器** ([`api_utils/queue_worker.py`](api_utils/queue_worker.py:1)): 管理请求队列，确保按顺序处理。
     *   使用 FastAPI 构建了一个与 OpenAI API 规范兼容的 HTTP 服务器。这使得各种现有的 OpenAI 客户端（如聊天界面、开发库等）可以直接连接到本代理。
-    *   负责接收来自客户端的请求（例如 `/v1/chat/completions`），解析参数，并将任务分发给后端处理模块。
 
-2.  **浏览器自动化 ([`server.py`](server.py:1) 与 Playwright)**:
-    *   当需要与 Google AI Studio 网页直接交互时（例如，在没有更优的响应获取方式时，或进行参数设置、模型切换等操作），项目利用 Playwright 库。
-    *   Playwright 能够以编程方式控制浏览器，模拟用户在 AI Studio 页面上的操作，如输入文本、点击按钮、读取页面内容等。
+2.  **浏览器自动化模块 ([`browser_utils/`](browser_utils/) 与 Playwright)**:
+    *   **初始化模块** ([`browser_utils/initialization.py`](browser_utils/initialization.py:1)): 处理浏览器和页面的初始化逻辑。
+    *   **模型管理模块** ([`browser_utils/model_management.py`](browser_utils/model_management.py:1)): 处理模型切换和列表获取。
+    *   **操作模块** ([`browser_utils/operations.py`](browser_utils/operations.py:1)): 处理页面交互、响应获取等操作。
+    *   当需要与 Google AI Studio 网页直接交互时，项目利用这些模块化的 Playwright 功能。
 
 3.  **增强型浏览器 (Camoufox)**:
     *   为了提高自动化操作的隐蔽性并减少被目标网站检测为机器人的风险，本项目集成了 Camoufox。
     *   Camoufox 是一个经过修改的 Firefox 浏览器，专注于通过底层修改来伪装浏览器指纹（如 User-Agent、屏幕分辨率、WebGL 指纹等），而非依赖容易被检测的 JavaScript 注入。这有助于模拟更真实的浏览器环境。
     *   [`launch_camoufox.py`](launch_camoufox.py:1) 负责启动和管理 Camoufox 实例。
 
-4.  **集成的流式代理服务 ([`stream/main.py`](stream/main.py:1) 与 [`server.py`](server.py:1) 子进程)**:
-    *   这是项目推荐的、性能更优的响应获取方式，默认监听在端口 `3120`。
+4.  **集成的流式代理服务 ([`stream/`](stream/) 模块)**:
+    *   **主代理服务** ([`stream/main.py`](stream/main.py:1)): 这是项目推荐的、性能更优的响应获取方式，默认监听在端口 `3120`。
+    *   **代理服务器** ([`stream/proxy_server.py`](stream/proxy_server.py:1)): 实现HTTP代理服务器功能。
+    *   **代理连接器** ([`stream/proxy_connector.py`](stream/proxy_connector.py:1)): 处理代理连接逻辑。
+    *   **拦截器** ([`stream/interceptors.py`](stream/interceptors.py:1)): 处理请求和响应拦截。
+    *   **证书管理器** ([`stream/cert_manager.py`](stream/cert_manager.py:1)): 管理SSL证书生成和验证。
     *   **HTTPS 拦截与动态证书生成**:
         *   此服务扮演一个中间人代理 (Man-in-the-Middle Proxy) 的角色，能够拦截发往特定域名（如 Google 相关服务）的 HTTPS 请求。
         *   为了解密和处理 HTTPS 流量，它使用一个自签名的根 CA 证书 ([`certs/ca.crt`](certs/ca.crt:1))。当首次拦截到一个新的 HTTPS 主机时，它会动态地为该主机生成一个服务器证书，并用此 CA 进行签名。
-    *   **响应转换**: 拦截到来自 Google AI Studio 的响应后，此服务会将其解析并转换为 OpenAI API 所期望的流式或非流式格式，然后返回给 [`server.py`](server.py:1)，最终传递给 API 客户端。
+    *   **响应转换**: 拦截到来自 Google AI Studio 的响应后，此服务会将其解析并转换为 OpenAI API 所期望的流式或非流式格式，然后返回给主服务器，最终传递给 API 客户端。
 
-5.  **请求处理与响应获取优先级**:
+5.  **配置管理模块 ([`config/`](config/))**:
+    *   **设置配置** ([`config/settings.py`](config/settings.py:1)): 管理环境变量、路径配置、代理配置等运行时设置。
+    *   **常量定义** ([`config/constants.py`](config/constants.py:1)): 定义项目中使用的各种常量。
+    *   **CSS选择器** ([`config/selectors.py`](config/selectors.py:1)): 管理用于页面交互的CSS选择器。
+    *   **超时配置** ([`config/timeouts.py`](config/timeouts.py:1)): 定义各种操作的超时时间。
+
+6.  **数据模型模块 ([`models/`](models/))**:
+    *   **聊天模型** ([`models/chat.py`](models/chat.py:1)): 定义聊天相关的数据结构。
+    *   **异常处理** ([`models/exceptions.py`](models/exceptions.py:1)): 定义项目特定的异常类。
+    *   **日志模型** ([`models/logging.py`](models/logging.py:1)): 定义日志相关的数据结构和WebSocket管理。
+
+7.  **日志系统模块 ([`logging_utils/`](logging_utils/))**:
+    *   **日志设置** ([`logging_utils/setup.py`](logging_utils/setup.py:1)): 配置和管理项目的日志系统。
+
+8.  **请求处理与响应获取优先级**:
     *   项目采用多层机制获取响应，优先级如下：
         1.  **集成的流式代理服务**: 性能最佳，直接处理。
         2.  **(可选) 外部 Helper 服务**: 如果配置，作为次级选择。
@@ -107,6 +132,72 @@ This project is generously sponsored by ZMTO. Visit their website: [https://zmto
     *   详细的请求处理流程和组件交互可以参考 [项目运行流程图](#项目运行流程图)。
 
 通过这些组件的协同工作，本项目实现了将 Google AI Studio 的能力封装在 OpenAI 兼容的 API 之后，为用户提供了便捷的访问方式。
+
+## 项目结构说明
+
+项目采用模块化架构设计，主要目录结构如下：
+
+```
+freegoogleapi/
+├── server.py                    # 主服务器文件，协调各模块
+├── launch_camoufox.py          # 启动器脚本
+├── gui_launcher.py             # 图形界面启动器
+├── llm.py                      # 本地LLM模拟服务
+├── requirements.txt            # Python依赖列表
+├── excluded_models.txt         # 排除的模型列表
+├── index.html                  # Web UI主页面
+├── webui.css                   # Web UI样式
+├── webui.js                    # Web UI脚本
+├── config/                     # 配置管理模块
+│   ├── __init__.py
+│   ├── settings.py            # 运行时设置配置
+│   ├── constants.py           # 项目常量定义
+│   ├── selectors.py           # CSS选择器管理
+│   └── timeouts.py            # 超时配置
+├── models/                     # 数据模型模块
+│   ├── __init__.py
+│   ├── chat.py                # 聊天相关数据结构
+│   ├── exceptions.py          # 异常类定义
+│   └── logging.py             # 日志相关模型
+├── api_utils/                  # API处理模块
+│   ├── __init__.py
+│   ├── app.py                 # FastAPI应用创建
+│   ├── routes.py              # API路由处理
+│   ├── request_processor.py   # 请求处理逻辑
+│   ├── queue_worker.py        # 队列工作器
+│   └── utils.py               # API工具函数
+├── browser_utils/              # 浏览器操作模块
+│   ├── __init__.py
+│   ├── initialization.py      # 浏览器初始化
+│   ├── model_management.py    # 模型管理
+│   └── operations.py          # 页面操作
+├── logging_utils/              # 日志系统模块
+│   ├── __init__.py
+│   └── setup.py               # 日志配置
+├── stream/                     # 流式代理模块
+│   ├── __init__.py
+│   ├── main.py                # 主代理服务
+│   ├── proxy_server.py        # 代理服务器
+│   ├── proxy_connector.py     # 代理连接器
+│   ├── interceptors.py        # 请求拦截器
+│   ├── cert_manager.py        # 证书管理
+│   └── utils.py               # 工具函数
+├── auth_profiles/              # 认证文件目录
+│   ├── active/                # 当前使用的认证文件
+│   └── saved/                 # 保存的认证文件
+├── certs/                      # SSL证书目录
+├── logs/                       # 日志文件目录
+└── errors_py/                  # 错误快照目录
+```
+
+### 模块职责说明
+
+- **config/**: 统一管理项目配置，包括环境变量、常量、CSS选择器、超时设置等
+- **models/**: 定义项目中使用的数据结构、异常类和日志模型
+- **api_utils/**: 处理所有API相关功能，包括路由、请求处理、队列管理等
+- **browser_utils/**: 封装所有浏览器操作，包括初始化、模型管理、页面交互等
+- **logging_utils/**: 提供统一的日志配置和管理功能
+- **stream/**: 实现高性能的流式代理服务，包括证书管理、请求拦截等
 
 ---
 
@@ -147,9 +238,17 @@ This project is generously sponsored by ZMTO. Visit their website: [https://zmto
     *   亮色/暗色主题切换与本地存储。
     *   响应式设计，适配不同屏幕尺寸。
     *   默认系统提示词示例 (Web UI 中，可配置)。
-*   **服务端 (`server.py`)**: FastAPI 应用，处理 API 请求，通过 Playwright 控制 Camoufox 浏览器与 AI Studio 交互。
+*   **模块化架构设计**:
+    *   **主服务器** ([`server.py`](server.py:1)): 协调各个模块，管理全局状态和生命周期。
+    *   **API处理模块** ([`api_utils/`](api_utils/)): 包含路由处理、请求处理、队列管理等功能。
+    *   **浏览器操作模块** ([`browser_utils/`](browser_utils/)): 处理浏览器初始化、模型管理、页面操作等。
+    *   **配置管理模块** ([`config/`](config/)): 统一管理项目配置、常量、选择器等。
+    *   **数据模型模块** ([`models/`](models/)): 定义数据结构、异常类、日志模型等。
+    *   **日志系统模块** ([`logging_utils/`](logging_utils/)): 提供统一的日志管理功能。
+    *   **流式代理模块** ([`stream/`](stream/)): 实现高性能的流式代理服务。
 *   **启动器 (`launch_camoufox.py`)**: 负责协调启动 Camoufox 服务（通过内部调用自身）和 FastAPI 服务，并管理它们之间的连接。通常由 [`gui_launcher.py`](gui_launcher.py:1) 在后台调用。
 *   **图形界面启动器 (`gui_launcher.py`)**: 提供一个 Tkinter GUI，简化 [`launch_camoufox.py`](launch_camoufox.py:1) 的启动和管理，包括有头/无头模式选择、端口管理、代理配置和日志显示。
+*   **本地LLM模拟服务 (`llm.py`)**: 提供一个本地LLM模拟服务，可以模拟 Ollama API 端点和 OpenAI 兼容的端点，用于测试和开发。
 *   **错误快照**: 出错时自动在 `errors_py/` 目录保存截图和 HTML。
 *   **日志控制**: 可通过环境变量控制 [`server.py`](server.py:1) 的日志级别和 `print` 输出重定向行为。
 *   **WebSocket 实时日志**: 提供 `/ws/logs` 端点，Web UI 通过此接口显示后端日志。
@@ -170,7 +269,7 @@ This project is generously sponsored by ZMTO. Visit their website: [https://zmto
     *   API 请求中的模型参数（如 `temperature`, `max_output_tokens`, `top_p`, `stop`）会被代理接收并尝试在 AI Studio 页面应用。这些参数的设置**仅在通过 Playwright 页面交互获取响应时生效**。当使用集成的流式代理或外部 Helper 服务时，这些参数的传递和应用方式取决于这些服务自身的实现，可能与 AI Studio 页面的设置不同步或不完全支持。
     *   Web UI 的"模型设置"面板的参数配置也主要影响通过 Playwright 页面交互获取响应的场景。
     *   项目根目录下的 [`excluded_models.txt`](excluded_models.txt:1) 文件可用于从 `/v1/models` 端点返回的列表中排除特定的模型 ID。
-*   **CSS 选择器依赖**: 页面交互（如获取响应、清空聊天、设置参数等）依赖 [`server.py`](server.py:1) 中定义的 CSS 选择器。AI Studio 页面更新可能导致这些选择器失效，需要手动更新。此依赖主要影响上述第三种响应获取方式 (Playwright 页面交互)。
+*   **CSS 选择器依赖**: 页面交互（如获取响应、清空聊天、设置参数等）依赖 [`config/selectors.py`](config/selectors.py:1) 中定义的 CSS 选择器。AI Studio 页面更新可能导致这些选择器失效，需要手动更新。此依赖主要影响上述第三种响应获取方式 (Playwright 页面交互)。
 *   **Camoufox 特性**: 利用 Camoufox 增强反指纹能力。了解更多信息请参考 [Camoufox 官方文档](https://camoufox.com/)。
 *   **稳定性**: 浏览器自动化本质上不如原生 API 稳定，长时间运行可能需要重启。
 *   **AI Studio 限制**: 无法绕过 AI Studio 本身的速率、内容等限制。
@@ -294,11 +393,13 @@ graph TD
     ```bash
     python launch_camoufox.py --debug --server-port 2048 --stream-port 3120 --helper '' --internal-camoufox-proxy ''
     ```
-    *   **重要:**
-        *   使用 `--server-port <端口号>` (例如 2048) 指定 FastAPI 服务器监听的端口。
-        *   使用 `--stream-port <端口号>` (例如 3120) 来启动集成的流式代理服务。如果希望禁用此服务 (例如，优先使用外部 Helper 或仅依赖 Playwright 交互)，请设置为 `--stream-port 0`。
-        *   使用 `--helper <端点URL>` (例如 `--helper http://my.helper.service/api`) 来指定外部 Helper 服务的地址。如果不想使用外部 Helper，可以省略此参数或设置为空字符串 (`--helper ''`)。
-        *   **使用 `--internal-camoufox-proxy <代理地址>` (例如 `--internal-camoufox-proxy http://127.0.0.1:7890`) 来为 Camoufox 浏览器和流式服务器指定代理。如果不需要代理，请设置为 `--internal-camoufox-proxy ''`。如果需要启用实时流式，必须设置此参数保证运行正常**
+    *   **重要参数说明:**
+        *   `--debug`: 启动有头模式，用于首次认证和调试
+        *   `--server-port <端口号>`: 指定 FastAPI 服务器监听的端口 (默认: 2048)
+        *   `--stream-port <端口号>`: 启动集成的流式代理服务端口 (默认: 3120)。设置为 `0` 可禁用此服务
+        *   `--helper <端点URL>`: 指定外部 Helper 服务的地址。设置为空字符串 `''` 表示不使用外部 Helper
+        *   `--internal-camoufox-proxy <代理地址>`: 为 Camoufox 浏览器指定代理。设置为空字符串 `''` 表示不使用代理
+        *   **注意**: 如果需要启用流式代理服务，建议同时配置 `--internal-camoufox-proxy` 参数以确保正常运行
     *   脚本会启动 Camoufox（通过内部调用自身），并在终端输出启动信息。
     *   你会看到一个 **带界面的 Firefox 浏览器窗口** 弹出。
     *   **关键交互:** **在弹出的浏览器窗口中完成 Google 登录**，直到看到 AI Studio 聊天界面。 (脚本会自动处理浏览器连接，无需用户手动操作)。
@@ -355,33 +456,37 @@ graph TD
 
 *   **模式1: 优先使用集成的流式代理 (默认推荐)**
     ```bash
-    # FastAPI 在 2048, 集成流式代理在 3120, 不使用外部 Helper, 明确不使用浏览器代理
-    python launch_camoufox.py --server-port 2048 --stream-port 3120 --helper '' --internal-camoufox-proxy ''
-    # 如果希望流式代理使用其他端口，例如 3125:
-    # python launch_camoufox.py --server-port 2048 --stream-port 3125 --helper '' --internal-camoufox-proxy ''
-    # 如果需要指定浏览器代理，例如 http://127.0.0.1:7890:
-    # python launch_camoufox.py --server-port 2048 --stream-port 3120 --helper '' --internal-camoufox-proxy 'http://127.0.0.1:7890'
+    # 基本启动命令 - FastAPI 在 2048, 集成流式代理在 3120, 不使用外部 Helper 和浏览器代理
+    python launch_camoufox.py --headless --server-port 2048 --stream-port 3120 --helper '' --internal-camoufox-proxy ''
+
+    # 使用自定义流式代理端口
+    python launch_camoufox.py --headless --server-port 2048 --stream-port 3125 --helper '' --internal-camoufox-proxy ''
+
+    # 启用浏览器代理
+    python launch_camoufox.py --headless --server-port 2048 --stream-port 3120 --helper '' --internal-camoufox-proxy 'http://127.0.0.1:7890'
     ```
-    在此模式下，[`server.py`](server.py:1) 会优先尝试通过端口 `3120` (或指定的 `--stream-port`) 上的集成流式代理获取响应。如果失败，则回退到 Playwright 页面交互。
+    在此模式下，主服务器会优先尝试通过端口 `3120` (或指定的 `--stream-port`) 上的集成流式代理获取响应。如果失败，则回退到 Playwright 页面交互。
     **重要提示**: 当 `--stream-port` 大于 `0` (即启用流式代理) 时，强烈建议同时通过 `--internal-camoufox-proxy` 参数为 Camoufox 浏览器指定代理地址，以确保流式代理能够正常工作。如果不需要浏览器代理，也请明确设置为 `--internal-camoufox-proxy ''`。
 
 *   **模式2: 优先使用外部 Helper 服务 (禁用集成流式代理)**
     ```bash
-    # FastAPI 在 2048, 禁用集成流式代理, 配置外部 Helper 服务, 明确不使用浏览器代理
-    python launch_camoufox.py --server-port 2048 --stream-port 0 --helper 'http://your-helper-service.com/api/getStreamResponse' --internal-camoufox-proxy ''
-    # 如果需要指定浏览器代理，例如 http://127.0.0.1:7890:
-    # python launch_camoufox.py --server-port 2048 --stream-port 0 --helper 'http://your-helper-service.com/api/getStreamResponse' --internal-camoufox-proxy 'http://127.0.0.1:7890'
+    # 基本外部Helper模式
+    python launch_camoufox.py --headless --server-port 2048 --stream-port 0 --helper 'http://your-helper-service.com/api/getStreamResponse' --internal-camoufox-proxy ''
+
+    # 外部Helper模式 + 浏览器代理
+    python launch_camoufox.py --headless --server-port 2048 --stream-port 0 --helper 'http://your-helper-service.com/api/getStreamResponse' --internal-camoufox-proxy 'http://127.0.0.1:7890'
     ```
-    在此模式下，[`server.py`](server.py:1) 会优先尝试通过 `--helper` 指定的端点获取响应 (需要有效的 `auth_profiles/active/*.json` 以提取 `SAPISID`)。如果失败，则回退到 Playwright 页面交互。
+    在此模式下，主服务器会优先尝试通过 `--helper` 指定的端点获取响应 (需要有效的 `auth_profiles/active/*.json` 以提取 `SAPISID`)。如果失败，则回退到 Playwright 页面交互。
 
 *   **模式3: 仅使用 Playwright 页面交互 (禁用所有代理和 Helper)**
     ```bash
-    # FastAPI 在 2048, 禁用集成流式代理, 不使用外部 Helper, 明确不使用浏览器代理
-    python launch_camoufox.py --server-port 2048 --stream-port 0 --helper '' --internal-camoufox-proxy ''
-    # 如果需要指定浏览器代理，例如 http://127.0.0.1:7890:
-    # python launch_camoufox.py --server-port 2048 --stream-port 0 --helper '' --internal-camoufox-proxy 'http://127.0.0.1:7890'
+    # 纯Playwright模式
+    python launch_camoufox.py --headless --server-port 2048 --stream-port 0 --helper '' --internal-camoufox-proxy ''
+
+    # Playwright模式 + 浏览器代理
+    python launch_camoufox.py --headless --server-port 2048 --stream-port 0 --helper '' --internal-camoufox-proxy 'http://127.0.0.1:7890'
     ```
-    在此模式下，[`server.py`](server.py:1) 将仅通过 Playwright 与 AI Studio 页面交互 (模拟点击"编辑"或"复制"按钮) 来获取响应。这是传统的后备方法。
+    在此模式下，主服务器将仅通过 Playwright 与 AI Studio 页面交互 (模拟点击"编辑"或"复制"按钮) 来获取响应。这是传统的后备方法。
 
 **注意**: 上述命令示例默认采用交互式选择启动模式 (有头/无头)。你可以添加 `--headless` 或 `--debug` 参数来指定模式，例如:
 `python launch_camoufox.py --headless --server-port 2048 --stream-port 3120 --helper '' --internal-camoufox-proxy ''`
@@ -456,11 +561,11 @@ python launch_camoufox.py --debug --server-port 2048 --stream-port 3120 --helper
 
 代理服务器默认监听在 `http://127.0.0.1:2048`。端口可以在 [`launch_camoufox.py`](launch_camoufox.py:1) 的 `--server-port` 参数或 [`gui_launcher.py`](gui_launcher.py:1) 中修改。
 
-*   **聊天接口**: [`POST /v1/chat/completions`](server.py:534)
+*   **聊天接口**: [`POST /v1/chat/completions`](api_utils/routes.py:232)
     *   请求体与 OpenAI API 兼容，需要 `messages` 数组。
     *   `model` 字段现在用于指定目标模型，代理会尝试在 AI Studio 页面切换到该模型。如果为空或为代理的默认模型名，则使用 AI Studio 当前激活的模型。
     *   `stream` 字段控制流式 (`true`) 或非流式 (`false`) 输出。
-    *   现在支持 `temperature`, `max_output_tokens` (在 [`server.py`](server.py:1) 中被定义为 `max_output_tokens`), `top_p`, `stop` 等参数，代理会尝试在 AI Studio 页面上应用它们。
+    *   现在支持 `temperature`, `max_output_tokens`, `top_p`, `stop` 等参数，代理会尝试在 AI Studio 页面上应用它们。
     *   **示例 (curl, 非流式, 带参数)**:
         ```bash
         curl -X POST http://127.0.0.1:2048/v1/chat/completions \
@@ -543,17 +648,17 @@ python launch_camoufox.py --debug --server-port 2048 --stream-port 3120 --helper
             else:
                 print(f"Error: {response.status_code}\n{response.text}")
         ```
-*   **模型列表**: [`GET /v1/models`](server.py:547)
+*   **模型列表**: [`GET /v1/models`](api_utils/routes.py:175)
     *   返回 AI Studio 页面上检测到的可用模型列表，以及一个代理本身的默认模型条目。
     *   现在会尝试从 AI Studio 动态获取模型列表。如果获取失败，会返回一个后备模型。
     *   支持 [`excluded_models.txt`](excluded_models.txt:1) 文件，用于从列表中排除特定的模型ID。
-*   **API 信息**: [`GET /api/info`](server.py:651)
+*   **API 信息**: [`GET /api/info`](api_utils/routes.py:87)
     *   返回 API 配置信息，如基础 URL 和模型名称。
-*   **健康检查**: [`GET /health`](server.py:660)
+*   **健康检查**: [`GET /health`](api_utils/routes.py:114)
     *   返回服务器运行状态（Playwright, 浏览器连接, 页面状态, Worker 状态, 队列长度）。
-*   **队列状态**: [`GET /v1/queue`](server.py:672)
+*   **队列状态**: [`GET /v1/queue`](api_utils/routes.py:360)
     *   返回当前请求队列的详细信息。
-*   **取消请求**: [`POST /v1/cancel/{req_id}`](server.py:684)
+*   **取消请求**: [`POST /v1/cancel/{req_id}`](api_utils/routes.py:342)
     *   尝试取消仍在队列中等待处理的请求。
 
 ### 6. Web UI (服务测试)
@@ -696,13 +801,13 @@ openssl rsa -in certs/ca.key -out certs/ca.key
 *   **AI 回复不完整/格式错误**:
     *   AI Studio Web UI 输出不稳定。检查 `errors_py/` 快照。
 *   **自动清空上下文失败**:
-    *   检查 [`server.py`](server.py:1) 日志中的警告。
-    *   很可能是 AI Studio 页面更新导致 [`server.py`](server.py:1) 中的 CSS 选择器失效。检查 `errors_py/` 快照，对比实际页面元素更新 [`server.py`](server.py:1) 中的选择器常量。
+    *   检查主服务器日志中的警告。
+    *   很可能是 AI Studio 页面更新导致 [`config/selectors.py`](config/selectors.py:1) 中的 CSS 选择器失效。检查 `errors_py/` 快照，对比实际页面元素更新选择器常量。
     *   也可能是网络慢导致验证超时。
 *   **AI Studio 页面更新导致功能失效**:
     *   如果 AI Studio 更新了网页结构或 CSS 类名，依赖这些元素的交互（如清空聊天、获取响应）可能会失败。
-    *   检查 [`server.py`](server.py:1) 日志中的警告或错误。
-    *   检查 `errors_py/` 目录下的错误快照 (截图和 HTML)，对比实际页面元素，更新 [`server.py`](server.py:1) 中对应的 CSS 选择器常量。
+    *   检查主服务器日志中的警告或错误。
+    *   检查 `errors_py/` 目录下的错误快照 (截图和 HTML)，对比实际页面元素，更新 [`config/selectors.py`](config/selectors.py:1) 中对应的 CSS 选择器常量。
 *   **`start.py` 启动后服务未运行或立即退出**:
     *   检查 `auth_profiles/active/` 是否有有效的认证文件。这是最常见的原因。
     *   尝试直接运行 [`python launch_camoufox.py --headless --server-port 2048`](launch_camoufox.py:1) 查看详细的启动错误日志。
@@ -740,9 +845,9 @@ openssl rsa -in certs/ca.key -out certs/ca.key
     *   它的日志级别在脚本内部通过 `setup_launcher_logging(log_level=logging.INFO)` 设置，通常为 `INFO`。
     *   它也会捕获并记录其内部启动的 Camoufox 进程（`--internal-launch` 模式）的 `stdout` 和 `stderr`。
 
-2.  **[`server.py`](server.py:1) (FastAPI 应用) 的日志**:
-    *   [`server.py`](server.py:1) 拥有自己独立的日志系统，记录在 `logs/app.log`。
-    *   其行为主要通过**环境变量**控制，这些环境变量由 [`launch_camoufox.py`](launch_camoufox.py:1) 在启动 [`server.py`](server.py:1) 之前设置：
+2.  **主服务器 ([`server.py`](server.py:1)) 的日志**:
+    *   主服务器拥有自己独立的日志系统，记录在 `logs/app.log`，通过 [`logging_utils/setup.py`](logging_utils/setup.py:1) 模块进行配置。
+    *   其行为主要通过**环境变量**控制，这些环境变量由 [`launch_camoufox.py`](launch_camoufox.py:1) 在启动主服务器之前设置：
         *   **`SERVER_LOG_LEVEL`**: 控制 [`server.py`](server.py:1) 的主日志记录器 (`AIStudioProxyServer`) 的级别。默认为 `INFO`。可以设置为 `DEBUG`, `WARNING`, `ERROR`, `CRITICAL` 等。
             *   例如，在运行 [`launch_camoufox.py`](launch_camoufox.py:1) **之前** 设置:
                 ```bash

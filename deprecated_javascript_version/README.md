@@ -1,6 +1,8 @@
 # AI Studio Proxy Server (Javascript Version - DEPRECATED)
 
-**⚠️ 警告：此 Javascript 版本 (`server.cjs`, `auto_connect_aistudio.cjs`) 已被弃用且不再维护。推荐使用项目根目录下的 Python 版本 (`server.py`, `launch_camoufox.py`)。**
+**⚠️ 警告：此 Javascript 版本 (`server.cjs`, `auto_connect_aistudio.cjs`) 已被弃用且不再维护。推荐使用项目根目录下的 Python 版本，该版本采用了模块化架构设计，具有更好的稳定性和可维护性。**
+
+**📖 查看最新文档**: 请参考项目根目录下的 [`README.md`](../README.md) 了解当前Python版本的完整使用说明。
 
 ---
 
