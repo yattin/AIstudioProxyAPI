@@ -48,6 +48,17 @@ RUN mkdir -p /app/logs && \
 
 COPY supervisord.conf /etc/supervisor/conf.d/app.conf
 
+#新增解决 ❌ 错误 (--internal-launch-mode): 执行 camoufox.server.launch_server 时发生异常: Version information not found at /app/.cache/camoufox/version.json. Please run `camoufox fetch` to install.
+RUN mkdir -p /var/cache/camoufox && \
+    # 2. 从 builder 阶段复制 camoufox 的缓存文件到最终镜像的 /var/cache/camoufox
+    # 这是最关键的一步，确保文件内容存在
+    cp -a /root/.cache/camoufox/* /var/cache/camoufox/ && \
+    # 3. 创建 appuser 期望的缓存路径
+    mkdir -p /app/.cache && \
+    # 4. 创建软链接，将 /app/.cache/camoufox 指向实际文件所在位置
+    ln -s /var/cache/camoufox /app/.cache/camoufox 
+#新增结束
+
 EXPOSE 2048
 EXPOSE 3120
 

@@ -8,13 +8,9 @@ This project is generously sponsored by ZMTO. Visit their website: [https://zmto
 
 ---
 
-**⚠️ 重要提示：`start.py` 脚本已弃用！**
+**⚠️ 重要提示：不再需要手动安装和信任根证书**
 
-为了获得更好的启动体验和兼容性，强烈推荐使用以下任一启动器：
-*   **图形界面启动器**: [`gui_launcher.py`](gui_launcher.py:1)
-*   **命令行启动器**: [`launch_camoufox.py`](launch_camoufox.py:1)
-
-您可以在下方的“使用教程”部分找到详细的启动和运行指南。
+经过检查，3.2.4 版本及之后已确认修复了流式代理服务 (`stream.py`) 的证书生成和拦截问题，不再需要手动安装和信任根证书。证书配置过程已优化，不再依赖于系统证书管理器，而是直接在浏览器中忽略证书错误。
 
 ---
 
@@ -49,7 +45,6 @@ This project is generously sponsored by ZMTO. Visit their website: [https://zmto
     *   [1. 先决条件](#1-先决条件)
     *   [2. 安装](#2-安装)
     *   [3. 首次运行与认证 (关键!)](#3-首次运行与认证-关键)
-        *   [3.1 安装和信任根证书 (用于实时流式服务)](#31-安装和信任根证书-用于实时流式服务)
     *   [4. 日常运行](#4-日常运行)
     *   [使用图形界面启动器 `gui_launcher.py`](#使用图形界面启动器-gui_launcherpy)
     *   [5. API 使用](#5-api-使用)
@@ -58,7 +53,7 @@ This project is generously sponsored by ZMTO. Visit their website: [https://zmto
 *   [Docker 部署](#docker-部署)
 *   [多平台指南 (Python 版本)](#多平台指南-python-版本)
 *   [故障排除 (Python 版本)](#故障排除-python-版本)
-    *   [流式代理服务：工作原理与手动证书生成](#流式代理服务工作原理与手动证书生成)
+    *   [流式代理服务：工作原理](#流式代理服务工作原理)
 *   [关于 Camoufox](#关于-camoufox)
 *   [关于 `fetch_camoufox_data.py`](#关于-fetch_camoufox_datapy)
 *   [控制日志输出 (Python 版本)](#控制日志输出-python-版本)
@@ -102,9 +97,7 @@ This project is generously sponsored by ZMTO. Visit their website: [https://zmto
     *   **HTTPS 拦截与动态证书生成**:
         *   此服务扮演一个中间人代理 (Man-in-the-Middle Proxy) 的角色，能够拦截发往特定域名（如 Google 相关服务）的 HTTPS 请求。
         *   为了解密和处理 HTTPS 流量，它使用一个自签名的根 CA 证书 ([`certs/ca.crt`](certs/ca.crt:1))。当首次拦截到一个新的 HTTPS 主机时，它会动态地为该主机生成一个服务器证书，并用此 CA 进行签名。
-        *   用户需要将项目提供的 `certs/ca.crt` 安装并信任到其操作系统或浏览器中，才能使此功能正常工作并避免安全警告。相关的证书安装指南请参见 [安装和信任根证书](#31-安装和信任根证书-用于实时流式服务)。
     *   **响应转换**: 拦截到来自 Google AI Studio 的响应后，此服务会将其解析并转换为 OpenAI API 所期望的流式或非流式格式，然后返回给 [`server.py`](server.py:1)，最终传递给 API 客户端。
-    *   如果用户需要手动重新生成项目使用的根 CA 证书，详细命令位于本文档的 [故障排除 -> 流式代理服务：工作原理与手动证书生成 -> 证书生成](#证书生成) 小节。
 
 5.  **请求处理与响应获取优先级**:
     *   项目采用多层机制获取响应，优先级如下：
@@ -331,66 +324,8 @@ graph TD
 2.  重新执行上面的 **【通过命令行运行 Debug 模式】** 或 **【通过 GUI 启动有头模式】** 步骤，生成新的认证文件。
 3.  将新生成的 `.json` 文件再次移动到 `active` 目录下。
 
-#### 3.1 安装和信任根证书 (用于实时流式服务)
-
-为了确保实时流式服务 (通过端口 `3120` 或自定义的 `--stream-port` 提供的服务) 能够正常工作，特别是当您在浏览器或其他客户端中直接访问此服务的 HTTPS 端点时，您需要安装并信任项目提供的根证书 `certs/ca.crt`。如果不信任此证书，浏览器或客户端可能会报告安全警告，并拒绝连接。
-
 **重要提示**:
-*   此证书由项目在首次运行时自动生成 (通过 [`stream/cert_manager.py`](stream/cert_manager.py:1))，用于加密代理服务器与您的客户端之间的本地通信。
-*   信任此证书仅用于本地开发和测试目的。请勿在生产环境中使用自签名证书。
-*   文件路径: `certs/ca.crt` (相对于项目根目录)
-
-**Windows 系统:**
-
-1.  **打开证书管理器**:
-    *   按 `Win + R` 打开“运行”对话框，输入 `certmgr.msc` 并按回车。
-2.  **导入证书**:
-    *   在左侧导航栏中，右键点击“受信任的根证书颁发机构” -> “所有任务” -> “导入...”。
-    *   点击“下一步”。
-    *   点击“浏览...”，导航到项目目录下的 `certs/` 文件夹，选择 `ca.crt` 文件。 (确保文件类型选择为 "所有文件 (\*.\*)" 或 "PKCS \#7 证书 (\*.spc; \*.p7b)" 或 "X.509 证书 (\*.cer; \*.crt; \*.der; \*.pem; \*.pfx; \*.p12)" 才能看到 `.pem` 文件)。
-    *   点击“打开”，然后点击“下一步”。
-    *   确保“证书存储”选择的是“受信任的根证书颁发机构”。
-    *   点击“下一步”，然后点击“完成”。
-    *   如果出现安全警告，请选择“是”。
-3.  **验证**:
-    *   在“受信任的根证书颁发机构” -> “证书”中，您应该能找到名为 "AI Studio Proxy CA" (或类似名称) 的证书。
-
-**macOS 系统:**
-
-1.  **打开钥匙串访问 (Keychain Access)**:
-    *   通过 Spotlight 搜索 (Cmd + Space) 输入 "Keychain Access" 并打开它。
-2.  **导入证书**:
-    *   在左上角的“钥匙串”列表中，选择“系统”。
-    *   将 `certs/ca.crt` 文件拖拽到右侧的证书列表中。
-    *   或者，选择菜单栏的“文件” -> “导入项目...”，然后选择 `certs/ca.crt` 文件。
-3.  **信任证书**:
-    *   在证书列表中找到刚刚导入的证书 (通常以 "AI Studio Proxy CA" 或类似名称显示)。
-    *   双击该证书，展开“信任”部分。
-    *   在“使用此证书时:”下拉菜单中，选择“始终信任”。
-    *   关闭证书信息窗口，系统可能会要求您输入管理员密码以保存更改。
-4.  **验证**:
-    *   证书图标应该不再显示红色的 "x" 标记。
-
-**Linux 系统 (以 Ubuntu/Debian 为例):**
-
-1.  **复制证书文件**:
-    首先，将您的根证书文件 (`ca.crt`) 复制到系统证书目录中。通常，这是 `/usr/local/share/ca-certificates/`。您可能需要先创建该目录。
-    ```bash
-    sudo mkdir -p /usr/local/share/ca-certificates/
-    sudo cp certs/ca.crt /usr/local/share/ca-certificates/aistudio_proxy_ca.crt
-    ```
-    *(注意: 将 `certs/ca.crt` 替换为您的实际证书文件路径，并将 `aistudio_proxy_ca.crt` 替换为您希望在系统中显示的证书文件名。)*
-
-2.  **更新证书存储**:
-    ```bash
-    sudo update-ca-certificates
-    ```
-    您应该会看到类似 "1 added, 0 removed; done." (如果之前没有此证书) 或 "1 added, 1 removed; done." (如果更新了同名证书) 的输出。
-2.  **验证 (可选)**:
-    *   检查 `/etc/ssl/certs` 目录中是否包含指向新证书的符号链接。
-
-完成以上步骤后，您的系统和浏览器应该会信任由 `certs/ca.crt` 签发的本地 HTTPS 服务证书，从而避免安全警告并确保实时流式服务正常连接。如果遇到问题，请尝试重启浏览器或计算机。
-
+*   **认证文件是无头模式的关键**: 无头模式依赖于 `auth_profiles/active/` 目录下的有效 `.json` 文件来维持登录状态和访问权限。
 *   **首次访问新主机的性能问题**: 当通过流式代理首次访问一个新的 HTTPS 主机时，服务需要为该主机动态生成并签署一个新的子证书。这个过程可能会比较耗时，导致对该新主机的首次连接请求响应较慢，甚至在某些情况下可能被主程序（如 [`server.py`](server.py:1) 中的 Playwright 交互逻辑）误判为浏览器加载超时。一旦证书生成并缓存后，后续访问同一主机将会显著加快。
 
 ### 4. 日常运行
@@ -665,6 +600,8 @@ python launch_camoufox.py --debug --server-port 2048 --stream-port 3120 --helper
 
 - [Docker 部署指南 (README-Docker.md)](README-Docker.md)
 
+请注意，首次运行获取认证文件目前不能在docker环境完成，必须在主机完成，因此docker方式安装当前仅仅是为了方便云端部署项目。在主机部署本项目成功取得json认证文件后，日常运行通过挂载json可以使用docker来运行本项目。后续会尝试退出工具来实现其他方式获取json。
+
 ---
 ## 多平台指南 (Python 版本)
 
@@ -715,13 +652,14 @@ python launch_camoufox.py --debug --server-port 2048 --stream-port 3120 --helper
         *   Web UI 中的模型参数设置（如温度、系统提示词等）未生效或行为异常：
             *   这可能是由于 AI Studio 页面的 `localStorage` 中的 `isAdvancedOpen` 未正确设置为 `true`，或者 `areToolsOpen` 干扰了参数面板。
             *   代理服务在启动时会尝试自动修正这些 `localStorage` 设置并重新加载页面。如果问题依旧，可以尝试清除浏览器缓存和 `localStorage` 后重启代理服务和浏览器，或在AI Studio页面手动打开高级设置面板再尝试。
-        *   **自签名证书管理与信任 (关键)**:
-            *   集成的流式代理服务 (`stream.py`) 会在首次运行时于项目根目录下的 `certs` 文件夹内生成一个自签名的根证书 (例如 `ca.crt`, `ca.key`)。为了使代理能成功拦截和处理 HTTPS 流量（这是其核心功能之一），您**必须将这个自签名根证书 (`certs/ca.crt`) 导入到您的操作系统或浏览器的受信任根证书颁发机构列表中，并设置为完全信任。** 如果不进行此操作，您在通过代理访问 HTTPS 网站时会遇到证书错误，导致服务无法正常工作。具体导入和信任步骤因操作系统而异，请查阅您系统的相关文档。
+        *   **自签名证书管理**:
+            *   集成的流式代理服务 (`stream.py`) 会在首次运行时于项目根目录下的 `certs` 文件夹内生成一个自签名的根证书 (例如 `ca.crt`, `ca.key`)。
             *   **证书删除与重新生成**:
                 *   您可以删除 `certs` 目录下的根证书 (例如 `ca.crt`, `ca.key`)，代码会在下次启动流式代理时尝试重新生成它。
                 *   **重要**: 如果您选择删除根证书，**强烈建议同时删除 `certs` 目录下的所有其他文件和子目录** (特别是为已访问主机生成的缓存子证书，通常位于 `certs/authority/` 或类似路径下)。否则，旧的子证书可能因为签发者（旧根证书）的丢失而导致与新生成的根证书之间出现信任链错误。
                 *   目前 Python 实现依赖于将这些证书保存在磁盘上（位于 `certs` 目录）。
-#### 流式代理服务：工作原理与手动证书生成
+
+#### 流式代理服务：工作原理
 
 ##### 特性
 
@@ -737,9 +675,9 @@ python launch_camoufox.py --debug --server-port 2048 --stream-port 3120 --helper
 项目中包含了预生成的 CA 证书和密钥。如果您需要重新生成它们，可以使用以下命令：
 
 ```bash
-openssl genrsa -out cert/ca.key 2048
-openssl req -new -x509 -days 3650 -key cert/ca.key -out cert/ca.crt -subj "/C=CN/ST=Shanghai/L=Shanghai/O=AiStudioProxyHelper/OU=CA/CN=AiStudioProxyHelper CA/emailAddress=ca@example.com"
-openssl rsa -in cert/ca.key -out cert/ca.key
+openssl genrsa -out certs/ca.key 2048
+openssl req -new -x509 -days 3650 -key certs/ca.key -out certs/ca.crt -subj "/C=CN/ST=Shanghai/L=Shanghai/O=AiStudioProxyHelper/OU=CA/CN=AiStudioProxyHelper CA/emailAddress=ca@example.com"
+openssl rsa -in certs/ca.key -out certs/ca.key
 ```
 *   **认证失败 (特别是无头模式)**:
     *   **最常见**: `auth_profiles/active/` 下的 `.json` 文件已过期或无效。
@@ -857,10 +795,9 @@ openssl rsa -in cert/ca.key -out cert/ca.key
 
 以下是一些计划中的改进方向：
 
-*   **Docker支持**: 提供官方的 `Dockerfile` 以及 Docker Compose 配置，简化容器化部署流程。
 *   **云服务器部署指南**: 提供更详细的在主流云平台（如 AWS, GCP, Azure）上部署和管理服务的指南。
 *   **认证更新流程优化**: 探索更便捷的认证文件更新机制，减少手动操作。
-*   **MCP兼容性支持**: 增加健壮性提高对MCP的兼容性。
+*   **流程健壮性优化**: 减少错误几率和接近原生体验。
 
 ## 贡献
 
