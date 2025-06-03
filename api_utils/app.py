@@ -93,11 +93,8 @@ async def lifespan(app_param: FastAPI):
         log_level_name=log_level_env,
         redirect_print_str=redirect_print_env
     )
-    
-    # 添加WebSocket日志处理器
-    handler = WebSocketLogHandler(server.log_ws_manager)
-    handler.setLevel(logging.INFO)
-    server.logger.addHandler(handler)
+
+    # WebSocket日志处理器已在setup_server_logging函数中添加，无需重复添加
     
     # 获取logger实例供后续使用
     logger = server.logger
@@ -108,7 +105,7 @@ async def lifespan(app_param: FastAPI):
     server.model_switching_lock = Lock()
     server.params_cache_lock = Lock()
     
-    # 初始化代理设置
+    # 初始化代理设置 - 移动到server模块中进行全局配置
     PROXY_SERVER_ENV = "http://127.0.0.1:3120/"
     STREAM_PROXY_SERVER_ENV = os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
 
@@ -118,11 +115,12 @@ async def lifespan(app_param: FastAPI):
     elif STREAM_PORT is not None:
         PROXY_SERVER_ENV = f"http://127.0.0.1:{STREAM_PORT}/"
 
-    PLAYWRIGHT_PROXY_SETTINGS = None
+    # 设置全局代理配置到server模块
+    server.PLAYWRIGHT_PROXY_SETTINGS = None
     if PROXY_SERVER_ENV:
-        PLAYWRIGHT_PROXY_SETTINGS = {'server': PROXY_SERVER_ENV}
+        server.PLAYWRIGHT_PROXY_SETTINGS = {'server': PROXY_SERVER_ENV}
         if NO_PROXY_ENV:
-            PLAYWRIGHT_PROXY_SETTINGS['bypass'] = NO_PROXY_ENV.replace(',', ';')
+            server.PLAYWRIGHT_PROXY_SETTINGS['bypass'] = NO_PROXY_ENV.replace(',', ';')
 
     if STREAM_PORT != '0':
         logger.info(f"STREAM 代理启动中，端口: {STREAM_PORT}")
@@ -144,11 +142,11 @@ async def lifespan(app_param: FastAPI):
     logger.info(f"Playwright 已导入")
     logger.info(f"FastAPI 应用已初始化")
     
-    if PLAYWRIGHT_PROXY_SETTINGS:
+    if server.PLAYWRIGHT_PROXY_SETTINGS:
         logger.info(f"--- 代理配置检测到 (由 server.py 的 lifespan 记录) ---")
-        logger.info(f"   将使用代理服务器: {PLAYWRIGHT_PROXY_SETTINGS['server']}")
-        if 'bypass' in PLAYWRIGHT_PROXY_SETTINGS:
-            logger.info(f"   绕过代理的主机: {PLAYWRIGHT_PROXY_SETTINGS['bypass']}")
+        logger.info(f"   将使用代理服务器: {server.PLAYWRIGHT_PROXY_SETTINGS['server']}")
+        if 'bypass' in server.PLAYWRIGHT_PROXY_SETTINGS:
+            logger.info(f"   绕过代理的主机: {server.PLAYWRIGHT_PROXY_SETTINGS['bypass']}")
         logger.info(f"-----------------------")
     else:
         logger.info("--- 未检测到 HTTP_PROXY 或 HTTPS_PROXY 环境变量，不使用代理 (由 server.py 的 lifespan 记录) ---")

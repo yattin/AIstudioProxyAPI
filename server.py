@@ -93,6 +93,9 @@ is_browser_connected = False
 is_page_ready = False
 is_initializing = False
 
+# --- 全局代理配置 ---
+PLAYWRIGHT_PROXY_SETTINGS: Optional[Dict[str, str]] = None
+
 global_model_list_raw_json: Optional[List[Any]] = None
 parsed_model_list: List[Dict[str, Any]] = []
 model_list_fetch_event = asyncio.Event()

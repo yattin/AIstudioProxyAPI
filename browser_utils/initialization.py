@@ -62,10 +62,11 @@ async def _initialize_page_logic(browser: AsyncBrowser):
         else:
             logger.info("   (不使用 storage_state)")
         
-        # 代理设置需要从全局变量中获取
-        if globals().get('PLAYWRIGHT_PROXY_SETTINGS'):
-            context_options['proxy'] = globals()['PLAYWRIGHT_PROXY_SETTINGS']
-            logger.info(f"   (浏览器上下文将使用代理: {globals()['PLAYWRIGHT_PROXY_SETTINGS']['server']})")
+        # 代理设置需要从server模块中获取
+        import server
+        if server.PLAYWRIGHT_PROXY_SETTINGS:
+            context_options['proxy'] = server.PLAYWRIGHT_PROXY_SETTINGS
+            logger.info(f"   (浏览器上下文将使用代理: {server.PLAYWRIGHT_PROXY_SETTINGS['server']})")
         else:
             logger.info("   (浏览器上下文不使用显式代理配置)")
         

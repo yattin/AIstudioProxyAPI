@@ -76,10 +76,7 @@ __all__ = [
     'SAVED_AUTH_DIR',
     'LOG_DIR',
     'APP_LOG_FILE_PATH',
-    'PROXY_SERVER_ENV',
-    'STREAM_PROXY_SERVER_ENV',
     'NO_PROXY_ENV',
-    'PLAYWRIGHT_PROXY_SETTINGS',
     
     # 工具函数
     'get_environment_variable',

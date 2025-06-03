@@ -1054,8 +1054,8 @@ async def _handle_auxiliary_stream_response(req_id: str, request: ChatCompletion
                     # 计算usage统计
                     try:
                         usage_stats = calculate_usage_stats(
-                            [msg.dict() for msg in request.messages], 
-                            full_body_content, 
+                            [msg.model_dump() for msg in request.messages],
+                            full_body_content,
                             full_reasoning_content
                         )
                         logger.info(f"[{req_id}] 计算的token使用统计: {usage_stats}")
@@ -1174,8 +1174,8 @@ async def _handle_auxiliary_stream_response(req_id: str, request: ChatCompletion
 
         # 计算token使用统计
         usage_stats = calculate_usage_stats(
-            [msg.dict() for msg in request.messages], 
-            content or "", 
+            [msg.model_dump() for msg in request.messages],
+            content or "",
             reasoning_content
         )
 
@@ -1231,10 +1231,28 @@ async def _handle_playwright_response(req_id: str, request: ChatCompletionReques
 
     if is_streaming:
         completion_event = Event()
-        
+
         async def create_response_stream_generator():
             try:
-                final_content = await _wait_for_response_completion(page, req_id, check_client_disconnected)
+                # 获取必需的定位器
+                input_field_locator = page.locator(PROMPT_TEXTAREA_SELECTOR)
+                edit_button_locator = page.locator(EDIT_MESSAGE_BUTTON_SELECTOR)
+
+                completion_detected = await _wait_for_response_completion(
+                    page,
+                    input_field_locator,
+                    submit_button_locator,
+                    edit_button_locator,
+                    req_id,
+                    check_client_disconnected,
+                    req_id  # current_chat_id
+                )
+
+                if not completion_detected:
+                    logger.warning(f"[{req_id}] 响应完成检测失败，尝试获取当前内容")
+
+                # 获取最终响应内容
+                final_content = await _get_final_response_content(page, req_id, check_client_disconnected)
                 
                 # 生成流式响应
                 words = final_content.split()
@@ -1252,8 +1270,8 @@ async def _handle_playwright_response(req_id: str, request: ChatCompletionReques
                 
                 # 计算并发送带usage的完成块
                 usage_stats = calculate_usage_stats(
-                    [msg.dict() for msg in request.messages], 
-                    final_content, 
+                    [msg.model_dump() for msg in request.messages],
+                    final_content,
                     ""  # Playwright模式没有reasoning content
                 )
                 logger.info(f"[{req_id}] Playwright非流式计算的token使用统计: {usage_stats}")
@@ -1283,13 +1301,31 @@ async def _handle_playwright_response(req_id: str, request: ChatCompletionReques
         
         return completion_event, submit_button_locator, check_client_disconnected
     else:
-        # 等待响应完成并提取内容
-        final_content = await _wait_for_response_completion(page, req_id, check_client_disconnected)
+        # 获取必需的定位器
+        input_field_locator = page.locator(PROMPT_TEXTAREA_SELECTOR)
+        edit_button_locator = page.locator(EDIT_MESSAGE_BUTTON_SELECTOR)
+
+        # 等待响应完成
+        completion_detected = await _wait_for_response_completion(
+            page,
+            input_field_locator,
+            submit_button_locator,
+            edit_button_locator,
+            req_id,
+            check_client_disconnected,
+            req_id  # current_chat_id
+        )
+
+        if not completion_detected:
+            logger.warning(f"[{req_id}] 响应完成检测失败，尝试获取当前内容")
+
+        # 获取最终响应内容
+        final_content = await _get_final_response_content(page, req_id, check_client_disconnected)
         
         # 计算token使用统计
         usage_stats = calculate_usage_stats(
-            [msg.dict() for msg in request.messages], 
-            final_content, 
+            [msg.model_dump() for msg in request.messages],
+            final_content,
             ""  # Playwright模式没有reasoning content
         )
         logger.info(f"[{req_id}] Playwright非流式计算的token使用统计: {usage_stats}")

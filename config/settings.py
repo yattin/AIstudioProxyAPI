@@ -22,16 +22,8 @@ LOG_DIR = os.path.join(os.path.dirname(__file__), '..', 'logs')
 APP_LOG_FILE_PATH = os.path.join(LOG_DIR, 'app.log')
 
 # --- 代理配置 ---
-PROXY_SERVER_ENV = "http://127.0.0.1:3120/"
-STREAM_PROXY_SERVER_ENV = os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
+# 注意：代理配置现在在 api_utils/app.py 中动态设置，根据 STREAM_PORT 环境变量决定
 NO_PROXY_ENV = os.environ.get('NO_PROXY')
-
-# --- Playwright代理设置 ---
-PLAYWRIGHT_PROXY_SETTINGS: Optional[Dict[str, str]] = None
-if PROXY_SERVER_ENV:
-    PLAYWRIGHT_PROXY_SETTINGS = {'server': PROXY_SERVER_ENV}
-    if NO_PROXY_ENV:
-        PLAYWRIGHT_PROXY_SETTINGS['bypass'] = NO_PROXY_ENV.replace(',', ';')
 
 def get_environment_variable(key: str, default: str = '') -> str:
     """获取环境变量值"""
