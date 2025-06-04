@@ -40,6 +40,28 @@ managed_process_info: Dict[str, Any] = {
     "fully_detached": False # 新增：标记进程是否完全独立
 }
 
+# 添加按钮防抖机制
+button_debounce_info: Dict[str, float] = {}
+
+def debounce_button(func_name: str, delay_seconds: float = 2.0):
+    """
+    按钮防抖装饰器，防止在指定时间内重复执行同一函数
+    """
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            import time
+            current_time = time.time()
+            last_call_time = button_debounce_info.get(func_name, 0)
+
+            if current_time - last_call_time < delay_seconds:
+                logger.info(f"按钮防抖：忽略 {func_name} 的重复调用")
+                return
+
+            button_debounce_info[func_name] = current_time
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
 # 添加全局logger定义
 logger = logging.getLogger("GUILauncher")
 logger.setLevel(logging.INFO)
@@ -220,11 +242,19 @@ LANG_TEXTS = {
     "current_auth_file_display_label": {"zh": "当前认证: ", "en": "Current Auth: "},
     "current_auth_file_none": {"zh": "无", "en": "None"},
     "current_auth_file_selected_format": {"zh": "{file}", "en": "{file}"},
-    "test_proxy_btn": {"zh": "测试代理连通性", "en": "Test Proxy Connectivity"},
+    "test_proxy_btn": {"zh": "测试", "en": "Test"},
+    "proxy_section_label": {"zh": "代理配置", "en": "Proxy Configuration"},
     "proxy_test_url_default": "http://httpbin.org/get", # 默认测试URL
+    "proxy_test_url_backup": "http://www.google.com", # 备用测试URL
     "proxy_not_enabled_warn": {"zh": "代理未启用或地址为空，请先配置。", "en": "Proxy not enabled or address is empty. Please configure first."},
     "proxy_test_success": {"zh": "代理连接成功 ({url})", "en": "Proxy connection successful ({url})"},
     "proxy_test_failure": {"zh": "代理连接失败 ({url}):\n{error}", "en": "Proxy connection failed ({url}):\n{error}"},
+    "proxy_testing_status": {"zh": "正在测试代理 {proxy_addr}...", "en": "Testing proxy {proxy_addr}..."},
+    "proxy_test_success_status": {"zh": "代理测试成功 ({url})", "en": "Proxy test successful ({url})"},
+    "proxy_test_failure_status": {"zh": "代理测试失败: {error}", "en": "Proxy test failed: {error}"},
+    "proxy_test_retrying": {"zh": "代理测试失败，正在重试 ({attempt}/{max_attempts})...", "en": "Proxy test failed, retrying ({attempt}/{max_attempts})..."},
+    "proxy_test_backup_url": {"zh": "主测试URL失败，尝试备用URL...", "en": "Primary test URL failed, trying backup URL..."},
+    "proxy_test_all_failed": {"zh": "所有代理测试尝试均失败", "en": "All proxy test attempts failed"},
     "querying_ports_status": {"zh": "正在查询端口: {ports_desc}...", "en": "Querying ports: {ports_desc}..."},
     "port_query_result_format": {"zh": "[{port_type} - {port_num}] {pid_info}", "en": "[{port_type} - {port_num}] {pid_info}"},
     "port_not_in_use_format": {"zh": "[{port_type} - {port_num}] 未被占用", "en": "[{port_type} - {port_num}] Not in use"},
@@ -940,10 +970,16 @@ def _launch_process_gui(cmd: List[str], service_name_key: str, env_vars: Optiona
         applescript_arg_escaped = shell_command_str.replace('\\\\', '\\\\\\\\').replace('\"', '\\\\\"')
         
         # Construct the AppleScript command
-        # Using "tell application ..." is slightly more robust/standard
-        applescript_command = f'tell application "Terminal" to do script "{applescript_arg_escaped}" activate'
-        
-        launch_cmd_for_terminal = ["osascript", "-e", applescript_command]
+        # 修复：使用简化的AppleScript命令避免AppleEvent处理程序失败
+        # 直接创建新窗口并执行命令，避免复杂的条件判断
+        applescript_command = f'''
+        tell application "Terminal"
+            do script "{applescript_arg_escaped}"
+            activate
+        end tell
+        '''
+
+        launch_cmd_for_terminal = ["osascript", "-e", applescript_command.strip()]
     elif system == "Linux":
         import shutil
         terminal_emulator = shutil.which("x-terminal-emulator") or shutil.which("gnome-terminal") or shutil.which("konsole") or shutil.which("xfce4-terminal") or shutil.which("xterm")
@@ -1018,6 +1054,7 @@ def _launch_process_gui(cmd: List[str], service_name_key: str, env_vars: Optiona
         update_status_bar("status_error_starting", service_name=service_name)
         logger.error(f"Error in _launch_process_gui for {service_name}: {e}", exc_info=True)
 
+@debounce_button("start_headed_interactive", 3.0)
 def start_headed_interactive_gui():
     launch_params = _get_launch_parameters()
     if not launch_params: return
@@ -1051,6 +1088,7 @@ def start_headed_interactive_gui():
     update_status_bar("status_headed_launch")
     _launch_process_gui(cmd, "service_name_headed_interactive", env_vars=proxy_env)
 
+@debounce_button("start_headless", 3.0)
 def start_headless_gui():
     launch_params = _get_launch_parameters()
     if not launch_params: return
@@ -1084,6 +1122,7 @@ def start_headless_gui():
     update_status_bar("status_headless_launch")
     _launch_process_gui(cmd, "service_name_headless", env_vars=proxy_env)
 
+@debounce_button("start_virtual_display", 3.0)
 def start_virtual_display_gui():
     if platform.system() != "Linux":
         messagebox.showwarning(get_text("warning_title"), "虚拟显示模式仅在Linux上受支持。")
@@ -1429,39 +1468,135 @@ def query_port_and_display_pids_gui():
     else:
         logger.error("pid_listbox_widget or pid_list_lbl_frame_ref is None in query_port_and_display_pids_gui")
 
-def _perform_proxy_test(proxy_address: str, test_url: str) -> Tuple[bool, str]:
+def _perform_proxy_test_single(proxy_address: str, test_url: str, timeout: int = 15) -> Tuple[bool, str, int]:
     """
-    Tries to connect to test_url via proxy_address.
-    Returns (success_status, message_or_error_string).
+    单次代理测试尝试
+    Returns (success_status, message_or_error_string, status_code).
     """
     proxies = {
         "http": proxy_address,
         "https": proxy_address,
     }
     try:
-        logger.info(f"Testing proxy {proxy_address} with URL {test_url}")
-        response = requests.get(test_url, proxies=proxies, timeout=10, allow_redirects=True)
-        response.raise_for_status()  # Raises an HTTPError for bad responses (4XX or 5XX)
-        logger.info(f"Proxy test to {test_url} via {proxy_address} successful. Status: {response.status_code}")
-        return True, get_text("proxy_test_success", url=test_url)
+        logger.info(f"Testing proxy {proxy_address} with URL {test_url} (timeout: {timeout}s)")
+        response = requests.get(test_url, proxies=proxies, timeout=timeout, allow_redirects=True)
+        status_code = response.status_code
+
+        # 检查HTTP状态码
+        if 200 <= status_code < 300:
+            logger.info(f"Proxy test to {test_url} via {proxy_address} successful. Status: {status_code}")
+            return True, get_text("proxy_test_success", url=test_url), status_code
+        elif status_code == 503:
+            # 503 Service Unavailable - 可能是临时性问题
+            logger.warning(f"Proxy test got 503 Service Unavailable from {test_url} via {proxy_address}")
+            return False, f"HTTP {status_code}: Service Temporarily Unavailable", status_code
+        elif 400 <= status_code < 500:
+            # 4xx 客户端错误
+            logger.warning(f"Proxy test got client error {status_code} from {test_url} via {proxy_address}")
+            return False, f"HTTP {status_code}: Client Error", status_code
+        elif 500 <= status_code < 600:
+            # 5xx 服务器错误
+            logger.warning(f"Proxy test got server error {status_code} from {test_url} via {proxy_address}")
+            return False, f"HTTP {status_code}: Server Error", status_code
+        else:
+            logger.warning(f"Proxy test got unexpected status {status_code} from {test_url} via {proxy_address}")
+            return False, f"HTTP {status_code}: Unexpected Status", status_code
+
     except requests.exceptions.ProxyError as e:
         logger.error(f"ProxyError connecting to {test_url} via {proxy_address}: {e}")
-        return False, get_text("proxy_test_failure", url=test_url, error=f"Proxy Error: {e}")
+        return False, f"Proxy Error: {e}", 0
     except requests.exceptions.ConnectTimeout as e:
         logger.error(f"ConnectTimeout connecting to {test_url} via {proxy_address}: {e}")
-        return False, get_text("proxy_test_failure", url=test_url, error=f"Connection Timeout: {e}")
+        return False, f"Connection Timeout: {e}", 0
     except requests.exceptions.ReadTimeout as e:
         logger.error(f"ReadTimeout from {test_url} via {proxy_address}: {e}")
-        return False, get_text("proxy_test_failure", url=test_url, error=f"Read Timeout: {e}")
+        return False, f"Read Timeout: {e}", 0
     except requests.exceptions.SSLError as e:
         logger.error(f"SSLError connecting to {test_url} via {proxy_address}: {e}")
-        return False, get_text("proxy_test_failure", url=test_url, error=f"SSL Error: {e}")
+        return False, f"SSL Error: {e}", 0
     except requests.exceptions.RequestException as e:
         logger.error(f"RequestException connecting to {test_url} via {proxy_address}: {e}")
-        return False, get_text("proxy_test_failure", url=test_url, error=str(e))
+        return False, str(e), 0
     except Exception as e: # Catch any other unexpected errors
         logger.error(f"Unexpected error during proxy test to {test_url} via {proxy_address}: {e}", exc_info=True)
-        return False, get_text("proxy_test_failure", url=test_url, error=f"Unexpected error: {e}")
+        return False, f"Unexpected error: {e}", 0
+
+def _perform_proxy_test(proxy_address: str, test_url: str) -> Tuple[bool, str]:
+    """
+    增强的代理测试函数，包含重试机制和备用URL
+    Returns (success_status, message_or_error_string).
+    """
+    max_attempts = 3
+    backup_url = LANG_TEXTS["proxy_test_url_backup"]
+    urls_to_try = [test_url]
+
+    # 如果主URL不是备用URL，则添加备用URL
+    if test_url != backup_url:
+        urls_to_try.append(backup_url)
+
+    for url_index, current_url in enumerate(urls_to_try):
+        if url_index > 0:
+            logger.info(f"Trying backup URL: {current_url}")
+            update_status_bar("proxy_test_backup_url")
+
+        for attempt in range(1, max_attempts + 1):
+            if attempt > 1:
+                logger.info(f"Retrying proxy test (attempt {attempt}/{max_attempts})")
+                update_status_bar("proxy_test_retrying", attempt=attempt, max_attempts=max_attempts)
+                time.sleep(2)  # 重试前等待2秒
+
+            success, error_msg, status_code = _perform_proxy_test_single(proxy_address, current_url)
+
+            if success:
+                return True, get_text("proxy_test_success", url=current_url)
+
+            # 如果是503错误或超时，值得重试
+            should_retry = (
+                status_code == 503 or
+                "timeout" in error_msg.lower() or
+                "temporarily unavailable" in error_msg.lower()
+            )
+
+            if not should_retry:
+                # 对于非临时性错误，不重试，直接尝试下一个URL
+                logger.info(f"Non-retryable error for {current_url}: {error_msg}")
+                break
+
+            if attempt == max_attempts:
+                logger.warning(f"All {max_attempts} attempts failed for {current_url}: {error_msg}")
+
+    # 所有URL和重试都失败了
+    return False, get_text("proxy_test_all_failed")
+
+def _proxy_test_thread(proxy_addr: str, test_url: str):
+    """在后台线程中执行代理测试"""
+    try:
+        success, message = _perform_proxy_test(proxy_addr, test_url)
+
+        # 在主线程中更新GUI
+        def update_gui():
+            if success:
+                messagebox.showinfo(get_text("info_title"), message, parent=root_widget)
+                update_status_bar("proxy_test_success_status", url=test_url)
+            else:
+                messagebox.showerror(get_text("error_title"),
+                                   get_text("proxy_test_failure", url=test_url, error=message),
+                                   parent=root_widget)
+                update_status_bar("proxy_test_failure_status", error=message)
+
+        if root_widget:
+            root_widget.after_idle(update_gui)
+
+    except Exception as e:
+        logger.error(f"Proxy test thread error: {e}", exc_info=True)
+        def show_error():
+            messagebox.showerror(get_text("error_title"),
+                               f"代理测试过程中发生错误: {e}",
+                               parent=root_widget)
+            update_status_bar("proxy_test_failure_status", error=str(e))
+
+        if root_widget:
+            root_widget.after_idle(show_error)
 
 def test_proxy_connectivity_gui():
     if not proxy_enabled_var.get() or not proxy_address_var.get().strip():
@@ -1471,17 +1606,16 @@ def test_proxy_connectivity_gui():
     proxy_addr_to_test = proxy_address_var.get().strip()
     test_url = LANG_TEXTS["proxy_test_url_default"] # Use the default from LANG_TEXTS
 
-    update_status_bar("status_idle") # Clear previous status
-    # Show a temporary "testing" message if desired, or rely on messagebox
-    # process_status_text_var.set(f"Testing proxy {proxy_addr_to_test} with {test_url}...")
+    # 显示测试开始状态
+    update_status_bar("proxy_testing_status", proxy_addr=proxy_addr_to_test)
 
-    success, message = _perform_proxy_test(proxy_addr_to_test, test_url)
-
-    if success:
-        messagebox.showinfo(get_text("info_title"), message, parent=root_widget)
-    else:
-        messagebox.showerror(get_text("error_title"), message, parent=root_widget)
-    # update_status_bar("status_idle") # Reset status after test
+    # 在后台线程中执行测试，避免阻塞GUI
+    test_thread = threading.Thread(
+        target=_proxy_test_thread,
+        args=(proxy_addr_to_test, test_url),
+        daemon=True
+    )
+    test_thread.start()
 
 def stop_selected_pid_from_list_gui():
     if not pid_listbox_widget: return
@@ -1798,19 +1932,34 @@ def build_gui(root: tk.Tk):
     entry_helper_endpoint = ttk.Entry(helper_details_frame, textvariable=helper_endpoint_var)
     entry_helper_endpoint.pack(side=tk.LEFT, fill=tk.X, expand=True)
     
-    # 浏览器代理设置
-    proxy_frame_outer = ttk.Frame(port_section)
-    proxy_frame_outer.pack(fill=tk.X, padx=5, pady=3)
-    proxy_checkbox = ttk.Checkbutton(proxy_frame_outer, variable=proxy_enabled_var, text="")
-    proxy_checkbox.pack(side=tk.LEFT, padx=(0,2))
+    # 添加分隔符
+    ttk.Separator(port_section, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=5, pady=(8,5))
+
+    # 代理配置部分 - 独立的LabelFrame
+    proxy_section = ttk.LabelFrame(port_section, text="")
+    proxy_section.pack(fill=tk.X, padx=5, pady=(5,8))
+    widgets_to_translate.append({"widget": proxy_section, "key": "proxy_section_label", "property": "text"})
+
+    # 代理启用复选框
+    proxy_enable_frame = ttk.Frame(proxy_section)
+    proxy_enable_frame.pack(fill=tk.X, padx=5, pady=(5,3))
+    proxy_checkbox = ttk.Checkbutton(proxy_enable_frame, variable=proxy_enabled_var, text="")
+    proxy_checkbox.pack(side=tk.LEFT)
     widgets_to_translate.append({"widget": proxy_checkbox, "key": "enable_proxy_label", "property": "text"})
-    proxy_details_frame = ttk.Frame(proxy_frame_outer)
-    proxy_details_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
-    lbl_proxy_address = ttk.Label(proxy_details_frame, text="")
+
+    # 代理地址输入
+    proxy_address_frame = ttk.Frame(proxy_section)
+    proxy_address_frame.pack(fill=tk.X, padx=5, pady=(0,5))
+    lbl_proxy_address = ttk.Label(proxy_address_frame, text="")
     lbl_proxy_address.pack(side=tk.LEFT, padx=(0,5))
     widgets_to_translate.append({"widget": lbl_proxy_address, "key": "proxy_address_label"})
-    entry_proxy_address = ttk.Entry(proxy_details_frame, textvariable=proxy_address_var)
-    entry_proxy_address.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    entry_proxy_address = ttk.Entry(proxy_address_frame, textvariable=proxy_address_var)
+    entry_proxy_address.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0,5))
+
+    # 代理测试按钮
+    btn_test_proxy_inline = ttk.Button(proxy_address_frame, text="", command=test_proxy_connectivity_gui, width=8)
+    btn_test_proxy_inline.pack(side=tk.RIGHT)
+    widgets_to_translate.append({"widget": btn_test_proxy_inline, "key": "test_proxy_btn"})
     
     # Port auto check
     port_auto_check_frame = ttk.Frame(port_section)
@@ -1857,24 +2006,7 @@ def build_gui(root: tk.Tk):
     # btn_stop_service.pack(fill=tk.X, padx=5, pady=3)
     # widgets_to_translate.append({"widget": btn_stop_service, "key": "stop_gui_service_btn"})
     
-    # 认证文件管理 (移到左栏底部)
-    auth_section_left = ttk.LabelFrame(left_frame_container, text="") # 重命名以区分
-    auth_section_left.grid(row=left_current_row, column=0, sticky="ew", padx=2, pady=5)
-    widgets_to_translate.append({"widget": auth_section_left, "key": "auth_files_management", "property": "text"})
-    left_current_row += 1
-    btn_manage_auth_left = ttk.Button(auth_section_left, text="", command=manage_auth_files_gui) # 重命名按钮
-    btn_manage_auth_left.pack(fill=tk.X, padx=5, pady=5)
-    widgets_to_translate.append({"widget": btn_manage_auth_left, "key": "manage_auth_files_btn"})
-    
-    # 显示当前认证文件
-    auth_display_frame = ttk.Frame(auth_section_left) # 放在认证管理部分内部
-    auth_display_frame.pack(fill=tk.X, padx=5, pady=(0,5)) # 调整pady使其更紧凑
-    lbl_current_auth_static = ttk.Label(auth_display_frame, text="")
-    lbl_current_auth_static.pack(side=tk.LEFT)
-    widgets_to_translate.append({"widget": lbl_current_auth_static, "key": "current_auth_file_display_label"})
-    lbl_current_auth_dynamic = ttk.Label(auth_display_frame, textvariable=active_auth_file_display_var, wraplength=180) # 允许换行
-    lbl_current_auth_dynamic.pack(side=tk.LEFT, fill=tk.X, expand=True)
-    _update_active_auth_display() # 初始化时更新一次
+
 
     # 添加一个占位符Frame以推高左侧内容 (如果需要消除底部所有空白)
     spacer_frame_left = ttk.Frame(left_frame_container)
@@ -1885,9 +2017,9 @@ def build_gui(root: tk.Tk):
     middle_frame_container = ttk.Frame(main_paned_window, padding="5")
     main_paned_window.add(middle_frame_container, weight=2) # 调整中栏初始权重
     middle_frame_container.columnconfigure(0, weight=1)
-    middle_frame_container.rowconfigure(0, weight=1) 
-    middle_frame_container.rowconfigure(1, weight=0) 
-    # middle_frame_container.rowconfigure(2, weight=0) # 认证管理已移走
+    middle_frame_container.rowconfigure(0, weight=1)
+    middle_frame_container.rowconfigure(1, weight=0)
+    middle_frame_container.rowconfigure(2, weight=0) # 认证管理现在在中栏
 
     middle_current_row = 0
     pid_section_frame = ttk.Frame(middle_frame_container)
@@ -1901,7 +2033,7 @@ def build_gui(root: tk.Tk):
     pid_list_lbl_frame_ref.grid(row=0, column=0, columnspan=2, sticky="nsew", padx=2, pady=2)
     pid_list_lbl_frame_ref.columnconfigure(0, weight=1)
     pid_list_lbl_frame_ref.rowconfigure(0, weight=1)
-    pid_listbox_widget = tk.Listbox(pid_list_lbl_frame_ref, height=7, exportselection=False) 
+    pid_listbox_widget = tk.Listbox(pid_list_lbl_frame_ref, height=4, exportselection=False)
     pid_listbox_widget.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
     scrollbar = ttk.Scrollbar(pid_list_lbl_frame_ref, orient="vertical", command=pid_listbox_widget.yview)
     scrollbar.grid(row=0, column=1, sticky="ns", padx=(0,5), pady=5)
@@ -1918,10 +2050,7 @@ def build_gui(root: tk.Tk):
     btn_stop_pid.grid(row=0, column=1, sticky="ew", padx=(2,0))
     widgets_to_translate.append({"widget": btn_stop_pid, "key": "stop_selected_pid_btn"})
     
-    # Test Proxy Connectivity Button
-    btn_test_proxy = ttk.Button(pid_buttons_frame, text="", command=test_proxy_connectivity_gui)
-    btn_test_proxy.grid(row=1, column=0, columnspan=2, sticky="ew", padx=0, pady=(3,0)) # Place below query/stop
-    widgets_to_translate.append({"widget": btn_test_proxy, "key": "test_proxy_btn"})
+    # 代理测试按钮已移至代理配置部分，此处不再重复
 
     kill_custom_frame = ttk.LabelFrame(middle_frame_container, text="")
     kill_custom_frame.grid(row=middle_current_row, column=0, sticky="ew", padx=2, pady=5)
@@ -1933,6 +2062,24 @@ def build_gui(root: tk.Tk):
     btn_kill_custom_pid = ttk.Button(kill_custom_frame, text="", command=kill_custom_pid_gui)
     btn_kill_custom_pid.pack(side=tk.LEFT, padx=5, pady=5)
     widgets_to_translate.append({"widget": btn_kill_custom_pid, "key": "kill_custom_pid_btn"})
+
+    # 认证文件管理 (移到中栏PID终止功能下方)
+    auth_section_middle = ttk.LabelFrame(middle_frame_container, text="")
+    auth_section_middle.grid(row=middle_current_row, column=0, sticky="ew", padx=2, pady=5)
+    widgets_to_translate.append({"widget": auth_section_middle, "key": "auth_files_management", "property": "text"})
+    middle_current_row += 1
+    btn_manage_auth_middle = ttk.Button(auth_section_middle, text="", command=manage_auth_files_gui)
+    btn_manage_auth_middle.pack(fill=tk.X, padx=5, pady=5)
+    widgets_to_translate.append({"widget": btn_manage_auth_middle, "key": "manage_auth_files_btn"})
+
+    # 显示当前认证文件
+    auth_display_frame = ttk.Frame(auth_section_middle)
+    auth_display_frame.pack(fill=tk.X, padx=5, pady=(0,5))
+    lbl_current_auth_static = ttk.Label(auth_display_frame, text="")
+    lbl_current_auth_static.pack(side=tk.LEFT)
+    widgets_to_translate.append({"widget": lbl_current_auth_static, "key": "current_auth_file_display_label"})
+    lbl_current_auth_dynamic = ttk.Label(auth_display_frame, textvariable=active_auth_file_display_var, wraplength=180)
+    lbl_current_auth_dynamic.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
     # --- 右栏 Frame --- 
     right_frame_container = ttk.Frame(main_paned_window, padding="5")
