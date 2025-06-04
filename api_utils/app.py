@@ -105,15 +105,22 @@ async def lifespan(app_param: FastAPI):
     server.model_switching_lock = Lock()
     server.params_cache_lock = Lock()
     
-    # 初始化代理设置 - 移动到server模块中进行全局配置
-    PROXY_SERVER_ENV = "http://127.0.0.1:3120/"
-    STREAM_PROXY_SERVER_ENV = os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
-
+    # 初始化代理设置 - 使用统一的代理配置逻辑
     STREAM_PORT = os.environ.get('STREAM_PORT')
+
+    # 确定Playwright上下文使用的代理
     if STREAM_PORT == '0':
+        # 流式代理禁用时，Playwright直接使用环境变量代理
         PROXY_SERVER_ENV = os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
     elif STREAM_PORT is not None:
+        # 流式代理启用时，Playwright使用本地流式代理
         PROXY_SERVER_ENV = f"http://127.0.0.1:{STREAM_PORT}/"
+    else:
+        # 默认使用流式代理
+        PROXY_SERVER_ENV = "http://127.0.0.1:3120/"
+
+    # 流式代理的上游代理配置 - 优先使用统一配置
+    STREAM_PROXY_SERVER_ENV = os.environ.get('UNIFIED_PROXY_CONFIG') or os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
 
     # 设置全局代理配置到server模块
     server.PLAYWRIGHT_PROXY_SETTINGS = None

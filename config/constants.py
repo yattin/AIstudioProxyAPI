@@ -12,7 +12,7 @@ DEFAULT_FALLBACK_MODEL_ID = "no model list"
 DEFAULT_TEMPERATURE = 1.0
 DEFAULT_MAX_OUTPUT_TOKENS = 65536
 DEFAULT_TOP_P = 0.95
-DEFAULT_STOP_SEQUENCES = []  # 空列表表示无停止序列
+DEFAULT_STOP_SEQUENCES = ["用户:"]  # 空列表表示无停止序列
 
 # --- URL模式 ---
 AI_STUDIO_URL_PATTERN = 'aistudio.google.com/'
