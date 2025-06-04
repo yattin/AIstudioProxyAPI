@@ -52,7 +52,7 @@ def generate_sse_error_chunk(message: str, req_id: str, error_type: str = "serve
 # --- 流处理工具函数 ---
 async def use_stream_response(req_id: str) -> AsyncGenerator[Any, None]:
     """使用流响应（从服务器的全局队列获取数据）"""
-    from server import STREAM_QUEUE, clear_stream_queue, logger
+    from server import STREAM_QUEUE, logger
     import queue
     
     if STREAM_QUEUE is None:
@@ -128,22 +128,25 @@ async def use_stream_response(req_id: str) -> AsyncGenerator[Any, None]:
 
 
 async def clear_stream_queue():
-    """清空流队列"""
+    """清空流队列（与原始参考文件保持一致）"""
     from server import STREAM_QUEUE, logger
-    
+    import queue
+
     if STREAM_QUEUE is None:
+        logger.info("流队列未初始化或已被禁用，跳过清空操作。")
         return
-    
-    try:
-        # 清空队列中剩余的数据
-        while True:
-            try:
-                STREAM_QUEUE.get_nowait()
-            except:
-                break
-        logger.debug("流队列已清空")
-    except Exception as e:
-        logger.error(f"清空流队列时出错: {e}")
+
+    while True:
+        try:
+            data_chunk = await asyncio.to_thread(STREAM_QUEUE.get_nowait)
+            # logger.info(f"清空流式队列缓存，丢弃数据: {data_chunk}")
+        except queue.Empty:
+            logger.info("流式队列已清空 (捕获到 queue.Empty)。")
+            break
+        except Exception as e:
+            logger.error(f"清空流式队列时发生意外错误: {e}", exc_info=True)
+            break
+    logger.info("流式队列缓存清空完毕。")
 
 
 # --- Helper response generator ---

@@ -6,7 +6,8 @@ let chatbox, userInput, sendButton, clearButton, sidebarPanel, toggleSidebarButt
     navModelSettingsButton, modelSettingsView, systemPromptInput, temperatureSlider,
     temperatureValue, maxOutputTokensSlider, maxOutputTokensValue, topPSlider,
     topPValue, stopSequencesInput, saveModelSettingsButton, resetModelSettingsButton,
-    settingsStatusElement;
+    settingsStatusElement, apiKeyStatus, newApiKeyInput, toggleApiKeyVisibilityButton,
+    addApiKeyButton, testApiKeyButton, apiKeyList;
 
 function initializeDOMReferences() {
     chatbox = document.getElementById('chatbox');
@@ -42,6 +43,14 @@ function initializeDOMReferences() {
     saveModelSettingsButton = document.getElementById('saveModelSettingsButton');
     resetModelSettingsButton = document.getElementById('resetModelSettingsButton');
     settingsStatusElement = document.getElementById('settings-status');
+
+    // API密钥管理元素
+    apiKeyStatus = document.getElementById('apiKeyStatus');
+    newApiKeyInput = document.getElementById('newApiKey');
+    toggleApiKeyVisibilityButton = document.getElementById('toggleApiKeyVisibility');
+    addApiKeyButton = document.getElementById('addApiKeyButton');
+    testApiKeyButton = document.getElementById('testApiKeyButton');
+    apiKeyList = document.getElementById('apiKeyList');
 }
 
 
@@ -1027,4 +1036,311 @@ document.addEventListener('DOMContentLoaded', async () => {
     setInterval(fetchHealthStatus, 30000);
     checkInitialSidebarState();
     autoResizeTextarea();
+
+    // 初始化API密钥管理
+    initializeApiKeyManagement();
 });
+
+// --- API密钥管理功能 ---
+async function initializeApiKeyManagement() {
+    if (!apiKeyStatus || !newApiKeyInput || !addApiKeyButton || !testApiKeyButton || !apiKeyList) {
+        console.warn('API密钥管理元素未找到，跳过初始化');
+        return;
+    }
+
+    // 绑定事件监听器
+    toggleApiKeyVisibilityButton.addEventListener('click', toggleApiKeyVisibility);
+    addApiKeyButton.addEventListener('click', addApiKey);
+    testApiKeyButton.addEventListener('click', testApiKey);
+    newApiKeyInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            addApiKey();
+        }
+    });
+
+    // 加载API密钥状态
+    await loadApiKeyStatus();
+}
+
+function toggleApiKeyVisibility() {
+    const isPassword = newApiKeyInput.type === 'password';
+    newApiKeyInput.type = isPassword ? 'text' : 'password';
+
+    // 更新图标
+    const svg = toggleApiKeyVisibilityButton.querySelector('svg');
+    if (isPassword) {
+        // 显示"隐藏"图标
+        svg.innerHTML = `
+            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <line x1="1" y1="1" x2="23" y2="23" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        `;
+    } else {
+        // 显示"显示"图标
+        svg.innerHTML = `
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        `;
+    }
+}
+
+async function loadApiKeyStatus() {
+    try {
+        apiKeyStatus.innerHTML = `
+            <div class="loading-indicator">
+                <div class="loading-spinner"></div>
+                <span>正在检查API密钥状态...</span>
+            </div>
+        `;
+
+        const response = await fetch('/api/info');
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+
+        if (data.api_key_required) {
+            apiKeyStatus.className = 'api-key-status success';
+            apiKeyStatus.innerHTML = `
+                <div>
+                    <strong>✅ API密钥已配置</strong><br>
+                    当前配置了 ${data.api_key_count} 个有效密钥<br>
+                    支持的认证方式: ${data.supported_auth_methods?.join(', ') || 'Authorization: Bearer, X-API-Key'}<br>
+                    <small>OpenAI兼容: ${data.openai_compatible ? '是' : '否'}</small>
+                </div>
+            `;
+        } else {
+            apiKeyStatus.className = 'api-key-status error';
+            apiKeyStatus.innerHTML = `
+                <div>
+                    <strong>⚠️ 未配置API密钥</strong><br>
+                    当前API访问无需密钥验证<br>
+                    建议配置API密钥以提高安全性
+                </div>
+            `;
+        }
+
+        // 加载现有密钥列表
+        await loadApiKeyList();
+
+    } catch (error) {
+        console.error('加载API密钥状态失败:', error);
+        apiKeyStatus.className = 'api-key-status error';
+        apiKeyStatus.innerHTML = `
+            <div>
+                <strong>❌ 无法获取API密钥状态</strong><br>
+                错误: ${error.message}
+            </div>
+        `;
+        addLogEntry(`[错误] 加载API密钥状态失败: ${error.message}`);
+    }
+}
+
+async function loadApiKeyList() {
+    try {
+        const response = await fetch('/api/keys');
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        displayApiKeyList(data.keys || []);
+
+    } catch (error) {
+        console.error('加载API密钥列表失败:', error);
+        apiKeyList.innerHTML = `
+            <div class="api-key-item">
+                <div class="api-key-info">
+                    <div style="color: var(--error-color);">
+                        ❌ 无法加载密钥列表: ${error.message}
+                    </div>
+                </div>
+            </div>
+        `;
+        addLogEntry(`[错误] 加载API密钥列表失败: ${error.message}`);
+    }
+}
+
+function displayApiKeyList(keys) {
+    if (!keys || keys.length === 0) {
+        apiKeyList.innerHTML = `
+            <div class="api-key-item">
+                <div class="api-key-info">
+                    <div style="color: rgba(var(--on-surface-rgb), 0.7);">
+                        📝 暂无配置的API密钥
+                    </div>
+                </div>
+            </div>
+        `;
+        return;
+    }
+
+    apiKeyList.innerHTML = keys.map((key, index) => `
+        <div class="api-key-item" data-key-index="${index}">
+            <div class="api-key-info">
+                <div class="api-key-value">${maskApiKey(key.value)}</div>
+                <div class="api-key-meta">
+                    添加时间: ${key.created_at || '未知'} |
+                    状态: ${key.status || '有效'}
+                </div>
+            </div>
+            <div class="api-key-actions-item">
+                <button class="icon-button" onclick="testSpecificApiKey('${key.value}')" title="测试此密钥">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"/>
+                    </svg>
+                </button>
+                <button class="icon-button danger" onclick="deleteApiKey('${key.value}')" title="删除此密钥">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14zM10 11v6M14 11v6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    `).join('');
+}
+
+function maskApiKey(key) {
+    if (!key || key.length < 8) return key;
+    const start = key.substring(0, 4);
+    const end = key.substring(key.length - 4);
+    const middle = '*'.repeat(Math.max(4, key.length - 8));
+    return `${start}${middle}${end}`;
+}
+
+async function addApiKey() {
+    const keyValue = newApiKeyInput.value.trim();
+    if (!keyValue) {
+        alert('请输入API密钥');
+        return;
+    }
+
+    if (keyValue.length < 8) {
+        alert('API密钥长度至少需要8个字符');
+        return;
+    }
+
+    try {
+        addApiKeyButton.disabled = true;
+        addApiKeyButton.textContent = '添加中...';
+
+        const response = await fetch('/api/keys', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                key: keyValue
+            })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || `HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        await response.json(); // 确认响应成功
+
+        // 清空输入框
+        newApiKeyInput.value = '';
+
+        // 刷新状态和列表
+        await loadApiKeyStatus();
+
+        addLogEntry(`[成功] API密钥已添加: ${maskApiKey(keyValue)}`);
+        alert('API密钥添加成功！');
+
+    } catch (error) {
+        console.error('添加API密钥失败:', error);
+        addLogEntry(`[错误] 添加API密钥失败: ${error.message}`);
+        alert(`添加API密钥失败: ${error.message}`);
+    } finally {
+        addApiKeyButton.disabled = false;
+        addApiKeyButton.textContent = '添加密钥';
+    }
+}
+
+async function testApiKey() {
+    const keyValue = newApiKeyInput.value.trim();
+    if (!keyValue) {
+        alert('请输入要测试的API密钥');
+        return;
+    }
+
+    await testSpecificApiKey(keyValue);
+}
+
+async function testSpecificApiKey(keyValue) {
+    try {
+        testApiKeyButton.disabled = true;
+        testApiKeyButton.textContent = '测试中...';
+
+        const response = await fetch('/api/keys/test', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                key: keyValue
+            })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || `HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const result = await response.json();
+
+        if (result.valid) {
+            addLogEntry(`[成功] API密钥测试通过: ${maskApiKey(keyValue)}`);
+            alert('✅ API密钥有效！');
+        } else {
+            addLogEntry(`[警告] API密钥测试失败: ${maskApiKey(keyValue)} - ${result.message || '未知原因'}`);
+            alert(`❌ API密钥无效: ${result.message || '未知原因'}`);
+        }
+
+    } catch (error) {
+        console.error('测试API密钥失败:', error);
+        addLogEntry(`[错误] 测试API密钥失败: ${error.message}`);
+        alert(`测试API密钥失败: ${error.message}`);
+    } finally {
+        testApiKeyButton.disabled = false;
+        testApiKeyButton.textContent = '测试密钥';
+    }
+}
+
+async function deleteApiKey(keyValue) {
+    if (!confirm(`确定要删除API密钥 ${maskApiKey(keyValue)} 吗？\n\n此操作不可撤销，删除后该密钥将立即失效。`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/keys', {
+            method: 'DELETE',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                key: keyValue
+            })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || `HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        // 刷新状态和列表
+        await loadApiKeyStatus();
+
+        addLogEntry(`[成功] API密钥已删除: ${maskApiKey(keyValue)}`);
+        alert('API密钥删除成功！');
+
+    } catch (error) {
+        console.error('删除API密钥失败:', error);
+        addLogEntry(`[错误] 删除API密钥失败: ${error.message}`);
+        alert(`删除API密钥失败: ${error.message}`);
+    }
+}

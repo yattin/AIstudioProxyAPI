@@ -11,7 +11,11 @@ import sys
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import ASGIApp
+from typing import Callable, Awaitable
 from playwright.async_api import Browser as AsyncBrowser, Playwright as AsyncPlaywright
 
 # --- 配置模块导入 ---
@@ -35,6 +39,7 @@ from browser_utils import (
 
 import stream
 from asyncio import Queue, Lock, Task, Event
+from . import auth_utils
 
 # 全局状态变量（这些将在server.py中被引用）
 playwright_manager: Optional[AsyncPlaywright] = None
@@ -98,6 +103,10 @@ async def lifespan(app_param: FastAPI):
     
     # 获取logger实例供后续使用
     logger = server.logger
+    
+    # 初始化 API 密钥
+    auth_utils.initialize_keys()
+    logger.info("API keys initialized.")
     
     # 初始化全局变量
     server.request_queue = Queue()
@@ -320,6 +329,58 @@ async def lifespan(app_param: FastAPI):
         logger.info(f"✅ FastAPI 应用生命周期: 关闭完成。")
 
 
+class APIKeyAuthMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app: ASGIApp):
+        super().__init__(app)
+        self.excluded_paths = [
+            "/v1/models",
+            "/health",
+            "/docs",
+            "/openapi.json",
+            # FastAPI 自动生成的其他文档路径
+            "/redoc",
+            "/favicon.ico"
+        ]
+
+    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable]):
+        if not auth_utils.API_KEYS:  # 如果 API_KEYS 为空，则不进行验证
+            return await call_next(request)
+
+        # 检查是否是需要保护的路径
+        if not request.url.path.startswith("/v1/"):
+            return await call_next(request)
+
+        # 检查是否是排除的路径
+        for excluded_path in self.excluded_paths:
+            if request.url.path == excluded_path or request.url.path.startswith(excluded_path + "/"):
+                return await call_next(request)
+
+        # 支持多种认证头格式以兼容OpenAI标准
+        api_key = None
+
+        # 1. 优先检查标准的 Authorization: Bearer <token> 头
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            api_key = auth_header[7:]  # 移除 "Bearer " 前缀
+
+        # 2. 回退到自定义的 X-API-Key 头（向后兼容）
+        if not api_key:
+            api_key = request.headers.get("X-API-Key")
+
+        if not api_key or not auth_utils.verify_api_key(api_key):
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "error": {
+                        "message": "Invalid or missing API key. Please provide a valid API key using 'Authorization: Bearer <your_key>' or 'X-API-Key: <your_key>' header.",
+                        "type": "invalid_request_error",
+                        "param": None,
+                        "code": "invalid_api_key"
+                    }
+                }
+            )
+        return await call_next(request)
+
 def create_app() -> FastAPI:
     """创建FastAPI应用实例"""
     app = FastAPI(
@@ -329,11 +390,15 @@ def create_app() -> FastAPI:
         lifespan=lifespan
     )
     
+    # 添加中间件
+    app.add_middleware(APIKeyAuthMiddleware)
+
     # 注册路由
     from .routes import (
         read_index, get_css, get_js, get_api_info,
         health_check, list_models, chat_completions,
-        cancel_request, get_queue_status, websocket_log_endpoint
+        cancel_request, get_queue_status, websocket_log_endpoint,
+        get_api_keys, add_api_key, test_api_key, delete_api_key
     )
     from fastapi.responses import FileResponse
     
@@ -347,5 +412,11 @@ def create_app() -> FastAPI:
     app.post("/v1/cancel/{req_id}")(cancel_request)
     app.get("/v1/queue")(get_queue_status)
     app.websocket("/ws/logs")(websocket_log_endpoint)
-    
-    return app 
+
+    # API密钥管理端点
+    app.get("/api/keys")(get_api_keys)
+    app.post("/api/keys")(add_api_key)
+    app.post("/api/keys/test")(test_api_key)
+    app.delete("/api/keys")(delete_api_key)
+
+    return app

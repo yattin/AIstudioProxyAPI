@@ -15,6 +15,7 @@ from asyncio import Queue, Future
 
 from fastapi import HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
+from pydantic import BaseModel
 
 # --- 配置模块导入 ---
 from config import *
@@ -86,27 +87,43 @@ async def get_js():
 # --- API信息端点 ---
 async def get_api_info(request: Request):
     """返回API信息"""
+    # 导入auth_utils以检查当前鉴权状态
+    from api_utils import auth_utils
+
     globals_dict = get_global_vars()
     current_ai_studio_model_id = globals_dict['current_ai_studio_model_id']
-    
+
     server_port = request.url.port
     if not server_port and hasattr(request.app.state, 'server_port'):
         server_port = request.app.state.server_port
     if not server_port:
         server_port = os.environ.get('SERVER_PORT_INFO', '8000')
-    
+
     host = request.headers.get('host') or f"127.0.0.1:{server_port}"
     scheme = request.headers.get('x-forwarded-proto', 'http')
     base_url = f"{scheme}://{host}"
     api_base = f"{base_url}/v1"
     effective_model_name = current_ai_studio_model_id if current_ai_studio_model_id else MODEL_NAME
-    
+
+    # 动态检查API密钥是否配置
+    api_key_required = bool(auth_utils.API_KEYS)
+    api_key_count = len(auth_utils.API_KEYS)
+
+    if api_key_required:
+        message = f"API Key is required. {api_key_count} valid key(s) configured. Use 'Authorization: Bearer <your_key>' or 'X-API-Key: <your_key>' header."
+    else:
+        message = "API Key is not required (no keys configured)."
+
     return JSONResponse(content={
         "model_name": effective_model_name,
         "api_base_url": api_base,
         "server_base_url": base_url,
-        "api_key_required": False,
-        "message": "API Key is not required."
+        "api_key_required": api_key_required,
+        "api_key_count": api_key_count,
+        "auth_header": "Authorization: Bearer <token> or X-API-Key: <token>" if api_key_required else None,
+        "openai_compatible": True,
+        "supported_auth_methods": ["Authorization: Bearer", "X-API-Key"] if api_key_required else [],
+        "message": message
     })
 
 
@@ -432,4 +449,191 @@ async def websocket_log_endpoint(websocket: WebSocket):
         logger.error(f"日志 WebSocket (客户端 {client_id}) 发生异常: {e}", exc_info=True)
     finally:
         if log_ws_manager:
-            log_ws_manager.disconnect(client_id) 
+            log_ws_manager.disconnect(client_id)
+
+
+# --- API密钥管理数据模型 ---
+class ApiKeyRequest(BaseModel):
+    key: str
+
+class ApiKeyTestRequest(BaseModel):
+    key: str
+
+
+# --- API密钥管理端点 ---
+async def get_api_keys():
+    """获取API密钥列表"""
+    from api_utils import auth_utils
+
+    try:
+        # 重新初始化以获取最新状态
+        auth_utils.initialize_keys()
+
+        # 构建密钥信息列表
+        keys_info = []
+        for key in auth_utils.API_KEYS:
+            keys_info.append({
+                "value": key,
+                "created_at": "未知",  # 当前实现不存储创建时间
+                "status": "有效"
+            })
+
+        return JSONResponse(content={
+            "success": True,
+            "keys": keys_info,
+            "total_count": len(keys_info)
+        })
+
+    except Exception as e:
+        globals_dict = get_global_vars()
+        logger = globals_dict['logger']
+        logger.error(f"获取API密钥列表失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取API密钥列表失败: {str(e)}")
+
+
+async def add_api_key(request: ApiKeyRequest):
+    """添加API密钥"""
+    from api_utils import auth_utils
+
+    try:
+        key_value = request.key.strip()
+
+        # 验证密钥格式
+        if not key_value:
+            raise HTTPException(status_code=400, detail="API密钥不能为空")
+
+        if len(key_value) < 8:
+            raise HTTPException(status_code=400, detail="API密钥长度至少需要8个字符")
+
+        # 检查密钥是否已存在
+        auth_utils.initialize_keys()
+        if key_value in auth_utils.API_KEYS:
+            raise HTTPException(status_code=400, detail="该API密钥已存在")
+
+        # 添加密钥到文件
+        key_file_path = os.path.join(os.path.dirname(__file__), "..", "key.txt")
+
+        # 确保文件存在
+        if not os.path.exists(key_file_path):
+            with open(key_file_path, 'w', encoding='utf-8') as f:
+                f.write("")
+
+        # 追加新密钥
+        with open(key_file_path, 'a', encoding='utf-8') as f:
+            f.write(f"\n{key_value}")
+
+        # 重新加载密钥
+        auth_utils.initialize_keys()
+
+        globals_dict = get_global_vars()
+        logger = globals_dict['logger']
+        logger.info(f"API密钥已添加: {key_value[:4]}****{key_value[-4:]}")
+
+        return JSONResponse(content={
+            "success": True,
+            "message": "API密钥添加成功",
+            "key_count": len(auth_utils.API_KEYS)
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        globals_dict = get_global_vars()
+        logger = globals_dict['logger']
+        logger.error(f"添加API密钥失败: {e}")
+        raise HTTPException(status_code=500, detail=f"添加API密钥失败: {str(e)}")
+
+
+async def test_api_key(request: ApiKeyTestRequest):
+    """测试API密钥"""
+    from api_utils import auth_utils
+
+    try:
+        key_value = request.key.strip()
+
+        if not key_value:
+            raise HTTPException(status_code=400, detail="API密钥不能为空")
+
+        # 重新加载密钥以确保最新状态
+        auth_utils.initialize_keys()
+
+        # 验证密钥
+        is_valid = auth_utils.verify_api_key(key_value)
+
+        globals_dict = get_global_vars()
+        logger = globals_dict['logger']
+        logger.info(f"API密钥测试: {key_value[:4]}****{key_value[-4:]} - {'有效' if is_valid else '无效'}")
+
+        return JSONResponse(content={
+            "success": True,
+            "valid": is_valid,
+            "message": "密钥有效" if is_valid else "密钥无效或不存在"
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        globals_dict = get_global_vars()
+        logger = globals_dict['logger']
+        logger.error(f"测试API密钥失败: {e}")
+        raise HTTPException(status_code=500, detail=f"测试API密钥失败: {str(e)}")
+
+
+async def delete_api_key(request: ApiKeyRequest):
+    """删除API密钥"""
+    from api_utils import auth_utils
+
+    try:
+        key_value = request.key.strip()
+
+        if not key_value:
+            raise HTTPException(status_code=400, detail="API密钥不能为空")
+
+        # 重新加载密钥以确保最新状态
+        auth_utils.initialize_keys()
+
+        # 检查密钥是否存在
+        if key_value not in auth_utils.API_KEYS:
+            raise HTTPException(status_code=404, detail="API密钥不存在")
+
+        # 读取现有密钥文件
+        key_file_path = os.path.join(os.path.dirname(__file__), "..", "key.txt")
+
+        if not os.path.exists(key_file_path):
+            raise HTTPException(status_code=404, detail="密钥文件不存在")
+
+        # 读取所有行并过滤掉要删除的密钥
+        with open(key_file_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+
+        # 过滤掉要删除的密钥（去除空白字符后比较）
+        filtered_lines = []
+        for line in lines:
+            cleaned_line = line.strip()
+            if cleaned_line and cleaned_line != key_value:
+                filtered_lines.append(line)
+
+        # 重写文件
+        with open(key_file_path, 'w', encoding='utf-8') as f:
+            f.writelines(filtered_lines)
+
+        # 重新加载密钥
+        auth_utils.initialize_keys()
+
+        globals_dict = get_global_vars()
+        logger = globals_dict['logger']
+        logger.info(f"API密钥已删除: {key_value[:4]}****{key_value[-4:]}")
+
+        return JSONResponse(content={
+            "success": True,
+            "message": "API密钥删除成功",
+            "key_count": len(auth_utils.API_KEYS)
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        globals_dict = get_global_vars()
+        logger = globals_dict['logger']
+        logger.error(f"删除API密钥失败: {e}")
+        raise HTTPException(status_code=500, detail=f"删除API密钥失败: {str(e)}")
