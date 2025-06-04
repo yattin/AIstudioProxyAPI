@@ -666,7 +666,7 @@ def get_active_auth_json_path_for_launch() -> Optional[str]:
 
 def build_launch_command(mode, fastapi_port, camoufox_debug_port, stream_port_enabled, stream_port, helper_enabled, helper_endpoint):
     cmd = [PYTHON_EXECUTABLE, LAUNCH_CAMOUFOX_PY, f"--{mode}", "--server-port", str(fastapi_port), "--camoufox-debug-port", str(camoufox_debug_port)]
-    
+
     active_auth_path = get_active_auth_json_path_for_launch()
     if active_auth_path:
         cmd.extend(["--active-auth-json", active_auth_path])
@@ -678,12 +678,26 @@ def build_launch_command(mode, fastapi_port, camoufox_debug_port, stream_port_en
         cmd.extend(["--stream-port", str(stream_port)])
     else:
         cmd.extend(["--stream-port", "0"]) # 显式传递0表示禁用
-        
+
     if helper_enabled and helper_endpoint:
         cmd.extend(["--helper", helper_endpoint])
     else:
         cmd.extend(["--helper", ""]) # 显式传递空字符串表示禁用
-        
+
+    # 修复：添加统一代理配置参数传递
+    # 使用 --internal-camoufox-proxy 参数确保最高优先级，而不是仅依赖环境变量
+    if proxy_enabled_var.get():
+        proxy_addr = proxy_address_var.get().strip()
+        if proxy_addr:
+            cmd.extend(["--internal-camoufox-proxy", proxy_addr])
+            logger.info(f"将使用GUI配置的代理: {proxy_addr}")
+        else:
+            cmd.extend(["--internal-camoufox-proxy", ""])
+            logger.info("GUI代理已启用但地址为空，明确禁用代理")
+    else:
+        cmd.extend(["--internal-camoufox-proxy", ""])
+        logger.info("GUI代理未启用，明确禁用代理")
+
     return cmd
 
 # --- GUI构建与主逻辑区段的函数定义 ---
@@ -831,12 +845,16 @@ def reset_to_defaults():
         messagebox.showinfo(get_text("info_title"), get_text("reset_success"), parent=root_widget)
 
 def _configure_proxy_env_vars() -> Dict[str, str]:
+    """
+    配置代理环境变量（已弃用，现在主要通过 --internal-camoufox-proxy 参数传递）
+    保留此函数以维持向后兼容性，但现在主要用于状态显示
+    """
     proxy_env = {}
     if proxy_enabled_var.get():
-        proxy_addr = proxy_address_var.get()
+        proxy_addr = proxy_address_var.get().strip()
         if proxy_addr:
-            proxy_env["HTTP_PROXY"] = proxy_addr
-            proxy_env["HTTPS_PROXY"] = proxy_addr
+            # 注意：现在主要通过 --internal-camoufox-proxy 参数传递代理配置
+            # 环境变量作为备用方案，但优先级较低
             update_status_bar("proxy_configured_status", proxy_addr=proxy_addr)
         else:
             update_status_bar("proxy_skip_status")
@@ -1688,10 +1706,11 @@ def build_gui(root: tk.Tk):
     proxy_enabled_var = tk.BooleanVar(value=config.get("proxy_enabled", False))
     active_auth_file_display_var = tk.StringVar() # 初始化为空，后续由 _update_active_auth_display 更新
 
-    # 联动逻辑：当流式代理启用时，强制启用浏览器代理
+    # 联动逻辑：移除强制启用代理的逻辑，现在代理配置更加灵活
+    # 用户可以根据需要独立配置流式代理和浏览器代理
     def on_stream_proxy_toggle(*args):
-        if stream_port_enabled_var.get():
-            proxy_enabled_var.set(True)
+        # 不再强制启用代理，用户可以自由选择
+        pass
     stream_port_enabled_var.trace_add("write", on_stream_proxy_toggle)
 
 

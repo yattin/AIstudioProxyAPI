@@ -448,7 +448,20 @@ graph TD
 在需要进行配置、测试、调试或更新认证文件时，或者当您偏好命令行操作并需要细致控制启动参数时，**推荐优先直接使用 [`launch_camoufox.py`](launch_camoufox.py:1) 脚本启动**。这是项目的基础启动方式，提供了更详细的控制和日志输出。
 
 *   [`launch_camoufox.py`](launch_camoufox.py:1) 支持通过命令行参数 (`--headless` 或 `--debug` 或 `--virtual-display`) 来启动有头（带界面）或无头模式。
-*   它还支持通过 `--server-port` (FastAPI服务端口, 默认 2048), `--stream-port` (集成流式代理端口, 默认 3120, 设为 0 禁用), `--helper <url>` (外部Helper服务URL, 默认为空即禁用) **和 `--internal-camoufox-proxy <代理地址>` (用于指定浏览器代理，例如 `http://127.0.0.1:7890`)** 参数来精细控制服务端口、响应获取方式和浏览器代理。
+*   它还支持通过 `--server-port` (FastAPI服务端口, 默认 2048), `--stream-port` (集成流式代理端口, 默认 3120, 设为 0 禁用), `--helper <url>` (外部Helper服务URL, 默认为空即禁用) **和 `--internal-camoufox-proxy <代理地址>` (用于指定浏览器和流式代理的统一代理配置，例如 `http://127.0.0.1:7890`)** 参数来精细控制服务端口、响应获取方式和代理配置。
+
+#### 代理配置优先级
+
+项目采用统一的代理配置管理系统，按以下优先级顺序确定代理设置：
+
+1. **`--internal-camoufox-proxy` 命令行参数** (最高优先级)
+   - 明确指定代理：`--internal-camoufox-proxy 'http://127.0.0.1:7890'`
+   - 明确禁用代理：`--internal-camoufox-proxy ''`
+2. **`HTTP_PROXY` 环境变量**
+3. **`HTTPS_PROXY` 环境变量**
+4. **系统代理设置** (Linux 下的 gsettings，最低优先级)
+
+**重要说明**：此代理配置会同时应用于 Camoufox 浏览器和流式代理服务的上游连接，确保整个系统的代理行为一致。
 *   使用 [`launch_camoufox.py --debug`](launch_camoufox.py:1) 是生成和更新认证文件的**唯一方式**（或者通过 GUI 的有头模式间接调用）。
 *   通过直接运行 [`launch_camoufox.py`](launch_camoufox.py:1)，你可以更清晰地看到内部 Camoufox 启动、FastAPI 服务器及集成流式代理的启动过程和日志，方便排查初始设置问题。
 
@@ -456,34 +469,38 @@ graph TD
 
 *   **模式1: 优先使用集成的流式代理 (默认推荐)**
     ```bash
-    # 基本启动命令 - FastAPI 在 2048, 集成流式代理在 3120, 不使用外部 Helper 和浏览器代理
+    # 基本启动命令 - FastAPI 在 2048, 集成流式代理在 3120, 明确禁用代理
     python launch_camoufox.py --headless --server-port 2048 --stream-port 3120 --helper '' --internal-camoufox-proxy ''
 
-    # 使用自定义流式代理端口
+    # 使用自定义流式代理端口，明确禁用代理
     python launch_camoufox.py --headless --server-port 2048 --stream-port 3125 --helper '' --internal-camoufox-proxy ''
 
-    # 启用浏览器代理
+    # 启用统一代理配置（同时应用于浏览器和流式代理）
     python launch_camoufox.py --headless --server-port 2048 --stream-port 3120 --helper '' --internal-camoufox-proxy 'http://127.0.0.1:7890'
+
+    # 使用环境变量配置代理（不推荐，建议明确指定）
+    export HTTP_PROXY=http://127.0.0.1:7890
+    python launch_camoufox.py --headless --server-port 2048 --stream-port 3120 --helper ''
     ```
     在此模式下，主服务器会优先尝试通过端口 `3120` (或指定的 `--stream-port`) 上的集成流式代理获取响应。如果失败，则回退到 Playwright 页面交互。
-    **重要提示**: 当 `--stream-port` 大于 `0` (即启用流式代理) 时，强烈建议同时通过 `--internal-camoufox-proxy` 参数为 Camoufox 浏览器指定代理地址，以确保流式代理能够正常工作。如果不需要浏览器代理，也请明确设置为 `--internal-camoufox-proxy ''`。
+    **重要提示**: 强烈建议在所有启动命令中明确指定 `--internal-camoufox-proxy` 参数，即使是禁用代理也要设置为 `''`，这样可以避免意外使用环境变量中的代理设置，确保代理行为可预测。
 
 *   **模式2: 优先使用外部 Helper 服务 (禁用集成流式代理)**
     ```bash
-    # 基本外部Helper模式
+    # 基本外部Helper模式，明确禁用代理
     python launch_camoufox.py --headless --server-port 2048 --stream-port 0 --helper 'http://your-helper-service.com/api/getStreamResponse' --internal-camoufox-proxy ''
 
-    # 外部Helper模式 + 浏览器代理
+    # 外部Helper模式 + 统一代理配置
     python launch_camoufox.py --headless --server-port 2048 --stream-port 0 --helper 'http://your-helper-service.com/api/getStreamResponse' --internal-camoufox-proxy 'http://127.0.0.1:7890'
     ```
     在此模式下，主服务器会优先尝试通过 `--helper` 指定的端点获取响应 (需要有效的 `auth_profiles/active/*.json` 以提取 `SAPISID`)。如果失败，则回退到 Playwright 页面交互。
 
-*   **模式3: 仅使用 Playwright 页面交互 (禁用所有代理和 Helper)**
+*   **模式3: 仅使用 Playwright 页面交互 (禁用所有流式代理和 Helper)**
     ```bash
-    # 纯Playwright模式
+    # 纯Playwright模式，明确禁用代理
     python launch_camoufox.py --headless --server-port 2048 --stream-port 0 --helper '' --internal-camoufox-proxy ''
 
-    # Playwright模式 + 浏览器代理
+    # Playwright模式 + 统一代理配置
     python launch_camoufox.py --headless --server-port 2048 --stream-port 0 --helper '' --internal-camoufox-proxy 'http://127.0.0.1:7890'
     ```
     在此模式下，主服务器将仅通过 Playwright 与 AI Studio 页面交互 (模拟点击"编辑"或"复制"按钮) 来获取响应。这是传统的后备方法。
@@ -752,7 +769,11 @@ python launch_camoufox.py --debug --server-port 2048 --stream-port 3120 --helper
     *   如果自动终止失败或未使用 [`gui_launcher.py`](gui_launcher.py:1)，请使用系统工具 (如 `netstat -ano | findstr 2048` on Windows, `lsof -i :2048` on Linux/macOS) 查找并结束占用该端口的进程，或修改 [`launch_camoufox.py`](launch_camoufox.py:1) 的 `--server-port` 参数或 [`gui_launcher.py`](gui_launcher.py:1) 中的端口设置。
 *   **集成的流式代理服务 (`stream.py`) 相关问题**:
         *   **端口冲突 (`3120` 或自定义的 `--stream-port`)**: 确保流式代理服务使用的端口未被其他应用占用。可以使用与检查 FastAPI 服务端口相同的系统工具进行排查。
-        *   **上游代理配置**: 如果您的网络环境需要通过代理访问外部服务 (如 Google AI Studio)，请确保在启动 [`launch_camoufox.py`](launch_camoufox.py:1) 之前正确设置了 `HTTP_PROXY` 或 `HTTPS_PROXY` 环境变量。集成的流式代理服务会尝试使用这些环境变量来配置其出站连接。
+        *   **代理配置问题**:
+            *   **代理不生效**: 确保使用 `--internal-camoufox-proxy` 参数明确指定代理，而不是仅依赖环境变量。检查启动日志中的代理配置信息。
+            *   **代理冲突**: 如果同时设置了命令行参数和环境变量，系统会按优先级使用命令行参数。使用 `--internal-camoufox-proxy ''` 可以明确禁用代理。
+            *   **上游代理配置**: 对于需要通过代理访问外部服务的网络环境，推荐使用 `--internal-camoufox-proxy` 参数统一配置，这会同时应用于 Camoufox 浏览器和流式代理服务。
+            *   **代理连接失败**: 检查代理服务器是否可用，代理地址格式是否正确（如 `http://127.0.0.1:7890`）。
         *   **流式响应中断或不完整**: 如果流式响应频繁中断或不完整，可以尝试通过 [`launch_camoufox.py --stream-port=0`](launch_camoufox.py:1) 禁用集成的流式代理，以测试是否是该组件导致的问题。如果禁用后问题解决，可能与流式代理本身或其网络连接有关。
         *   Web UI 中的模型参数设置（如温度、系统提示词等）未生效或行为异常：
             *   这可能是由于 AI Studio 页面的 `localStorage` 中的 `isAdvancedOpen` 未正确设置为 `true`，或者 `areToolsOpen` 干扰了参数面板。
