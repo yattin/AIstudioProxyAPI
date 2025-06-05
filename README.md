@@ -298,6 +298,7 @@ graph TD
     subgraph "External Dependencies & Services"
         AI_Studio["Target AI Service (e.g., Google AI Studio)"]
         OptionalHelper["(Optional) External Helper Service"]
+        KeyFile["key.txt (API Keys)"]
     end
 
     subgraph "API Clients"
@@ -324,7 +325,9 @@ graph TD
     ServerPY -- "Request (Priority 3, if StreamProxy AND Helper disabled/failed)" --> CamoufoxInstance
     CamoufoxInstance -- "Interacts with AI Service" --> AI_Studio
     
-    API_Client -- "API Request /v1/chat/completions" --> ServerPY
+    API_Client -- "API Request /v1/chat/completions (with API Key)" --> ServerPY
+    ServerPY -- "Validates API Key" --> KeyFile
+    KeyFile -- "Validation Result" --> ServerPY
     ServerPY -- "API Response" --> API_Client
 ```
 
