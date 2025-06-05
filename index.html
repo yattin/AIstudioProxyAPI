@@ -159,9 +159,9 @@
                             </div>
 
                             <div class="api-key-input-group">
-                                <label for="newApiKey">添加新的API密钥:</label>
+                                <label for="newApiKey">验证API密钥:</label>
                                 <div class="api-key-input-container">
-                                    <input type="password" id="newApiKey" class="settings-input" placeholder="输入新的API密钥...">
+                                    <input type="password" id="newApiKey" class="settings-input" placeholder="输入要验证的API密钥...">
                                     <button id="toggleApiKeyVisibility" class="icon-button" title="显示/隐藏密钥">
                                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                                             <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -170,8 +170,7 @@
                                     </button>
                                 </div>
                                 <div class="api-key-actions">
-                                    <button id="addApiKeyButton" class="action-button">添加密钥</button>
-                                    <button id="testApiKeyButton" class="action-button">测试密钥</button>
+                                    <button id="testApiKeyButton" class="action-button">验证密钥</button>
                                 </div>
                             </div>
 
@@ -184,9 +183,9 @@
                                 <ul>
                                     <li>支持标准的 OpenAI 格式: <code>Authorization: Bearer &lt;your_key&gt;</code></li>
                                     <li>也支持自定义格式: <code>X-API-Key: &lt;your_key&gt;</code></li>
-                                    <li>密钥将安全存储在服务器的 key.txt 文件中</li>
-                                    <li>可以添加多个密钥，任何一个有效密钥都可以访问API</li>
-                                    <li>删除密钥后立即生效，请谨慎操作</li>
+                                    <li>密钥存储在服务器的 key.txt 文件中</li>
+                                    <li>此界面仅用于验证密钥有效性，不提供添加功能</li>
+                                    <li>如需添加密钥，请联系管理员或直接编辑服务器配置</li>
                                 </ul>
                             </div>
                         </div>
