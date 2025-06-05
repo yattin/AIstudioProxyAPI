@@ -1,6 +1,29 @@
-# AI Studio 代理 API (Python 版本)
+# AI Studio Proxy API
 
 这是一个基于 Python 的代理服务器，用于将 Google AI Studio 的网页界面转换为 OpenAI 兼容的 API。通过 Camoufox (反指纹检测的 Firefox) 和 Playwright 自动化，提供稳定的 API 访问。
+
+[![Star History Chart](https://api.star-history.com/svg?repos=CJackHwang/AIstudioProxyAPI&type=Date)](https://www.star-history.com/#CJackHwang/AIstudioProxyAPI&Date)
+
+This project is generously sponsored by ZMTO. Visit their website: [https://zmto.com/](https://zmto.com/)
+
+本项目由 ZMTO 慷慨赞助服务器支持。访问他们的网站：[https://zmto.com/](https://zmto.com/)
+
+---
+
+## 致谢 (Acknowledgements)
+
+本项目的诞生与发展，离不开以下个人、组织和社区的慷慨支持与智慧贡献：
+
+*   **项目发起与主要开发**: @CJackHwang ([https://github.com/CJackHwang](https://github.com/CJackHwang))
+*   **重要贡献与功能完善、win系统调试**: @ayuayue ([https://github.com/ayuayue](https://github.com/ayuayue))
+*   **实时流式功能优化与完善**: @luispater ([https://github.com/luispater](https://github.com/luispater))
+*   **社区支持与灵感碰撞**: 特别感谢 [Linux.do 社区](https://linux.do/) 成员们的热烈讨论、宝贵建议和问题反馈，你们的参与是项目前进的重要动力。
+
+同时，我们衷心感谢所有通过提交 Issue、提供建议、分享使用体验、贡献代码修复等方式为本项目默默奉献的每一位朋友。是你们共同的努力，让这个项目变得更好！
+
+---
+
+**这是当前维护的 Python 版本。不再维护的 Javascript 版本请参见 [`deprecated_javascript_version/README.md`](deprecated_javascript_version/README.md)。**
 
 ## 主要特性
 
