@@ -50,6 +50,7 @@ This project is generously sponsored by ZMTO. Visit their website: [https://zmto
     *   [使用图形界面启动器 `gui_launcher.py`](#使用图形界面启动器-gui_launcherpy)
     *   [5. API 使用](#5-api-使用)
     *   [6. Web UI (服务测试)](#6-web-ui-服务测试)
+        *   [Web UI 安全功能详解](WEBUI-SECURITY.md)
     *   [7. 配置客户端 (以 Open WebUI 为例)](#7-配置客户端-以-open-webui-为例)
 *   [Docker 部署](#docker-部署)
 *   [多平台指南 (Python 版本)](#多平台指南-python-版本)
@@ -234,6 +235,16 @@ freegoogleapi/
     *   聊天视图。
     *   服务器信息视图 (API 信息、健康检查状态，支持刷新)。
     *   模型参数设置面板 (可调系统提示词、温度、最大Token、Top-P、停止序列，并保存设置至浏览器本地存储)。
+    *   **安全的API密钥管理系统**：
+        *   分级权限查看：用户必须先验证密钥才能查看服务器密钥列表
+        *   验证状态管理：验证成功后在会话期间保持状态
+        *   安全显示：所有密钥都经过打码处理显示
+        *   重置功能：可重置验证状态重新验证
+        *   仅验证功能：Web界面只提供密钥验证，不提供添加功能
+    *   **增强的对话功能**：
+        *   自动API密钥认证：对话请求自动包含Bearer token认证
+        *   智能错误处理：针对401认证错误提供专门的中文提示
+        *   输入验证：防止发送空消息，双重检查确保内容有效性
     *   实时系统日志侧边栏 (通过 WebSocket)。
     *   亮色/暗色主题切换与本地存储。
     *   响应式设计，适配不同屏幕尺寸。
@@ -282,6 +293,7 @@ freegoogleapi/
 graph TD
     subgraph "User Side"
         User["User"]
+        WebUI["Web UI (Browser)"]
     end
 
     subgraph "Launch Methods"
@@ -307,28 +319,31 @@ graph TD
 
     User -- "Executes command" --> CLI_Launch
     User -- "Interacts with UI" --> GUI_Launch
-    
+    User -- "Accesses Web UI" --> WebUI
+
     GUI_Launch -- "Builds & executes command" --> CLI_Launch
 
     CLI_Launch -- "Starts & manages" --> ServerPY
     CLI_Launch -- "If --stream-port > 0" --> StreamProxy
     CLI_Launch -- "Via --helper <url>" --> ServerPY
-    
+
     ServerPY -- "Controls browser" --> CamoufoxInstance
     ServerPY -- "Request (Priority 1)" --> StreamProxy
     StreamProxy -- "Direct request" --> AI_Studio
     StreamProxy -- "Response" --> ServerPY
-    
+
     ServerPY -- "Request (Priority 2, if StreamProxy disabled AND Helper configured)" --> OptionalHelper
     OptionalHelper -- "Response" --> ServerPY
 
     ServerPY -- "Request (Priority 3, if StreamProxy AND Helper disabled/failed)" --> CamoufoxInstance
     CamoufoxInstance -- "Interacts with AI Service" --> AI_Studio
-    
+
     API_Client -- "API Request /v1/chat/completions (with API Key)" --> ServerPY
+    WebUI -- "Key Validation & Chat Requests (with Auto Auth)" --> ServerPY
     ServerPY -- "Validates API Key" --> KeyFile
     KeyFile -- "Validation Result" --> ServerPY
     ServerPY -- "API Response" --> API_Client
+    ServerPY -- "Web UI Response & Key Status" --> WebUI
 ```
 
 ## 使用教程
@@ -683,16 +698,26 @@ python launch_camoufox.py --debug --server-port 2048 --stream-port 3120 --helper
 
 ### 6. Web UI (服务测试)
 
-本项目提供了一个简单的 Web 用户界面 (`index.html`)，用于快速测试代理的基本功能和查看状态。
+本项目提供了一个现代化的 Web 用户界面 (`index.html`)，用于快速测试代理的基本功能和查看状态。
 
 *   **访问**: 在浏览器中打开服务器的根地址，默认为 `http://127.0.0.1:2048/`。
 *   **功能**:
     *   **聊天界面**: 一个基本的聊天窗口，可以发送消息并接收来自 AI Studio 的回复。支持 Markdown 格式化和代码块高亮。Web UI 默认使用一个特定的角色扮演系统提示词（关于"丁真"），用户可以在"模型设置"中查看和修改此提示词。
+        *   **自动API密钥认证**: 对话请求会自动包含Bearer token认证，无需手动配置
+        *   **智能错误处理**: 针对401认证错误提供专门的中文提示信息
+        *   **输入验证**: 防止发送空消息，双重检查确保内容有效性
     *   **服务器信息**: 切换到 "服务器信息" 标签页可以查看：
         *   API 调用信息（如 Base URL、模型名称）。
         *   服务健康检查 (`/health` 端点) 的详细状态。
         *   提供 "刷新" 按钮手动更新此信息。
-    *   **模型设置**: 新增的 "模型设置" 标签页允许用户配置并保存（至浏览器本地存储）以下参数：
+    *   **安全的API密钥管理系统**: 新增的 "设置" 标签页提供安全的密钥管理功能：
+        *   **分级权限查看**: 用户必须先验证密钥才能查看服务器密钥列表
+        *   **验证状态管理**: 验证成功后在会话期间保持状态，无需重复验证
+        *   **安全显示**: 所有密钥都经过打码处理显示（格式：`xxxx****xxxx`）
+        *   **重置功能**: 可重置验证状态重新验证
+        *   **仅验证功能**: Web界面只提供密钥验证，不提供添加功能（需联系管理员添加）
+        *   **实时状态更新**: 验证成功后自动刷新界面显示完整信息
+    *   **模型设置**: "模型设置" 标签页允许用户配置并保存（至浏览器本地存储）以下参数：
         *   **系统提示词 (System Prompt)**: 自定义指导模型的行为和角色。
         *   **温度 (Temperature)**: 控制生成文本的随机性。
         *   **最大输出Token (Max Output Tokens)**: 限制模型单次回复的长度。
@@ -704,7 +729,28 @@ python launch_camoufox.py --debug --server-port 2048 --stream-port 3120 --helper
     *   **主题切换**: 右上角提供 "浅色"/"深色" 按钮，用于切换界面主题，偏好设置会保存在浏览器本地存储中。
     *   **响应式设计**: 界面会根据屏幕大小自动调整布局。
 
-**用途**: 这个 Web UI 主要用于简单聊天、开发调试、快速验证代理是否正常工作、监控服务器状态以及方便地调整和测试模型参数。
+**使用说明**:
+
+1.  启动服务后，在浏览器中访问 `http://127.0.0.1:2048/`
+2.  **首次使用API密钥管理**：
+    *   点击"设置"标签页
+    *   在"API密钥管理"区域输入有效的API密钥
+    *   点击"验证密钥"按钮进行验证
+    *   验证成功后可查看服务器上配置的密钥列表（打码显示）
+3.  在聊天界面输入消息进行对话测试（会自动使用验证过的密钥进行认证）
+4.  通过"服务器信息"标签查看服务状态
+5.  在"模型设置"标签中调整对话参数
+6.  侧边栏显示实时系统日志，可用于调试和监控
+
+**安全机制说明**:
+
+*   **分级权限**: 未验证状态下只显示基本信息，验证成功后显示完整的密钥管理界面
+*   **会话保持**: 验证状态在浏览器会话期间保持，无需重复验证
+*   **安全显示**: 所有密钥都经过打码处理，保护敏感信息
+*   **重置功能**: 可随时重置验证状态，重新进行密钥验证
+*   **自动认证**: 对话请求自动包含认证头，确保API调用安全
+
+**用途**: 这个 Web UI 主要用于简单聊天、开发调试、快速验证代理是否正常工作、监控服务器状态、安全管理API密钥以及方便地调整和测试模型参数。
 
 ### 7. 配置客户端 (以 Open WebUI 为例)
 
@@ -840,6 +886,15 @@ openssl rsa -in certs/ca.key -out certs/ca.key
     *   检查浏览器开发者工具 (F12) 的控制台和网络选项卡是否有错误。
     *   确认 WebSocket 连接 (`/ws/logs`) 是否成功建立。
     *   确认 `/health` 和 `/api/info` 端点是否能正常访问并返回数据。
+*   **Web UI API密钥管理问题**:
+    *   **无法验证密钥**: 检查输入的密钥格式是否正确，确认服务器上的 `key.txt` 文件包含有效密钥。
+    *   **验证成功但无法查看密钥列表**: 检查浏览器控制台是否有JavaScript错误，尝试刷新页面。
+    *   **验证状态丢失**: 验证状态仅在当前浏览器会话中有效，关闭浏览器或标签页会丢失状态。
+    *   **密钥显示异常**: 确认 `/api/keys` 端点返回正确的JSON格式数据。
+*   **Web UI 对话功能问题**:
+    *   **发送消息后收到401错误**: 表明API密钥认证失败，需要在设置页面重新验证密钥。
+    *   **无法发送空消息**: 这是正常的安全机制，确保输入有效内容后再发送。
+    *   **对话请求失败**: 检查网络连接，确认服务器正常运行，查看浏览器控制台和服务器日志。
 
 ## 关于 Camoufox
 

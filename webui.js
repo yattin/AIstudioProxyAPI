@@ -1075,28 +1075,42 @@ document.addEventListener('DOMContentLoaded', async () => {
 let isApiKeyVerified = false;
 let verifiedApiKey = null;
 
+// localStorage 密钥管理
+const API_KEY_STORAGE_KEY = 'webui_api_key';
+
+function saveApiKeyToStorage(apiKey) {
+    try {
+        localStorage.setItem(API_KEY_STORAGE_KEY, apiKey);
+    } catch (error) {
+        console.warn('无法保存API密钥到本地存储:', error);
+    }
+}
+
+function loadApiKeyFromStorage() {
+    try {
+        return localStorage.getItem(API_KEY_STORAGE_KEY) || '';
+    } catch (error) {
+        console.warn('无法从本地存储加载API密钥:', error);
+        return '';
+    }
+}
+
+function clearApiKeyFromStorage() {
+    try {
+        localStorage.removeItem(API_KEY_STORAGE_KEY);
+    } catch (error) {
+        console.warn('无法清除本地存储的API密钥:', error);
+    }
+}
+
 async function getValidApiKey() {
-    // 如果已经验证过，使用验证过的密钥
+    // 只使用用户验证过的密钥，不从服务器获取
     if (isApiKeyVerified && verifiedApiKey) {
         return verifiedApiKey;
     }
 
-    try {
-        const response = await fetch('/api/keys');
-        if (!response.ok) {
-            console.warn('无法获取API密钥列表');
-            return null;
-        }
-        const data = await response.json();
-        if (data.keys && data.keys.length > 0) {
-            // 返回第一个有效的API密钥
-            return data.keys[0].value;
-        }
-        return null;
-    } catch (error) {
-        console.warn('获取API密钥失败:', error);
-        return null;
-    }
+    // 如果没有验证过的密钥，返回null
+    return null;
 }
 
 async function initializeApiKeyManagement() {
@@ -1105,12 +1119,29 @@ async function initializeApiKeyManagement() {
         return;
     }
 
+    // 从本地存储恢复API密钥
+    const savedApiKey = loadApiKeyFromStorage();
+    if (savedApiKey) {
+        newApiKeyInput.value = savedApiKey;
+        addLogEntry('[信息] 已从本地存储恢复API密钥');
+    }
+
     // 绑定事件监听器
     toggleApiKeyVisibilityButton.addEventListener('click', toggleApiKeyVisibility);
     testApiKeyButton.addEventListener('click', testApiKey);
     newApiKeyInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
             testApiKey();
+        }
+    });
+
+    // 监听输入框变化，自动保存到本地存储
+    newApiKeyInput.addEventListener('input', (e) => {
+        const apiKey = e.target.value.trim();
+        if (apiKey) {
+            saveApiKeyToStorage(apiKey);
+        } else {
+            clearApiKeyFromStorage();
         }
     });
 
@@ -1311,10 +1342,19 @@ function maskApiKey(key) {
 }
 
 function resetVerificationStatus() {
-    if (confirm('确定要重置验证状态吗？重置后需要重新验证密钥才能查看服务器密钥列表。')) {
+    if (confirm('确定要重置验证状态吗？这将清除保存的密钥，重置后需要重新输入和验证密钥。')) {
         isApiKeyVerified = false;
         verifiedApiKey = null;
-        addLogEntry('[信息] 验证状态已重置');
+
+        // 清除本地存储的密钥
+        clearApiKeyFromStorage();
+
+        // 清空输入框
+        if (newApiKeyInput) {
+            newApiKeyInput.value = '';
+        }
+
+        addLogEntry('[信息] 验证状态和保存的密钥已重置');
         loadApiKeyStatus();
     }
 }
@@ -1358,8 +1398,11 @@ async function testSpecificApiKey(keyValue) {
             isApiKeyVerified = true;
             verifiedApiKey = keyValue;
 
+            // 保存到本地存储
+            saveApiKeyToStorage(keyValue);
+
             addLogEntry(`[成功] API密钥验证通过: ${maskApiKey(keyValue)}`);
-            alert('✅ API密钥验证成功！现在可以查看服务器密钥列表。');
+            alert('✅ API密钥验证成功！密钥已保存，现在可以查看服务器密钥列表。');
 
             // 重新加载状态和密钥列表
             await loadApiKeyStatus();
