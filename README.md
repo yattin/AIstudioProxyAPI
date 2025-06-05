@@ -94,6 +94,7 @@ graph TD
 - [故障排除指南](docs/troubleshooting.md) - 常见问题解决方案
 - [高级配置指南](docs/advanced-configuration.md) - 高级功能和配置选项
 - [日志控制指南](docs/logging-control.md) - 日志系统配置和调试
+- [日志控制指南](docs/logging-control.md) - 日志系统配置和调试
 
 ## 客户端配置示例
 
