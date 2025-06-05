@@ -443,7 +443,17 @@ function initializeChat() {
 
 async function sendMessage() {
     const messageText = userInput.value.trim();
-    if (!messageText) return;
+    if (!messageText) {
+        addLogEntry('[警告] 消息内容为空，无法发送');
+        return;
+    }
+
+    // 再次检查输入框内容（防止在处理过程中被清空）
+    if (!userInput.value.trim()) {
+        addLogEntry('[警告] 输入框内容已被清空，取消发送');
+        return;
+    }
+
     userInput.disabled = true;
     sendButton.disabled = true;
     clearButton.disabled = true;
@@ -479,6 +489,9 @@ async function sendMessage() {
         const headers = { 'Content-Type': 'application/json' };
         if (apiKey) {
             headers['Authorization'] = `Bearer ${apiKey}`;
+        } else {
+            // 如果没有可用的API密钥，提示用户
+            throw new Error('无法获取有效的API密钥。请在设置页面验证密钥后再试。');
         }
 
         const response = await fetch(API_URL, {
@@ -1058,7 +1071,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 // --- API密钥管理功能 ---
+// 验证状态管理
+let isApiKeyVerified = false;
+let verifiedApiKey = null;
+
 async function getValidApiKey() {
+    // 如果已经验证过，使用验证过的密钥
+    if (isApiKeyVerified && verifiedApiKey) {
+        return verifiedApiKey;
+    }
+
     try {
         const response = await fetch('/api/keys');
         if (!response.ok) {
@@ -1135,14 +1157,26 @@ async function loadApiKeyStatus() {
 
         if (data.api_key_required) {
             apiKeyStatus.className = 'api-key-status success';
-            apiKeyStatus.innerHTML = `
-                <div>
-                    <strong>✅ API密钥已配置</strong><br>
-                    当前配置了 ${data.api_key_count} 个有效密钥<br>
-                    支持的认证方式: ${data.supported_auth_methods?.join(', ') || 'Authorization: Bearer, X-API-Key'}<br>
-                    <small>OpenAI兼容: ${data.openai_compatible ? '是' : '否'}</small>
-                </div>
-            `;
+            if (isApiKeyVerified) {
+                // 已验证状态：显示完整信息
+                apiKeyStatus.innerHTML = `
+                    <div>
+                        <strong>✅ API密钥已配置且已验证</strong><br>
+                        当前配置了 ${data.api_key_count} 个有效密钥<br>
+                        支持的认证方式: ${data.supported_auth_methods?.join(', ') || 'Authorization: Bearer, X-API-Key'}<br>
+                        <small>OpenAI兼容: ${data.openai_compatible ? '是' : '否'}</small>
+                    </div>
+                `;
+            } else {
+                // 未验证状态：显示基本信息
+                apiKeyStatus.innerHTML = `
+                    <div>
+                        <strong>🔒 API密钥已配置</strong><br>
+                        当前配置了 ${data.api_key_count} 个有效密钥<br>
+                        <small style="color: orange;">请先验证密钥以查看详细信息</small>
+                    </div>
+                `;
+            }
         } else {
             apiKeyStatus.className = 'api-key-status error';
             apiKeyStatus.innerHTML = `
@@ -1154,8 +1188,13 @@ async function loadApiKeyStatus() {
             `;
         }
 
-        // 加载现有密钥列表
-        await loadApiKeyList();
+        // 根据验证状态决定是否加载密钥列表
+        if (isApiKeyVerified) {
+            await loadApiKeyList();
+        } else {
+            // 未验证时显示提示信息
+            displayApiKeyListPlaceholder();
+        }
 
     } catch (error) {
         console.error('加载API密钥状态失败:', error);
@@ -1168,6 +1207,18 @@ async function loadApiKeyStatus() {
         `;
         addLogEntry(`[错误] 加载API密钥状态失败: ${error.message}`);
     }
+}
+
+function displayApiKeyListPlaceholder() {
+    apiKeyList.innerHTML = `
+        <div class="api-key-item">
+            <div class="api-key-info">
+                <div style="color: rgba(var(--on-surface-rgb), 0.7);">
+                    🔒 请先验证密钥以查看服务器密钥列表
+                </div>
+            </div>
+        </div>
+    `;
 }
 
 async function loadApiKeyList() {
@@ -1209,6 +1260,27 @@ function displayApiKeyList(keys) {
         return;
     }
 
+    // 添加重置验证状态的按钮
+    const resetButton = `
+        <div class="api-key-item" style="border-top: 1px solid rgba(var(--on-surface-rgb), 0.1); margin-top: 10px; padding-top: 10px;">
+            <div class="api-key-info">
+                <div style="color: rgba(var(--on-surface-rgb), 0.7); font-size: 0.9em;">
+                    验证状态管理
+                </div>
+            </div>
+            <div class="api-key-actions-item">
+                <button class="icon-button" onclick="resetVerificationStatus()" title="重置验证状态">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M21 3v5h-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M3 21v-5h5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    `;
+
     apiKeyList.innerHTML = keys.map((key, index) => `
         <div class="api-key-item" data-key-index="${index}">
             <div class="api-key-info">
@@ -1227,7 +1299,7 @@ function displayApiKeyList(keys) {
                 </button>
             </div>
         </div>
-    `).join('');
+    `).join('') + resetButton;
 }
 
 function maskApiKey(key) {
@@ -1236,6 +1308,15 @@ function maskApiKey(key) {
     const end = key.substring(key.length - 4);
     const middle = '*'.repeat(Math.max(4, key.length - 8));
     return `${start}${middle}${end}`;
+}
+
+function resetVerificationStatus() {
+    if (confirm('确定要重置验证状态吗？重置后需要重新验证密钥才能查看服务器密钥列表。')) {
+        isApiKeyVerified = false;
+        verifiedApiKey = null;
+        addLogEntry('[信息] 验证状态已重置');
+        loadApiKeyStatus();
+    }
 }
 
 
@@ -1273,8 +1354,15 @@ async function testSpecificApiKey(keyValue) {
         const result = await response.json();
 
         if (result.valid) {
+            // 验证成功，更新验证状态
+            isApiKeyVerified = true;
+            verifiedApiKey = keyValue;
+
             addLogEntry(`[成功] API密钥验证通过: ${maskApiKey(keyValue)}`);
-            alert('✅ API密钥有效！');
+            alert('✅ API密钥验证成功！现在可以查看服务器密钥列表。');
+
+            // 重新加载状态和密钥列表
+            await loadApiKeyStatus();
         } else {
             addLogEntry(`[警告] API密钥验证失败: ${maskApiKey(keyValue)} - ${result.message || '未知原因'}`);
             alert(`❌ API密钥无效: ${result.message || '未知原因'}`);
