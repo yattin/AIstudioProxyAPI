@@ -447,7 +447,15 @@ def determine_proxy_configuration(internal_camoufox_proxy_arg=None):
             result['source'] = "命令行参数 --internal-camoufox-proxy='' (明确禁用代理)"
         return result
 
-    # 2. 尝试环境变量 HTTP_PROXY
+    # 2. 尝试环境变量 UNIFIED_PROXY_CONFIG (优先级高于 HTTP_PROXY/HTTPS_PROXY)
+    unified_proxy = os.environ.get("UNIFIED_PROXY_CONFIG")
+    if unified_proxy:
+        result['camoufox_proxy'] = unified_proxy
+        result['stream_proxy'] = unified_proxy
+        result['source'] = f"环境变量 UNIFIED_PROXY_CONFIG: {unified_proxy}"
+        return result
+
+    # 3. 尝试环境变量 HTTP_PROXY
     http_proxy = os.environ.get("HTTP_PROXY")
     if http_proxy:
         result['camoufox_proxy'] = http_proxy
@@ -455,7 +463,7 @@ def determine_proxy_configuration(internal_camoufox_proxy_arg=None):
         result['source'] = f"环境变量 HTTP_PROXY: {http_proxy}"
         return result
 
-    # 3. 尝试环境变量 HTTPS_PROXY
+    # 4. 尝试环境变量 HTTPS_PROXY
     https_proxy = os.environ.get("HTTPS_PROXY")
     if https_proxy:
         result['camoufox_proxy'] = https_proxy
@@ -463,7 +471,7 @@ def determine_proxy_configuration(internal_camoufox_proxy_arg=None):
         result['source'] = f"环境变量 HTTPS_PROXY: {https_proxy}"
         return result
 
-    # 4. 尝试系统代理设置 (仅限 Linux)
+    # 5. 尝试系统代理设置 (仅限 Linux)
     if sys.platform.startswith('linux'):
         gsettings_proxy = get_proxy_from_gsettings()
         if gsettings_proxy:
