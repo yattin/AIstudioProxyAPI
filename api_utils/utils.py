@@ -154,9 +154,9 @@ async def use_helper_get_response(helper_endpoint: str, helper_sapisid: str) -> 
     """使用Helper服务获取响应的生成器"""
     from server import logger
     import aiohttp
-    
+
     logger.info(f"正在尝试使用Helper端点: {helper_endpoint}")
-    
+
     try:
         async with aiohttp.ClientSession() as session:
             headers = {

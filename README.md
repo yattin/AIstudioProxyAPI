@@ -15,8 +15,9 @@ This project is generously sponsored by ZMTO. Visit their website: [https://zmto
 本项目的诞生与发展，离不开以下个人、组织和社区的慷慨支持与智慧贡献：
 
 *   **项目发起与主要开发**: @CJackHwang ([https://github.com/CJackHwang](https://github.com/CJackHwang))
-*   **重要贡献与功能完善、win系统调试**: @ayuayue ([https://github.com/ayuayue](https://github.com/ayuayue))
+*   **功能完善、页面操作优化思路贡献**: @ayuayue ([https://github.com/ayuayue](https://github.com/ayuayue))
 *   **实时流式功能优化与完善**: @luispater ([https://github.com/luispater](https://github.com/luispater))
+*   **3400+行主文件项目重构伟大贡献**: @yattin (Holt) ([https://github.com/yattin](https://github.com/yattin))
 *   **社区支持与灵感碰撞**: 特别感谢 [Linux.do 社区](https://linux.do/) 成员们的热烈讨论、宝贵建议和问题反馈，你们的参与是项目前进的重要动力。
 
 同时，我们衷心感谢所有通过提交 Issue、提供建议、分享使用体验、贡献代码修复等方式为本项目默默奉献的每一位朋友。是你们共同的努力，让这个项目变得更好！
@@ -41,59 +42,63 @@ This project is generously sponsored by ZMTO. Visit their website: [https://zmto
 
 ```mermaid
 graph TD
-    subgraph "用户端"
-        User["用户"]
-        WebUI["Web UI (浏览器)"]
+    subgraph "用户端 (User End)"
+        User["用户 (User)"]
+        WebUI["Web UI (Browser)"]
+        API_Client["API 客户端 (API Client)"]
     end
 
-    subgraph "启动方式"
-        CLI_Launch["launch_camoufox.py (命令行)"]
-        GUI_Launch["gui_launcher.py (图形界面)"]
+    subgraph "启动与配置 (Launch & Config)"
+        GUI_Launch["gui_launcher.py"]
+        CLI_Launch["launch_camoufox.py"]
+        KeyFile["key.txt (API Keys)"]
+        ConfigDir["config/ (Settings)"]
     end
 
-    subgraph "核心服务"
-        ServerPY["server.py (FastAPI + Playwright)"]
-        StreamProxy["stream.py (集成流式代理)"]
-        CamoufoxInstance["Camoufox 浏览器实例"]
+    subgraph "核心应用 (Core Application)"
+        FastAPI_App["api_utils/app.py (FastAPI App)"]
+        Routes["api_utils/routes.py"]
+        RequestProcessor["api_utils/request_processor.py"]
+        PageController["browser_utils/page_controller.py"]
+        StreamProxy["stream/ (Proxy Server)"]
     end
 
-    subgraph "外部依赖与服务"
-        AI_Studio["目标AI服务 (如 Google AI Studio)"]
-        OptionalHelper["(可选) 外部Helper服务"]
-        KeyFile["key.txt (API密钥)"]
+    subgraph "外部依赖 (External Dependencies)"
+        CamoufoxInstance["Camoufox 浏览器 (Browser)"]
+        AI_Studio["Google AI Studio"]
     end
 
-    subgraph "API客户端"
-        API_Client["API客户端 (如 Open WebUI, cURL)"]
-    end
+    User -- "运行 (Run)" --> GUI_Launch
+    User -- "运行 (Run)" --> CLI_Launch
+    User -- "访问 (Access)" --> WebUI
 
-    User -- "执行命令" --> CLI_Launch
-    User -- "界面交互" --> GUI_Launch
-    User -- "访问Web UI" --> WebUI
+    GUI_Launch -- "启动 (Starts)" --> CLI_Launch
+    CLI_Launch -- "启动 (Starts)" --> FastAPI_App
+    CLI_Launch -- "配置 (Configures)" --> StreamProxy
 
-    GUI_Launch -- "构建并执行命令" --> CLI_Launch
+    API_Client -- "API 请求 (Request)" --> FastAPI_App
+    WebUI -- "聊天请求 (Chat Request)" --> FastAPI_App
 
-    CLI_Launch -- "启动并管理" --> ServerPY
-    CLI_Launch -- "如果 --stream-port > 0" --> StreamProxy
-    CLI_Launch -- "通过 --helper <url>" --> ServerPY
+    FastAPI_App -- "读取配置 (Reads Config)" --> ConfigDir
+    FastAPI_App -- "使用路由 (Uses Routes)" --> Routes
+    FastAPI_App -- "验证密钥 (Validates Key)" --> KeyFile
 
-    ServerPY -- "控制浏览器" --> CamoufoxInstance
-    ServerPY -- "请求 (优先级1)" --> StreamProxy
-    StreamProxy -- "直接请求" --> AI_Studio
-    StreamProxy -- "响应" --> ServerPY
+    Routes -- "处理请求 (Processes Request)" --> RequestProcessor
+    RequestProcessor -- "控制浏览器 (Controls Browser)" --> PageController
+    RequestProcessor -- "通过代理 (Uses Proxy)" --> StreamProxy
 
-    ServerPY -- "请求 (优先级2, 当StreamProxy禁用且Helper已配置)" --> OptionalHelper
-    OptionalHelper -- "响应" --> ServerPY
+    PageController -- "自动化 (Automates)" --> CamoufoxInstance
+    CamoufoxInstance -- "访问 (Accesses)" --> AI_Studio
+    StreamProxy -- "转发请求 (Forwards Request)" --> AI_Studio
 
-    ServerPY -- "请求 (优先级3, 当StreamProxy和Helper都禁用/失败)" --> CamoufoxInstance
-    CamoufoxInstance -- "与AI服务交互" --> AI_Studio
+    AI_Studio -- "响应 (Response)" --> CamoufoxInstance
+    AI_Studio -- "响应 (Response)" --> StreamProxy
 
-    API_Client -- "API请求 /v1/chat/completions (带API密钥)" --> ServerPY
-    WebUI -- "密钥验证与聊天请求 (自动认证)" --> ServerPY
-    ServerPY -- "验证API密钥" --> KeyFile
-    KeyFile -- "验证结果" --> ServerPY
-    ServerPY -- "API响应" --> API_Client
-    ServerPY -- "Web UI响应与密钥状态" --> WebUI
+    CamoufoxInstance -- "返回数据 (Returns Data)" --> PageController
+    StreamProxy -- "返回数据 (Returns Data)" --> RequestProcessor
+
+    FastAPI_App -- "API 响应 (Response)" --> API_Client
+    FastAPI_App -- "UI 响应 (Response)" --> WebUI
 ```
 
 ## 使用教程

@@ -3,15 +3,13 @@ FastAPI应用初始化和生命周期管理
 """
 
 import asyncio
-import logging
 import multiprocessing
 import os
-import platform
 import sys
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
@@ -22,7 +20,7 @@ from playwright.async_api import Browser as AsyncBrowser, Playwright as AsyncPla
 from config import *
 
 # --- models模块导入 ---
-from models import WebSocketConnectionManager, WebSocketLogHandler
+from models import WebSocketConnectionManager
 
 # --- logging_utils模块导入 ---
 from logging_utils import setup_server_logging, restore_original_streams
@@ -31,14 +29,12 @@ from logging_utils import setup_server_logging, restore_original_streams
 from browser_utils import (
     _initialize_page_logic,
     _close_page_logic,
-    signal_camoufox_shutdown,
-    _handle_model_list_response,
     load_excluded_models,
     _handle_initial_model_state_and_storage
 )
 
 import stream
-from asyncio import Queue, Lock, Task, Event
+from asyncio import Queue, Lock
 from . import auth_utils
 
 # 全局状态变量（这些将在server.py中被引用）
@@ -72,261 +68,155 @@ STREAM_QUEUE = None
 STREAM_PROCESS = None
 
 # --- Lifespan Context Manager ---
-@asynccontextmanager
-async def lifespan(app_param: FastAPI):
-    """FastAPI应用生命周期管理"""
-    # 导入server.py中的全局变量，以便正确初始化
+def _setup_logging():
     import server
-    from server import queue_worker
-    
-    # 存储原始流供恢复使用
-    initial_stdout_before_redirect = sys.stdout
-    initial_stderr_before_redirect = sys.stderr
-    true_original_stdout = sys.__stdout__
-    true_original_stderr = sys.__stderr__
-
-    # 设置服务器日志
     log_level_env = os.environ.get('SERVER_LOG_LEVEL', 'INFO')
     redirect_print_env = os.environ.get('SERVER_REDIRECT_PRINT', 'false')
-    
-    # 初始化日志 WebSocket 管理器
     server.log_ws_manager = WebSocketConnectionManager()
-    
-    initial_stdout_before_redirect, initial_stderr_before_redirect = setup_server_logging(
+    return setup_server_logging(
         logger_instance=server.logger,
         log_ws_manager=server.log_ws_manager,
         log_level_name=log_level_env,
         redirect_print_str=redirect_print_env
     )
 
-    # WebSocket日志处理器已在setup_server_logging函数中添加，无需重复添加
-    
-    # 获取logger实例供后续使用
-    logger = server.logger
-    
-    # 初始化 API 密钥
-    auth_utils.initialize_keys()
-    logger.info("API keys initialized.")
-    
-    # 初始化全局变量
+def _initialize_globals():
+    import server
     server.request_queue = Queue()
     server.processing_lock = Lock()
     server.model_switching_lock = Lock()
     server.params_cache_lock = Lock()
-    
-    # 初始化代理设置 - 使用统一的代理配置逻辑
+    auth_utils.initialize_keys()
+    server.logger.info("API keys and global locks initialized.")
+
+def _initialize_proxy_settings():
+    import server
     STREAM_PORT = os.environ.get('STREAM_PORT')
-
-    # 确定Playwright上下文使用的代理
     if STREAM_PORT == '0':
-        # 流式代理禁用时，Playwright直接使用环境变量代理
         PROXY_SERVER_ENV = os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
-    elif STREAM_PORT is not None:
-        # 流式代理启用时，Playwright使用本地流式代理
-        PROXY_SERVER_ENV = f"http://127.0.0.1:{STREAM_PORT}/"
     else:
-        # 默认使用流式代理
-        PROXY_SERVER_ENV = "http://127.0.0.1:3120/"
-
-    # 流式代理的上游代理配置 - 优先使用统一配置
-    STREAM_PROXY_SERVER_ENV = os.environ.get('UNIFIED_PROXY_CONFIG') or os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
-
-    # 设置全局代理配置到server模块
-    server.PLAYWRIGHT_PROXY_SETTINGS = None
+        PROXY_SERVER_ENV = f"http://127.0.0.1:{STREAM_PORT or 3120}/"
+    
     if PROXY_SERVER_ENV:
         server.PLAYWRIGHT_PROXY_SETTINGS = {'server': PROXY_SERVER_ENV}
         if NO_PROXY_ENV:
             server.PLAYWRIGHT_PROXY_SETTINGS['bypass'] = NO_PROXY_ENV.replace(',', ';')
+        server.logger.info(f"Playwright proxy settings configured: {server.PLAYWRIGHT_PROXY_SETTINGS}")
+    else:
+        server.logger.info("No proxy configured for Playwright.")
 
+async def _start_stream_proxy():
+    import server
+    STREAM_PORT = os.environ.get('STREAM_PORT')
     if STREAM_PORT != '0':
-        logger.info(f"STREAM 代理启动中，端口: {STREAM_PORT}")
+        port = int(STREAM_PORT or 3120)
+        STREAM_PROXY_SERVER_ENV = os.environ.get('UNIFIED_PROXY_CONFIG') or os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
+        server.logger.info(f"Starting STREAM proxy on port {port} with upstream proxy: {STREAM_PROXY_SERVER_ENV}")
         server.STREAM_QUEUE = multiprocessing.Queue()
-        if STREAM_PORT is None:
-            port = 3120
-        else:
-            port = int(STREAM_PORT)
-        logger.info(f"STREAM 代理使用上游代理服务器：{STREAM_PROXY_SERVER_ENV}")
         server.STREAM_PROCESS = multiprocessing.Process(target=stream.start, args=(server.STREAM_QUEUE, port, STREAM_PROXY_SERVER_ENV))
         server.STREAM_PROCESS.start()
-        logger.info("STREAM 代理启动完毕")
-    else:
-        logger.info("STREAM 代理已禁用")
+        server.logger.info("STREAM proxy process started.")
 
-    logger.info(f"--- 依赖和环境检查 ---")
-    logger.info(f"Python 版本: {sys.version}")
-    logger.info(f"运行平台: {platform.platform()}")
-    logger.info(f"Playwright 已导入")
-    logger.info(f"FastAPI 应用已初始化")
+async def _initialize_browser_and_page():
+    import server
+    from playwright.async_api import async_playwright
     
-    if server.PLAYWRIGHT_PROXY_SETTINGS:
-        logger.info(f"--- 代理配置检测到 (由 server.py 的 lifespan 记录) ---")
-        logger.info(f"   将使用代理服务器: {server.PLAYWRIGHT_PROXY_SETTINGS['server']}")
-        if 'bypass' in server.PLAYWRIGHT_PROXY_SETTINGS:
-            logger.info(f"   绕过代理的主机: {server.PLAYWRIGHT_PROXY_SETTINGS['bypass']}")
-        logger.info(f"-----------------------")
-    else:
-        logger.info("--- 未检测到 HTTP_PROXY 或 HTTPS_PROXY 环境变量，不使用代理 (由 server.py 的 lifespan 记录) ---")
+    server.logger.info("Starting Playwright...")
+    server.playwright_manager = await async_playwright().start()
+    server.is_playwright_ready = True
+    server.logger.info("Playwright started.")
+
+    ws_endpoint = os.environ.get('CAMOUFOX_WS_ENDPOINT')
+    launch_mode = os.environ.get('LAUNCH_MODE', 'unknown')
+
+    if not ws_endpoint and launch_mode != "direct_debug_no_browser":
+        raise ValueError("CAMOUFOX_WS_ENDPOINT environment variable is missing.")
+
+    if ws_endpoint:
+        server.logger.info(f"Connecting to browser at: {ws_endpoint}")
+        server.browser_instance = await server.playwright_manager.firefox.connect(ws_endpoint, timeout=30000)
+        server.is_browser_connected = True
+        server.logger.info(f"Connected to browser: {server.browser_instance.version}")
+        
+        server.page_instance, server.is_page_ready = await _initialize_page_logic(server.browser_instance)
+        if server.is_page_ready:
+            await _handle_initial_model_state_and_storage(server.page_instance)
+            server.logger.info("Page initialized successfully.")
+        else:
+            server.logger.error("Page initialization failed.")
     
+    if not server.model_list_fetch_event.is_set():
+        server.model_list_fetch_event.set()
+
+async def _shutdown_resources():
+    import server
+    logger = server.logger
+    logger.info("Shutting down resources...")
+    
+    if server.STREAM_PROCESS:
+        server.STREAM_PROCESS.terminate()
+        logger.info("STREAM proxy terminated.")
+
+    if server.worker_task and not server.worker_task.done():
+        server.worker_task.cancel()
+        try:
+            await asyncio.wait_for(server.worker_task, timeout=5.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            pass
+        logger.info("Worker task stopped.")
+
+    if server.page_instance:
+        await _close_page_logic()
+    
+    if server.browser_instance and server.browser_instance.is_connected():
+        await server.browser_instance.close()
+        logger.info("Browser connection closed.")
+    
+    if server.playwright_manager:
+        await server.playwright_manager.stop()
+        logger.info("Playwright stopped.")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """FastAPI application life cycle management"""
+    import server
+    from server import queue_worker
+
+    original_streams = sys.stdout, sys.stderr
+    initial_stdout, initial_stderr = _setup_logging()
+    logger = server.logger
+
+    _initialize_globals()
+    _initialize_proxy_settings()
     load_excluded_models(EXCLUDED_MODELS_FILENAME)
-    server.is_initializing = True
-    logger.info("\n" + "="*60 + "\n          🚀 AI Studio Proxy Server (FastAPI App Lifespan) 🚀\n" + "="*60)
-    logger.info(f"FastAPI 应用生命周期: 启动中...")
     
+    server.is_initializing = True
+    logger.info("Starting AI Studio Proxy Server...")
+
     try:
-        logger.info(f"   启动 Playwright...")
-        from playwright.async_api import async_playwright
-        server.playwright_manager = await async_playwright().start()
-        server.is_playwright_ready = True
-        logger.info(f"   ✅ Playwright 已启动。")
+        await _start_stream_proxy()
+        await _initialize_browser_and_page()
         
-        ws_endpoint = os.environ.get('CAMOUFOX_WS_ENDPOINT')
         launch_mode = os.environ.get('LAUNCH_MODE', 'unknown')
-        
-        if not ws_endpoint:
-            if launch_mode == "direct_debug_no_browser":
-                logger.warning("CAMOUFOX_WS_ENDPOINT 未设置，但 LAUNCH_MODE 表明不需要浏览器。跳过浏览器连接。")
-                server.is_browser_connected = False
-                server.is_page_ready = False
-                server.model_list_fetch_event.set()
-            else:
-                logger.error("未找到 CAMOUFOX_WS_ENDPOINT 环境变量。Playwright 将无法连接到浏览器。")
-                raise ValueError("CAMOUFOX_WS_ENDPOINT 环境变量缺失。")
-        else:
-            logger.info(f"   连接到 Camoufox 服务器 (浏览器 WebSocket 端点) 于: {ws_endpoint}")
-            try:
-                server.browser_instance = await server.playwright_manager.firefox.connect(ws_endpoint, timeout=30000)
-                server.is_browser_connected = True
-                logger.info(f"   ✅ 已连接到浏览器实例: 版本 {server.browser_instance.version}")
-                
-                temp_page_instance, temp_is_page_ready = await _initialize_page_logic(server.browser_instance)
-                if temp_page_instance and temp_is_page_ready:
-                    server.page_instance = temp_page_instance
-                    server.is_page_ready = temp_is_page_ready
-                    await _handle_initial_model_state_and_storage(server.page_instance)
-                else:
-                    server.is_page_ready = False
-                    if not server.model_list_fetch_event.is_set(): 
-                        server.model_list_fetch_event.set()
-            except Exception as connect_err:
-                logger.error(f"未能连接到 Camoufox 服务器 (浏览器) 或初始化页面失败: {connect_err}", exc_info=True)
-                if launch_mode != "direct_debug_no_browser":
-                    raise RuntimeError(f"未能连接到 Camoufox 或初始化页面: {connect_err}") from connect_err
-                else:
-                    server.is_browser_connected = False
-                    server.is_page_ready = False
-                    if not server.model_list_fetch_event.is_set(): 
-                        server.model_list_fetch_event.set()
-
-        if server.is_page_ready and server.is_browser_connected and not server.model_list_fetch_event.is_set():
-            logger.info("等待模型列表捕获 (最多等待15秒)...")
-            try:
-                await asyncio.wait_for(server.model_list_fetch_event.wait(), timeout=15.0)
-                if server.model_list_fetch_event.is_set():
-                    logger.info("模型列表事件已触发。")
-                else:
-                    logger.warning("模型列表事件等待后仍未设置。")
-            except asyncio.TimeoutError:
-                logger.warning("等待模型列表捕获超时。将使用默认或空列表。")
-            finally:
-                if not server.model_list_fetch_event.is_set():
-                    server.model_list_fetch_event.set()
-        elif not (server.is_page_ready and server.is_browser_connected):
-            if not server.model_list_fetch_event.is_set(): 
-                server.model_list_fetch_event.set()
-
-        if (server.is_page_ready and server.is_browser_connected) or launch_mode == "direct_debug_no_browser":
-            logger.info(f"   启动请求处理 Worker...")
+        if server.is_page_ready or launch_mode == "direct_debug_no_browser":
             server.worker_task = asyncio.create_task(queue_worker())
-            logger.info(f"   ✅ 请求处理 Worker 已启动。")
-        elif launch_mode == "direct_debug_no_browser":
-            logger.warning("浏览器和页面未就绪 (direct_debug_no_browser 模式)，请求处理 Worker 未启动。API 可能功能受限。")
+            logger.info("Request processing worker started.")
         else:
-            logger.error("页面或浏览器初始化失败，无法启动 Worker。")
-            if not server.model_list_fetch_event.is_set(): 
-                server.model_list_fetch_event.set()
-            raise RuntimeError("页面或浏览器初始化失败，无法启动 Worker。")
-        
-        logger.info(f"✅ FastAPI 应用生命周期: 启动完成。服务已就绪。")
+            raise RuntimeError("Failed to initialize browser/page, worker not started.")
+
+        logger.info("Server startup complete.")
         server.is_initializing = False
         yield
-        
-    except Exception as startup_err:
-        logger.critical(f"❌ FastAPI 应用生命周期: 启动期间发生严重错误: {startup_err}", exc_info=True)
-        if not server.model_list_fetch_event.is_set(): 
-            server.model_list_fetch_event.set()
-        if server.worker_task and not server.worker_task.done(): 
-            server.worker_task.cancel()
-        if server.browser_instance and server.browser_instance.is_connected():
-            try: 
-                await server.browser_instance.close()
-            except: 
-                pass
-        if server.playwright_manager:
-            try: 
-                await server.playwright_manager.stop()
-            except: 
-                pass
-        raise RuntimeError(f"应用程序启动失败: {startup_err}") from startup_err
+    except Exception as e:
+        logger.critical(f"Application startup failed: {e}", exc_info=True)
+        await _shutdown_resources()
+        raise RuntimeError(f"Application startup failed: {e}") from e
     finally:
-        logger.info("STREAM 代理关闭中")
-        if server.STREAM_PROCESS:
-            server.STREAM_PROCESS.terminate()
-
-        server.is_initializing = False
-        logger.info(f"\nFastAPI 应用生命周期: 关闭中...")
-        
-        if server.worker_task and not server.worker_task.done():
-            logger.info(f"   正在取消请求处理 Worker...")
-            server.worker_task.cancel()
-            try:
-                await asyncio.wait_for(server.worker_task, timeout=5.0)
-                logger.info(f"   ✅ 请求处理 Worker 已停止/取消。")
-            except asyncio.TimeoutError: 
-                logger.warning(f"   ⚠️ Worker 等待超时。")
-            except asyncio.CancelledError: 
-                logger.info(f"   ✅ 请求处理 Worker 已确认取消。")
-            except Exception as wt_err: 
-                logger.error(f"   ❌ 等待 Worker 停止时出错: {wt_err}", exc_info=True)
-        
-        if server.page_instance and not server.page_instance.is_closed():
-            try:
-                logger.info("Lifespan 清理：移除模型列表响应监听器。")
-                server.page_instance.remove_listener("response", _handle_model_list_response)
-            except Exception as e:
-                logger.debug(f"Lifespan 清理：移除监听器时发生非严重错误或监听器本不存在: {e}")
-        
-        if server.page_instance:
-            await _close_page_logic()
-        
-        if server.browser_instance:
-            logger.info(f"   正在关闭与浏览器实例的连接...")
-            try:
-                if server.browser_instance.is_connected():
-                    await server.browser_instance.close()
-                    logger.info(f"   ✅ 浏览器连接已关闭。")
-                else: 
-                    logger.info(f"   ℹ️ 浏览器先前已断开连接。")
-            except Exception as close_err: 
-                logger.error(f"   ❌ 关闭浏览器连接时出错: {close_err}", exc_info=True)
-            finally: 
-                server.browser_instance = None
-                server.is_browser_connected = False
-                server.is_page_ready = False
-        
-        if server.playwright_manager:
-            logger.info(f"   停止 Playwright...")
-            try:
-                await server.playwright_manager.stop()
-                logger.info(f"   ✅ Playwright 已停止。")
-            except Exception as stop_err: 
-                logger.error(f"   ❌ 停止 Playwright 时出错: {stop_err}", exc_info=True)
-            finally: 
-                server.playwright_manager = None
-                server.is_playwright_ready = False
-        
-        restore_original_streams(initial_stdout_before_redirect, initial_stderr_before_redirect)
-        restore_original_streams(true_original_stdout, true_original_stderr)
-        logger.info(f"✅ FastAPI 应用生命周期: 关闭完成。")
+        logger.info("Shutting down server...")
+        await _shutdown_resources()
+        restore_original_streams(initial_stdout, initial_stderr)
+        restore_original_streams(*original_streams)
+        logger.info("Server shutdown complete.")
 
 
 class APIKeyAuthMiddleware(BaseHTTPMiddleware):
