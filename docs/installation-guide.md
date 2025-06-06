@@ -124,9 +124,47 @@ playwright install-deps firefox
 *   所有命令（`git clone`, `pip install`, `camoufox fetch`, `python launch_camoufox.py` 等）都应在 WSL 终端内执行。
 *   在 WSL 中运行 `--debug` 模式：[`launch_camoufox.py --debug`](../launch_camoufox.py) 会尝试启动 Camoufox。如果你的 WSL 配置了 GUI 应用支持（如 WSLg 或第三方 X Server），可以看到浏览器界面。否则，它可能无法显示界面，但服务本身仍会尝试启动。无头模式 (通过 [`gui_launcher.py`](../gui_launcher.py) 启动) 不受影响。
 
+## 配置环境变量（推荐）
+
+安装完成后，强烈建议配置 `.env` 文件来简化后续使用：
+
+### 创建配置文件
+
+```bash
+# 复制配置模板
+cp .env.example .env
+
+# 编辑配置文件
+nano .env  # 或使用其他编辑器
+```
+
+### 基本配置示例
+
+```env
+# 服务端口配置
+DEFAULT_FASTAPI_PORT=2048
+STREAM_PORT=3120
+
+# 代理配置（如需要）
+# HTTP_PROXY=http://127.0.0.1:7890
+
+# 日志配置
+SERVER_LOG_LEVEL=INFO
+DEBUG_LOGS_ENABLED=false
+```
+
+配置完成后，启动命令将变得非常简单：
+
+```bash
+# 简单启动，无需复杂参数
+python launch_camoufox.py --headless
+```
+
+详细配置说明请参见 [环境变量配置指南](environment-configuration.md)。
+
 ## 可选：配置API密钥
 
-安装完成后，您可以选择配置API密钥来保护您的服务：
+您也可以选择配置API密钥来保护您的服务：
 
 ### 创建密钥文件
 
@@ -170,6 +208,7 @@ admin-key-for-testing
 ## 下一步
 
 安装完成后，请参考：
+- **[环境变量配置指南](environment-configuration.md)** - ⭐ 推荐先配置，简化后续使用
 - [首次运行与认证指南](authentication-setup.md)
 - [日常运行指南](daily-usage.md)
 - [API使用指南](api-usage.md) - 包含详细的密钥管理说明

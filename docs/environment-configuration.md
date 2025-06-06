@@ -32,15 +32,38 @@ code .env
 
 ### 3. 启动服务
 
-配置完成后，正常启动服务即可：
+配置完成后，启动变得非常简单：
 
 ```bash
-# GUI 启动器会自动读取 .env 配置
+# 图形界面启动（推荐新手）
 python gui_launcher.py
 
-# 或直接启动
+# 命令行启动（推荐日常使用）
+python launch_camoufox.py --headless
+
+# 调试模式（首次设置或故障排除）
+python launch_camoufox.py --debug
+```
+
+**就这么简单！** 无需复杂的命令行参数，所有配置都在 `.env` 文件中预设好了。
+
+## 启动命令对比
+
+### 使用 `.env` 配置前（复杂）
+
+```bash
+# 之前需要这样的复杂命令
+python launch_camoufox.py --headless --server-port 2048 --stream-port 3120 --helper '' --internal-camoufox-proxy 'http://127.0.0.1:7890'
+```
+
+### 使用 `.env` 配置后（简单）
+
+```bash
+# 现在只需要这样
 python launch_camoufox.py --headless
 ```
+
+**配置一次，终身受益！** 所有复杂的参数都在 `.env` 文件中预设，启动命令变得极其简洁。
 
 ## 主要配置项
 
@@ -192,6 +215,34 @@ DEFAULT_FASTAPI_PORT=3048
 DEFAULT_CAMOUFOX_PORT=9223
 STREAM_PORT=3121
 ```
+
+## 配置优先级
+
+项目采用分层配置系统，按以下优先级顺序确定最终配置：
+
+1. **命令行参数** (最高优先级)
+   ```bash
+   # 命令行参数会覆盖 .env 文件中的设置
+   python launch_camoufox.py --headless --server-port 3048
+   ```
+
+2. **`.env` 文件配置** (推荐)
+   ```env
+   # .env 文件中的配置
+   DEFAULT_FASTAPI_PORT=2048
+   ```
+
+3. **系统环境变量** (最低优先级)
+   ```bash
+   # 系统环境变量
+   export DEFAULT_FASTAPI_PORT=2048
+   ```
+
+### 使用建议
+
+- **日常使用**: 在 `.env` 文件中配置所有常用设置
+- **临时调整**: 使用命令行参数进行临时覆盖，无需修改 `.env` 文件
+- **CI/CD 环境**: 可以通过系统环境变量进行配置
 
 ## 注意事项
 
