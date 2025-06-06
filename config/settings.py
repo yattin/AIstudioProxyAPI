@@ -4,7 +4,10 @@
 """
 
 import os
-from typing import Optional, Dict
+from dotenv import load_dotenv
+
+# 加载 .env 文件
+load_dotenv()
 
 # --- 全局日志控制配置 ---
 DEBUG_LOGS_ENABLED = os.environ.get('DEBUG_LOGS_ENABLED', 'false').lower() in ('true', '1', 'yes')

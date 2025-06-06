@@ -108,6 +108,33 @@ graph TD
     FastAPI_App -- "UI 响应 (Response)" --> WebUI
 ```
 
+## 配置管理 ⭐
+
+**新功能**: 项目现在支持通过 `.env` 文件进行配置管理，避免硬编码参数！
+
+### 快速配置
+
+```bash
+# 1. 复制配置模板
+cp .env.example .env
+
+# 2. 编辑配置文件
+nano .env  # 或使用其他编辑器
+
+# 3. 启动服务（自动读取配置）
+python gui_launcher.py
+```
+
+### 主要优势
+
+- ✅ **版本更新无忧**: 一个 `git pull` 就完成更新，无需重新配置
+- ✅ **配置集中管理**: 所有配置项统一在 `.env` 文件中
+- ✅ **安全性**: `.env` 文件已被 `.gitignore` 忽略，不会泄露配置
+- ✅ **灵活性**: 支持不同环境的配置管理
+- ✅ **Docker 兼容**: Docker 和本地环境使用相同的配置方式
+
+详细配置说明请参见 [环境变量配置指南](docs/environment-configuration.md)。
+
 ## 使用教程
 
 推荐使用 [`gui_launcher.py`](gui_launcher.py) (图形界面) 或直接使用 [`launch_camoufox.py`](launch_camoufox.py) (命令行) 进行日常运行。仅在首次设置或认证过期时才需要使用调试模式。
@@ -115,14 +142,16 @@ graph TD
 ### 快速开始
 
 1. **安装**: 参见 [安装指南](docs/installation-guide.md)
-2. **首次认证**: 参见 [认证设置指南](docs/authentication-setup.md)  
-3. **日常运行**: 参见 [日常运行指南](docs/daily-usage.md)
-4. **API使用**: 参见 [API使用指南](docs/api-usage.md)
-5. **Web界面**: 参见 [Web UI使用指南](docs/webui-guide.md)
+2. **配置**: 参见 [环境变量配置指南](docs/environment-configuration.md) - **推荐先配置**
+3. **首次认证**: 参见 [认证设置指南](docs/authentication-setup.md)
+4. **日常运行**: 参见 [日常运行指南](docs/daily-usage.md)
+5. **API使用**: 参见 [API使用指南](docs/api-usage.md)
+6. **Web界面**: 参见 [Web UI使用指南](docs/webui-guide.md)
 
 ### 详细文档
 
 - [安装指南](docs/installation-guide.md) - 详细的安装步骤和环境配置
+- [环境变量配置指南](docs/environment-configuration.md) - **.env 文件配置管理** ⭐
 - [认证设置指南](docs/authentication-setup.md) - 首次运行与认证文件设置
 - [日常运行指南](docs/daily-usage.md) - 日常使用和配置选项
 - [API使用指南](docs/api-usage.md) - API端点和客户端配置
@@ -148,11 +177,36 @@ graph TD
 
 ## Docker 部署
 
-本项目支持通过 Docker 进行部署。详细的构建和运行说明，请参阅：
+本项目支持通过 Docker 进行部署，**现在完全支持 `.env` 配置文件**！
 
-- [Docker 部署指南 (README-Docker.md)](README-Docker.md)
+> 📁 **注意**: 所有 Docker 相关文件已移至 `docker/` 目录，保持项目根目录整洁。
 
-请注意，首次运行获取认证文件目前不能在docker环境完成，必须在主机完成，因此docker方式安装当前仅仅是为了方便云端部署项目。在主机部署本项目成功取得json认证文件后，日常运行通过挂载json可以使用docker来运行本项目。
+### 快速 Docker 部署
+
+```bash
+# 1. 准备配置文件
+cp docker/.env.docker .env
+nano .env  # 编辑配置
+
+# 2. 使用 Docker Compose 启动
+cd docker
+docker-compose up -d
+
+# 3. 版本更新
+cd .. && git pull && cd docker && docker-compose up -d --build
+```
+
+### 详细文档
+
+- [Docker 部署指南 (docker/README-Docker.md)](docker/README-Docker.md) - 包含完整的 `.env` 配置说明
+- [Docker 快速指南 (docker/README.md)](docker/README.md) - 快速开始指南
+
+### 重要说明
+
+- ✅ **配置统一**: Docker 和本地环境使用相同的 `.env` 配置方式
+- ✅ **版本更新**: `git pull` + `docker-compose up -d --build` 即可完成更新
+- ✅ **目录整洁**: Docker 文件已移至 `docker/` 目录
+- ⚠️ **认证文件**: 首次运行需要在主机上获取认证文件，然后挂载到容器中
 
 ---
 

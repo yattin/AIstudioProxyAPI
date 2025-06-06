@@ -16,6 +16,10 @@ import shlex
 import logging
 import json
 import requests # 新增导入
+from dotenv import load_dotenv
+
+# 加载 .env 文件
+load_dotenv()
 
 # --- Configuration & Globals ---
 PYTHON_EXECUTABLE = sys.executable
@@ -27,8 +31,8 @@ AUTH_PROFILES_DIR = os.path.join(SCRIPT_DIR, "auth_profiles") # 确保这些目�
 ACTIVE_AUTH_DIR = os.path.join(AUTH_PROFILES_DIR, "active")
 SAVED_AUTH_DIR = os.path.join(AUTH_PROFILES_DIR, "saved")
 
-DEFAULT_FASTAPI_PORT = 2048
-DEFAULT_CAMOUFOX_PORT_GUI = 9222 # 与 launch_camoufox.py 中的 DEFAULT_CAMOUFOX_PORT 一致
+DEFAULT_FASTAPI_PORT = int(os.environ.get('DEFAULT_FASTAPI_PORT', '2048'))
+DEFAULT_CAMOUFOX_PORT_GUI = int(os.environ.get('DEFAULT_CAMOUFOX_PORT', '9222'))  # 与 launch_camoufox.py 中的 DEFAULT_CAMOUFOX_PORT 一致
 
 managed_process_info: Dict[str, Any] = {
     "popen": None,
@@ -817,15 +821,15 @@ def get_camoufox_debug_port_from_gui() -> int:
 # 配置文件路径
 CONFIG_FILE_PATH = os.path.join(SCRIPT_DIR, "gui_config.json")
 
-# 默认配置
+# 默认配置 - 从环境变量读取，如果没有则使用硬编码默认值
 DEFAULT_CONFIG = {
     "fastapi_port": DEFAULT_FASTAPI_PORT,
     "camoufox_debug_port": DEFAULT_CAMOUFOX_PORT_GUI,
-    "stream_port": 3120,
+    "stream_port": int(os.environ.get('GUI_DEFAULT_STREAM_PORT', '3120')),
     "stream_port_enabled": True,
-    "helper_endpoint": "",
+    "helper_endpoint": os.environ.get('GUI_DEFAULT_HELPER_ENDPOINT', ''),
     "helper_enabled": False,
-    "proxy_address": "http://127.0.0.1:7890",
+    "proxy_address": os.environ.get('GUI_DEFAULT_PROXY_ADDRESS', 'http://127.0.0.1:7890'),
     "proxy_enabled": False
 }
 

@@ -130,7 +130,7 @@ class HttpInterceptor:
         return decompressed
 
     @staticmethod
-    def _decode_chunked(response_body: bytes) -> (bytes, bool):
+    def _decode_chunked(response_body: bytes) -> tuple[bytes, bool]:
         chunked_data = bytearray()
         while True:
             # print(' '.join(format(x, '02x') for x in response_body))

@@ -22,6 +22,10 @@ import shutil
 # --- 新的导入 ---
 import uvicorn
 from server import app # 从 server.py 导入 FastAPI app 对象
+from dotenv import load_dotenv
+
+# 加载 .env 文件
+load_dotenv()
 # -----------------
 
 # 尝试导入 launch_server (用于内部启动模式，模拟 Camoufox 行为)
@@ -39,15 +43,15 @@ except ImportError:
 
 # --- 配置常量 ---
 PYTHON_EXECUTABLE = sys.executable
-ENDPOINT_CAPTURE_TIMEOUT = 45 # 秒 (from dev)
-DEFAULT_SERVER_PORT = 2048 # FastAPI 服务器端口
-DEFAULT_CAMOUFOX_PORT = 9222 # Camoufox 调试端口 (如果内部启动需要)
-DEFAULT_HELPER_ENDPOINT = "" # 外部 Helper 端点
+ENDPOINT_CAPTURE_TIMEOUT = int(os.environ.get('ENDPOINT_CAPTURE_TIMEOUT', '45'))  # 秒 (from dev)
+DEFAULT_SERVER_PORT = int(os.environ.get('DEFAULT_FASTAPI_PORT', '2048'))  # FastAPI 服务器端口
+DEFAULT_CAMOUFOX_PORT = int(os.environ.get('DEFAULT_CAMOUFOX_PORT', '9222'))  # Camoufox 调试端口 (如果内部启动需要)
+DEFAULT_HELPER_ENDPOINT = os.environ.get('GUI_DEFAULT_HELPER_ENDPOINT', '')  # 外部 Helper 端点
 AUTH_PROFILES_DIR = os.path.join(os.path.dirname(__file__), "auth_profiles")
 ACTIVE_AUTH_DIR = os.path.join(AUTH_PROFILES_DIR, "active")
 SAVED_AUTH_DIR = os.path.join(AUTH_PROFILES_DIR, "saved")
-HTTP_PROXY = ""
-HTTPS_PROXY = ""
+HTTP_PROXY = os.environ.get('HTTP_PROXY', '')
+HTTPS_PROXY = os.environ.get('HTTPS_PROXY', '')
 LOG_DIR = os.path.join(os.path.dirname(__file__), 'logs')
 LAUNCHER_LOG_FILE_PATH = os.path.join(LOG_DIR, 'launch_app.log')
 
