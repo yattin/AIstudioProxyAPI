@@ -26,6 +26,13 @@ This project is generously sponsored by ZMTO. Visit their website: [https://zmto
 
 **这是当前维护的 Python 版本。不再维护的 Javascript 版本请参见 [`deprecated_javascript_version/README.md`](deprecated_javascript_version/README.md)。**
 
+## 系统要求
+
+*   **Python**: 3.9+ (推荐 3.10+ 或 3.11+)
+*   **操作系统**: Windows, macOS, Linux (完全跨平台支持)
+*   **内存**: 建议 2GB+ 可用内存
+*   **网络**: 稳定的互联网连接访问 Google AI Studio
+
 ## 主要特性
 
 *   **OpenAI 兼容 API**: 支持 `/v1/chat/completions` 端点，兼容现有的 OpenAI 客户端
@@ -123,7 +130,7 @@ graph TD
 - [故障排除指南](docs/troubleshooting.md) - 常见问题解决方案
 - [高级配置指南](docs/advanced-configuration.md) - 高级功能和配置选项
 - [日志控制指南](docs/logging-control.md) - 日志系统配置和调试
-- [日志控制指南](docs/logging-control.md) - 日志系统配置和调试
+- [依赖版本说明](docs/dependency-versions.md) - Python版本要求和依赖兼容性详解
 
 ## 客户端配置示例
 

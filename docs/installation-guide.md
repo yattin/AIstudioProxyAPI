@@ -4,8 +4,11 @@
 
 ## 先决条件
 
-*   **Python**: 3.8 或更高版本 (建议 3.9+)。
-*   **pip**: Python 包管理器。
+*   **Python**: 3.9 或更高版本 (强烈建议 3.10+ 或 3.11+)。
+    *   **推荐版本**: Python 3.10+ 或 3.11+ 以获得最佳性能和兼容性
+    *   **最低要求**: Python 3.9 (支持所有当前依赖版本)
+    *   **完全支持**: Python 3.9, 3.10, 3.11, 3.12, 3.13
+*   **pip**: Python 包管理器 (建议使用最新版本)。
 *   **(可选但推荐) Git**: 用于克隆仓库。
 *   **Google AI Studio 账号**: 并能正常访问和使用。
 *   **`xvfb` (仅当在 Linux 上使用 `--virtual-display` 模式时需要)**: X 虚拟帧缓冲器。
@@ -41,7 +44,16 @@ pip install -U camoufox[geoip]
 # 安装项目所需的其他 Python 库
 pip install -r requirements.txt
 ```
-`requirements.txt` 主要包含 `fastapi`, `uvicorn[standard]`, `playwright`, `pydantic`。
+`requirements.txt` 主要包含 `fastapi`, `uvicorn[standard]`, `playwright`, `pydantic` 等现代化依赖包。
+
+**依赖版本说明**:
+- **FastAPI**: 使用 0.115.12 版本，最新稳定版本，支持 Python 3.8+
+  - 包含新的参数模型功能和性能优化
+  - 改进的类型提示和 OpenAPI 文档生成
+- **Pydantic**: 使用 2.7.1+ 版本范围，提供强大的数据验证
+- **Uvicorn**: 使用 0.29.0 版本，高性能 ASGI 服务器
+- **Playwright**: 最新版本，用于浏览器自动化
+- **Camoufox**: 反指纹检测浏览器，包含 geoip 数据
 
 ### 4. 下载 Camoufox 浏览器
 

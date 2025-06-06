@@ -4,6 +4,40 @@
 
 ## 安装相关问题
 
+### Python 版本兼容性问题
+
+**Python 版本过低**:
+- **最低要求**: Python 3.9+
+- **推荐版本**: Python 3.10+ 或 3.11+
+- **检查版本**: `python --version`
+
+**常见版本问题**:
+```bash
+# Python 3.8 或更低版本可能出现的错误
+TypeError: 'type' object is not subscriptable
+SyntaxError: invalid syntax (类型提示相关)
+
+# 解决方案：升级 Python 版本
+# macOS (使用 Homebrew)
+brew install python@3.11
+
+# Ubuntu/Debian
+sudo apt update && sudo apt install python3.11
+
+# Windows: 从 python.org 下载安装
+```
+
+**虚拟环境版本问题**:
+```bash
+# 检查虚拟环境中的 Python 版本
+python -c "import sys; print(sys.version)"
+
+# 使用指定版本创建虚拟环境
+python3.11 -m venv venv
+source venv/bin/activate  # Linux/macOS
+# venv\Scripts\activate  # Windows
+```
+
 ### `pip install camoufox[geoip]` 失败
 
 *   可能是网络问题或缺少编译环境。尝试不带 `[geoip]` 安装 (`pip install camoufox`)。
