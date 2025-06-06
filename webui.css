@@ -429,6 +429,117 @@ a:hover {
     opacity: 0.85;
 }
 
+/* --- API密钥管理样式 --- */
+.api-key-status {
+    padding: 12px;
+    border-radius: var(--border-radius-md);
+    margin-bottom: 16px;
+    border: 1px solid var(--border-color);
+    background-color: var(--input-bg);
+}
+
+.api-key-status.success {
+    background-color: rgba(76, 175, 80, 0.1);
+    border-color: rgba(76, 175, 80, 0.3);
+    color: #2e7d32;
+}
+
+.api-key-status.error {
+    background-color: var(--error-container);
+    border-color: var(--error-color);
+    color: var(--on-error-container);
+}
+
+.api-key-input-group {
+    margin-bottom: 16px;
+}
+
+.api-key-input-container {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.api-key-input-container input {
+    flex: 1;
+}
+
+.api-key-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.api-key-list {
+    margin-top: 16px;
+}
+
+.api-key-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    margin-bottom: 8px;
+    background-color: var(--input-bg);
+    transition: background-color var(--transition-speed);
+}
+
+.api-key-item:hover {
+    background-color: rgba(var(--primary-rgb), 0.05);
+}
+
+.api-key-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.api-key-value {
+    font-family: 'Courier New', monospace;
+    font-size: 0.9em;
+    color: var(--text-color);
+    background-color: rgba(var(--outline-rgb), 0.1);
+    padding: 4px 8px;
+    border-radius: 4px;
+    word-break: break-all;
+}
+
+.api-key-meta {
+    font-size: 0.8em;
+    color: rgba(var(--on-surface-rgb), 0.7);
+}
+
+.api-key-actions-item {
+    display: flex;
+    gap: 8px;
+}
+
+.icon-button {
+    background: var(--icon-button-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    padding: 8px;
+    cursor: pointer;
+    color: var(--icon-button-color);
+    transition: background-color var(--transition-speed), color var(--transition-speed);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.icon-button:hover {
+    background-color: var(--icon-button-hover-bg);
+    color: var(--primary-color);
+}
+
+.icon-button.danger:hover {
+    background-color: rgba(var(--error-rgb), 0.1);
+    color: var(--error-color);
+}
+
 /* --- 消息样式增强 --- */
 #chatbox {
     flex-grow: 1;

@@ -49,9 +49,15 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
         current_prefs_for_modification["promptModel"] = full_model_path
         await page.evaluate("(prefsStr) => localStorage.setItem('aiStudioUserPreference', prefsStr)", json.dumps(current_prefs_for_modification))
         
+        # 强制设置配置选项
+        logger.info(f"[{req_id}] 强制设置配置选项：isAdvancedOpen=true, areToolsOpen=false")
+        current_prefs_for_modification["isAdvancedOpen"] = True
+        current_prefs_for_modification["areToolsOpen"] = False
+        await page.evaluate("(prefsStr) => localStorage.setItem('aiStudioUserPreference', prefsStr)", json.dumps(current_prefs_for_modification))
+
         logger.info(f"[{req_id}] localStorage 已更新，导航到 '{new_chat_url}' 应用新模型...")
         await page.goto(new_chat_url, wait_until="domcontentloaded", timeout=30000)
-        
+
         input_field = page.locator(INPUT_SELECTOR)
         await expect_async(input_field).to_be_visible(timeout=30000)
         logger.info(f"[{req_id}] 页面已导航到新聊天并加载完成，输入框可见")
@@ -161,7 +167,10 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
             
             path_to_revert_to = f"models/{model_id_to_revert_to}"
             base_prefs_for_final_revert["promptModel"] = path_to_revert_to
-            logger.info(f"[{req_id}] 恢复：准备将 localStorage.promptModel 设置回页面实际显示的模型的路径: '{path_to_revert_to}'")
+            # 强制设置配置选项
+            base_prefs_for_final_revert["isAdvancedOpen"] = True
+            base_prefs_for_final_revert["areToolsOpen"] = False
+            logger.info(f"[{req_id}] 恢复：准备将 localStorage.promptModel 设置回页面实际显示的模型的路径: '{path_to_revert_to}'，并强制设置配置选项")
             await page.evaluate("(prefsStr) => localStorage.setItem('aiStudioUserPreference', prefsStr)", json.dumps(base_prefs_for_final_revert))
             logger.info(f"[{req_id}] 恢复：导航到 '{new_chat_url}' 以应用恢复到 '{model_id_to_revert_to}' 的 localStorage 设置...")
             await page.goto(new_chat_url, wait_until="domcontentloaded", timeout=30000)

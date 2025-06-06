@@ -147,6 +147,52 @@
                         <button id="resetModelSettingsButton" class="action-button" title="重置为默认设置">重置</button>
                     </div>
 
+                    <!-- API密钥管理区域 -->
+                    <div class="info-card">
+                        <h3>API 密钥管理</h3>
+                        <div class="settings-group">
+                            <div class="api-key-status" id="apiKeyStatus">
+                                <div class="loading-indicator">
+                                    <div class="loading-spinner"></div>
+                                    <span>正在检查API密钥状态...</span>
+                                </div>
+                            </div>
+
+                            <div class="api-key-input-group">
+                                <label for="newApiKey">验证API密钥:</label>
+                                <div class="api-key-input-container">
+                                    <input type="password" id="newApiKey" class="settings-input" placeholder="输入要验证的API密钥...">
+                                    <button id="toggleApiKeyVisibility" class="icon-button" title="显示/隐藏密钥">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                            <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                        </svg>
+                                    </button>
+                                </div>
+                                <div class="api-key-actions">
+                                    <button id="testApiKeyButton" class="action-button">验证密钥</button>
+                                </div>
+                            </div>
+
+                            <div class="api-key-list" id="apiKeyList">
+                                <!-- 现有密钥列表将在这里显示 -->
+                            </div>
+
+                            <div class="settings-description">
+                                <strong>说明:</strong>
+                                <ul>
+                                    <li>支持标准的 OpenAI 格式: <code>Authorization: Bearer &lt;your_key&gt;</code></li>
+                                    <li>也支持自定义格式: <code>X-API-Key: &lt;your_key&gt;</code></li>
+                                    <li>输入的密钥会自动保存到浏览器本地存储，刷新页面后无需重新输入</li>
+                                    <li>此界面用于验证密钥有效性和查看服务器密钥状态</li>
+                                    <li>验证成功后可查看服务器上配置的密钥列表（打码显示）</li>
+                                    <li>对话功能将使用您输入验证的密钥，不会使用服务器密钥</li>
+                                    <li>如需添加密钥到服务器，请联系管理员或直接编辑服务器配置</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="info-card">
                         <h3>系统提示词</h3>
                         <div class="settings-group">

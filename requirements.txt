@@ -1,12 +1,12 @@
 # FastAPI and related
-fastapi==0.104.1
-pydantic==2.4.2
+fastapi==0.115.12
+pydantic>=2.7.1,<3.0.0
 
 # Uvicorn and standard extras
-uvicorn==0.23.2
-python-dotenv==1.0.0
-websockets==11.0.3
-httptools         # For Uvicorn performance, let pip choose compatible for 0.23.2
+uvicorn==0.29.0
+python-dotenv==1.0.1
+websockets==12.0
+httptools==0.6.1
 uvloop ; sys_platform != "win32" # For Uvicorn performance on Linux/macOS
 
 # Core launch_camoufox dependencies
@@ -14,14 +14,14 @@ playwright
 camoufox[geoip]
 
 # Security and Cryptography
-cryptography
+cryptography==42.0.5
 
 # HTTP client and other utilities
-aiohttp~=3.11.18  # CRITICAL: Using the newer version from the root project.
+aiohttp~=3.9.5  # CRITICAL: Using the newer version from the root project.
                  # The helper's middleware.py usage of aiohttp is likely compatible.
 requests==2.31.0
 pyjwt==2.8.0
-Flask             # Used in llm.py
+Flask==3.0.3             # Used in llm.py
 
 # Stream Proxy
 aiosocks~=0.2.6

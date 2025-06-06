@@ -142,16 +142,83 @@ async def queue_worker():
                             req_id, request_data, http_request, result_future
                         )
                         
+                        completion_event, submit_btn_loc, client_disco_checker = None, None, None
+                        current_request_was_streaming = False
+
                         if isinstance(returned_value, tuple) and len(returned_value) == 3:
-                            completion_event, locator, checker = returned_value
-                            if completion_event and locator and checker:
+                            completion_event, submit_btn_loc, client_disco_checker = returned_value
+                            if completion_event is not None:
+                                current_request_was_streaming = True
                                 logger.info(f"[{req_id}] (Worker) _process_request_refactored returned stream info (event, locator, checker).")
                             else:
+                                current_request_was_streaming = False
                                 logger.info(f"[{req_id}] (Worker) _process_request_refactored returned a tuple, but completion_event is None (likely non-stream or early exit).")
                         elif returned_value is None:
+                            current_request_was_streaming = False
                             logger.info(f"[{req_id}] (Worker) _process_request_refactored returned non-stream completion (None).")
                         else:
+                            current_request_was_streaming = False
                             logger.warning(f"[{req_id}] (Worker) _process_request_refactored returned unexpected type: {type(returned_value)}")
+
+                        # 关键修复：在锁内等待流式完成（与原始参考文件一致）
+                        if completion_event:
+                            logger.info(f"[{req_id}] (Worker) 等待流式生成器完成信号...")
+                            try:
+                                from server import RESPONSE_COMPLETION_TIMEOUT
+                                await asyncio.wait_for(completion_event.wait(), timeout=RESPONSE_COMPLETION_TIMEOUT/1000 + 60)
+                                logger.info(f"[{req_id}] (Worker) ✅ 流式生成器完成信号收到。")
+
+                                # 等待发送按钮禁用确认流式响应完全结束
+                                if submit_btn_loc and client_disco_checker:
+                                    logger.info(f"[{req_id}] (Worker) 流式响应完成，检查并处理发送按钮状态...")
+                                    wait_timeout_ms = 30000  # 30 seconds
+                                    try:
+                                        from playwright.async_api import expect as expect_async
+                                        from api_utils.request_processor import ClientDisconnectedError
+
+                                        # 检查客户端连接状态
+                                        client_disco_checker("流式响应后按钮状态检查 - 前置检查: ")
+                                        await asyncio.sleep(0.5)  # 给UI一点时间更新
+
+                                        # 检查按钮是否仍然启用，如果启用则直接点击停止
+                                        logger.info(f"[{req_id}] (Worker) 检查发送按钮状态...")
+                                        try:
+                                            is_button_enabled = await submit_btn_loc.is_enabled(timeout=2000)
+                                            logger.info(f"[{req_id}] (Worker) 发送按钮启用状态: {is_button_enabled}")
+
+                                            if is_button_enabled:
+                                                # 流式响应完成后按钮仍启用，直接点击停止
+                                                logger.info(f"[{req_id}] (Worker) 流式响应完成但按钮仍启用，主动点击按钮停止生成...")
+                                                await submit_btn_loc.click(timeout=5000, force=True)
+                                                logger.info(f"[{req_id}] (Worker) ✅ 发送按钮点击完成。")
+                                            else:
+                                                logger.info(f"[{req_id}] (Worker) 发送按钮已禁用，无需点击。")
+                                        except Exception as button_check_err:
+                                            logger.warning(f"[{req_id}] (Worker) 检查按钮状态失败: {button_check_err}")
+
+                                        # 等待按钮最终禁用
+                                        logger.info(f"[{req_id}] (Worker) 等待发送按钮最终禁用...")
+                                        await expect_async(submit_btn_loc).to_be_disabled(timeout=wait_timeout_ms)
+                                        logger.info(f"[{req_id}] ✅ 发送按钮已禁用。")
+
+                                    except Exception as e_pw_disabled:
+                                        logger.warning(f"[{req_id}] ⚠️ 流式响应后按钮状态处理超时或错误: {e_pw_disabled}")
+                                        from api_utils.request_processor import save_error_snapshot
+                                        await save_error_snapshot(f"stream_post_submit_button_handling_timeout_{req_id}")
+                                    except ClientDisconnectedError:
+                                        logger.info(f"[{req_id}] 客户端在流式响应后按钮状态处理时断开连接。")
+                                elif current_request_was_streaming:
+                                    logger.warning(f"[{req_id}] (Worker) 流式请求但 submit_btn_loc 或 client_disco_checker 未提供。跳过按钮禁用等待。")
+
+                            except asyncio.TimeoutError:
+                                logger.warning(f"[{req_id}] (Worker) ⚠️ 等待流式生成器完成信号超时。")
+                                if not result_future.done():
+                                    result_future.set_exception(HTTPException(status_code=504, detail=f"[{req_id}] Stream generation timed out waiting for completion signal."))
+                            except Exception as ev_wait_err:
+                                logger.error(f"[{req_id}] (Worker) ❌ 等待流式完成事件时出错: {ev_wait_err}")
+                                if not result_future.done():
+                                    result_future.set_exception(HTTPException(status_code=500, detail=f"[{req_id}] Error waiting for stream completion: {ev_wait_err}"))
+
                     except Exception as process_err:
                         logger.error(f"[{req_id}] (Worker) _process_request_refactored execution error: {process_err}")
                         if not result_future.done():

@@ -1,0 +1,115 @@
+# 日常运行指南
+
+完成首次认证设置后，推荐使用 [`gui_launcher.py`](../gui_launcher.py) 的无头模式或直接通过命令行运行 [`launch_camoufox.py --headless`](../launch_camoufox.py) 进行日常运行。
+
+## 启动器说明
+
+### 关于 `--virtual-display` (Linux 虚拟显示无头模式)
+
+*   **为什么使用?** 与标准的无头模式相比，虚拟显示模式通过创建一个完整的虚拟 X 服务器环境 (Xvfb) 来运行浏览器。这可以模拟一个更真实的桌面环境，从而可能进一步降低被网站检测为自动化脚本或机器人的风险，特别适用于对反指纹和反检测有更高要求的场景，同时确保无桌面的环境下能正常运行服务
+*   **什么时候使用?** 当您在 Linux 环境下运行，并且希望以无头模式操作。
+*   **如何使用?**
+    1. 确保您的 Linux 系统已安装 `xvfb` (参见 [安装指南](installation-guide.md) 中的安装说明)。
+    2. 在运行 [`launch_camoufox.py`](../launch_camoufox.py) 时添加 `--virtual-display` 标志。例如:
+        ```bash
+        python launch_camoufox.py --virtual-display --server-port 2048 --stream-port 3120 --internal-camoufox-proxy ''
+        ```
+
+## 代理配置优先级
+
+项目采用统一的代理配置管理系统，按以下优先级顺序确定代理设置：
+
+1. **`--internal-camoufox-proxy` 命令行参数** (最高优先级)
+   - 明确指定代理：`--internal-camoufox-proxy 'http://127.0.0.1:7890'`
+   - 明确禁用代理：`--internal-camoufox-proxy ''`
+2. **`HTTP_PROXY` 环境变量**
+3. **`HTTPS_PROXY` 环境变量**
+4. **系统代理设置** (Linux 下的 gsettings，最低优先级)
+
+**重要说明**：此代理配置会同时应用于 Camoufox 浏览器和流式代理服务的上游连接，确保整个系统的代理行为一致。
+
+## 响应获取模式配置
+
+### 模式1: 优先使用集成的流式代理 (默认推荐)
+
+```bash
+# 基本启动命令 - FastAPI 在 2048, 集成流式代理在 3120, 明确禁用代理
+python launch_camoufox.py --headless --server-port 2048 --stream-port 3120 --helper '' --internal-camoufox-proxy ''
+
+# 使用自定义流式代理端口，明确禁用代理
+python launch_camoufox.py --headless --server-port 2048 --stream-port 3125 --helper '' --internal-camoufox-proxy ''
+
+# 启用统一代理配置（同时应用于浏览器和流式代理）
+python launch_camoufox.py --headless --server-port 2048 --stream-port 3120 --helper '' --internal-camoufox-proxy 'http://127.0.0.1:7890'
+
+# 使用环境变量配置代理（不推荐，建议明确指定）
+export HTTP_PROXY=http://127.0.0.1:7890
+python launch_camoufox.py --headless --server-port 2048 --stream-port 3120 --helper ''
+```
+
+在此模式下，主服务器会优先尝试通过端口 `3120` (或指定的 `--stream-port`) 上的集成流式代理获取响应。如果失败，则回退到 Playwright 页面交互。
+
+**重要提示**: 强烈建议在所有启动命令中明确指定 `--internal-camoufox-proxy` 参数，即使是禁用代理也要设置为 `''`，这样可以避免意外使用环境变量中的代理设置，确保代理行为可预测。
+
+### 模式2: 优先使用外部 Helper 服务 (禁用集成流式代理)
+
+```bash
+# 基本外部Helper模式，明确禁用代理
+python launch_camoufox.py --headless --server-port 2048 --stream-port 0 --helper 'http://your-helper-service.com/api/getStreamResponse' --internal-camoufox-proxy ''
+
+# 外部Helper模式 + 统一代理配置
+python launch_camoufox.py --headless --server-port 2048 --stream-port 0 --helper 'http://your-helper-service.com/api/getStreamResponse' --internal-camoufox-proxy 'http://127.0.0.1:7890'
+```
+
+在此模式下，主服务器会优先尝试通过 `--helper` 指定的端点获取响应 (需要有效的 `auth_profiles/active/*.json` 以提取 `SAPISID`)。如果失败，则回退到 Playwright 页面交互。
+
+### 模式3: 仅使用 Playwright 页面交互 (禁用所有流式代理和 Helper)
+
+```bash
+# 纯Playwright模式，明确禁用代理
+python launch_camoufox.py --headless --server-port 2048 --stream-port 0 --helper '' --internal-camoufox-proxy ''
+
+# Playwright模式 + 统一代理配置
+python launch_camoufox.py --headless --server-port 2048 --stream-port 0 --helper '' --internal-camoufox-proxy 'http://127.0.0.1:7890'
+```
+
+在此模式下，主服务器将仅通过 Playwright 与 AI Studio 页面交互 (模拟点击"编辑"或"复制"按钮) 来获取响应。这是传统的后备方法。
+
+## 使用图形界面启动器
+
+项目提供了一个基于 Tkinter 的图形用户界面 (GUI) 启动器：[`gui_launcher.py`](../gui_launcher.py)。
+
+### 启动 GUI
+
+```bash
+python gui_launcher.py
+```
+
+### GUI 功能
+
+*   **服务端口配置**: 指定 FastAPI 服务器监听的端口号 (默认为 2048)。
+*   **端口进程管理**: 查询和停止指定端口上的进程。
+*   **启动选项**:
+    1. **启动有头模式 (Debug, 交互式)**: 对应 `python launch_camoufox.py --debug`
+    2. **启动无头模式 (后台独立运行)**: 对应 `python launch_camoufox.py --headless`
+*   **本地LLM模拟服务**: 启动和管理本地LLM模拟服务 (基于 [`llm.py`](../llm.py))
+*   **状态与日志**: 显示服务状态和实时日志
+
+### 使用建议
+
+*   首次运行或需要更新认证文件：使用"启动有头模式"
+*   日常后台运行：使用"启动无头模式"
+*   需要详细日志或调试：直接使用命令行 [`launch_camoufox.py`](../launch_camoufox.py)
+
+## 重要注意事项
+
+**强烈建议在所有 `launch_camoufox.py` 命令中明确指定 `--internal-camoufox-proxy` 参数，即使其值为空字符串 (`''`)，以避免意外使用系统环境变量中的代理设置。**
+
+**只有当你确认使用 [`launch_camoufox.py --debug`](../launch_camoufox.py) 或 GUI 有头模式一切运行正常（特别是浏览器内的登录和认证保存），并且 `auth_profiles/active/` 目录下有有效的认证文件后，才推荐使用 [`gui_launcher.py`](../gui_launcher.py) 的无头模式或 [`launch_camoufox.py --headless`](../launch_camoufox.py) 作为日常后台运行的标准方式。**
+
+## 下一步
+
+日常运行设置完成后，请参考：
+- [API 使用指南](api-usage.md)
+- [Web UI 使用指南](webui-guide.md)
+- [故障排除指南](troubleshooting.md)

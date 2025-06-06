@@ -348,57 +348,7 @@ def input_with_timeout(prompt_message: str, timeout_seconds: int = 30) -> str:
         else:
             print("\n输入超时。将使用默认值。", flush=True)
             return ""
-def get_proxy_from_gsettings():
-    """
-    Retrieves the proxy settings from GSettings on Linux systems.
-    Returns a proxy string like "http://host:port" or None.
-    """
-    def _run_gsettings_command(command_parts):
-        try:
-            process_result = subprocess.run(
-                command_parts,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=1
-            )
-            if process_result.returncode == 0:
-                value = process_result.stdout.strip()
-                if value.startswith("'") and value.endswith("'"):
-                    return value[1:-1]
-                return value
-            else:
-                return None
-        except subprocess.TimeoutExpired:
-            return None
-        except Exception: # pylint: disable=broad-except
-            return None
 
-    proxy_mode = _run_gsettings_command(["gsettings", "get", "org.gnome.system.proxy", "mode"])
-
-    if proxy_mode == "manual":
-        http_host = _run_gsettings_command(["gsettings", "get", "org.gnome.system.proxy.http", "host"])
-        http_port_str = _run_gsettings_command(["gsettings", "get", "org.gnome.system.proxy.http", "port"])
-
-        if http_host and http_port_str:
-            try:
-                http_port = int(http_port_str)
-                if http_port > 0:
-                    return f"http://{http_host}:{http_port}"
-            except ValueError:
-                pass
-
-        https_host = _run_gsettings_command(["gsettings", "get", "org.gnome.system.proxy.https", "host"])
-        https_port_str = _run_gsettings_command(["gsettings", "get", "org.gnome.system.proxy.https", "port"])
-
-        if https_host and https_port_str:
-            try:
-                https_port = int(https_port_str)
-                if https_port > 0:
-                    return f"http://{https_host}:{https_port}"
-            except ValueError:
-                pass
-    return None
 def get_proxy_from_gsettings():
     """
     Retrieves the proxy settings from GSettings on Linux systems.
@@ -459,6 +409,67 @@ def get_proxy_from_gsettings():
                 pass
     
     return None
+
+
+def determine_proxy_configuration(internal_camoufox_proxy_arg=None):
+    """
+    统一的代理配置确定函数
+    按优先级顺序：命令行参数 > 环境变量 > 系统设置
+
+    Args:
+        internal_camoufox_proxy_arg: --internal-camoufox-proxy 命令行参数值
+
+    Returns:
+        dict: 包含代理配置信息的字典
+        {
+            'camoufox_proxy': str or None,  # Camoufox浏览器使用的代理
+            'stream_proxy': str or None,    # 流式代理服务使用的上游代理
+            'source': str                   # 代理来源说明
+        }
+    """
+    result = {
+        'camoufox_proxy': None,
+        'stream_proxy': None,
+        'source': '无代理'
+    }
+
+    # 1. 优先使用命令行参数
+    if internal_camoufox_proxy_arg is not None:
+        if internal_camoufox_proxy_arg.strip():  # 非空字符串
+            result['camoufox_proxy'] = internal_camoufox_proxy_arg.strip()
+            result['stream_proxy'] = internal_camoufox_proxy_arg.strip()
+            result['source'] = f"命令行参数 --internal-camoufox-proxy: {internal_camoufox_proxy_arg.strip()}"
+        else:  # 空字符串，明确禁用代理
+            result['source'] = "命令行参数 --internal-camoufox-proxy='' (明确禁用代理)"
+        return result
+
+    # 2. 尝试环境变量 HTTP_PROXY
+    http_proxy = os.environ.get("HTTP_PROXY")
+    if http_proxy:
+        result['camoufox_proxy'] = http_proxy
+        result['stream_proxy'] = http_proxy
+        result['source'] = f"环境变量 HTTP_PROXY: {http_proxy}"
+        return result
+
+    # 3. 尝试环境变量 HTTPS_PROXY
+    https_proxy = os.environ.get("HTTPS_PROXY")
+    if https_proxy:
+        result['camoufox_proxy'] = https_proxy
+        result['stream_proxy'] = https_proxy
+        result['source'] = f"环境变量 HTTPS_PROXY: {https_proxy}"
+        return result
+
+    # 4. 尝试系统代理设置 (仅限 Linux)
+    if sys.platform.startswith('linux'):
+        gsettings_proxy = get_proxy_from_gsettings()
+        if gsettings_proxy:
+            result['camoufox_proxy'] = gsettings_proxy
+            result['stream_proxy'] = gsettings_proxy
+            result['source'] = f"gsettings 系统代理: {gsettings_proxy}"
+            return result
+
+    return result
+
 
 # --- 主执行逻辑 ---
 if __name__ == "__main__":
@@ -561,28 +572,10 @@ if __name__ == "__main__":
         internal_mode_arg = args.internal_launch_mode
         auth_file = args.internal_auth_file
         camoufox_port_internal = args.internal_camoufox_port
-        # 代理确定逻辑
-        actual_proxy_to_use = None
-        if args.internal_camoufox_proxy:
-            actual_proxy_to_use = args.internal_camoufox_proxy
-            print(f"--- [内部Camoufox启动] 使用命令行参数 --internal-camoufox-proxy: {actual_proxy_to_use} ---", flush=True)
-        elif os.environ.get("HTTP_PROXY"):
-            actual_proxy_to_use = os.environ.get("HTTP_PROXY")
-            print(f"--- [内部Camoufox启动] 使用环境变量 HTTP_PROXY: {actual_proxy_to_use} ---", flush=True)
-        elif os.environ.get("HTTPS_PROXY"):
-            actual_proxy_to_use = os.environ.get("HTTPS_PROXY")
-            print(f"--- [内部Camoufox启动] 使用环境变量 HTTPS_PROXY: {actual_proxy_to_use} ---", flush=True)
-        else:
-            # 尝试从 gsettings 获取代理 (仅限 Linux)
-            if sys.platform.startswith('linux'):
-                gsettings_proxy = get_proxy_from_gsettings()
-                if gsettings_proxy:
-                    actual_proxy_to_use = gsettings_proxy
-                    print(f"--- [内部Camoufox启动] 使用 gsettings 系统代理: {actual_proxy_to_use} ---", flush=True)
-                else:
-                    print(f"--- [内部Camoufox启动] --internal-camoufox-proxy 未提供，环境变量 HTTP_PROXY/HTTPS_PROXY 未设置，gsettings 未找到代理。将不使用代理。 ---", flush=True)
-            else:
-                print(f"--- [内部Camoufox启动] --internal-camoufox-proxy 未提供，且环境变量 HTTP_PROXY/HTTPS_PROXY 未设置。将不使用代理。 ---", flush=True)
+        # 使用统一的代理配置确定逻辑
+        proxy_config = determine_proxy_configuration(args.internal_camoufox_proxy)
+        actual_proxy_to_use = proxy_config['camoufox_proxy']
+        print(f"--- [内部Camoufox启动] 代理配置: {proxy_config['source']} ---", flush=True)
         
         camoufox_proxy_internal = actual_proxy_to_use # 更新此变量以供后续使用
         camoufox_os_internal = args.internal_camoufox_os
@@ -841,6 +834,10 @@ if __name__ == "__main__":
     camoufox_internal_cmd_args.extend(['--internal-camoufox-os', simulated_os_for_camoufox])
     camoufox_internal_cmd_args.extend(['--internal-camoufox-port', str(args.camoufox_debug_port)])
 
+    # 修复：传递代理参数到内部Camoufox进程
+    if args.internal_camoufox_proxy is not None:
+        camoufox_internal_cmd_args.extend(['--internal-camoufox-proxy', args.internal_camoufox_proxy])
+
     camoufox_popen_kwargs = {'stdout': subprocess.PIPE, 'stderr': subprocess.PIPE, 'env': os.environ.copy()}
     camoufox_popen_kwargs['env']['PYTHONIOENCODING'] = 'utf-8' 
     if sys.platform != "win32" and final_launch_mode != 'debug': 
@@ -971,6 +968,14 @@ if __name__ == "__main__":
     os.environ['SERVER_PORT_INFO'] = str(args.server_port)
     os.environ['STREAM_PORT'] = str(args.stream_port)
 
+    # 设置统一的代理配置环境变量
+    proxy_config = determine_proxy_configuration(args.internal_camoufox_proxy)
+    if proxy_config['stream_proxy']:
+        os.environ['UNIFIED_PROXY_CONFIG'] = proxy_config['stream_proxy']
+        logger.info(f"  设置统一代理配置: {proxy_config['source']}")
+    elif 'UNIFIED_PROXY_CONFIG' in os.environ:
+        del os.environ['UNIFIED_PROXY_CONFIG']
+
     host_os_for_shortcut_env = None
     camoufox_os_param_lower = simulated_os_for_camoufox.lower()
     if camoufox_os_param_lower == "macos": host_os_for_shortcut_env = "Darwin"
@@ -983,11 +988,12 @@ if __name__ == "__main__":
     
     logger.info(f"  为 server.app 设置的环境变量:")
     env_keys_to_log = [
-        'CAMOUFOX_WS_ENDPOINT', 'LAUNCH_MODE', 'SERVER_LOG_LEVEL', 
-        'SERVER_REDIRECT_PRINT', 'DEBUG_LOGS_ENABLED', 'TRACE_LOGS_ENABLED', 
-        'ACTIVE_AUTH_JSON_PATH', 'AUTO_SAVE_AUTH', 'AUTH_SAVE_TIMEOUT', 
+        'CAMOUFOX_WS_ENDPOINT', 'LAUNCH_MODE', 'SERVER_LOG_LEVEL',
+        'SERVER_REDIRECT_PRINT', 'DEBUG_LOGS_ENABLED', 'TRACE_LOGS_ENABLED',
+        'ACTIVE_AUTH_JSON_PATH', 'AUTO_SAVE_AUTH', 'AUTH_SAVE_TIMEOUT',
         'SERVER_PORT_INFO', 'HOST_OS_FOR_SHORTCUT',
-        'HELPER_ENDPOINT', 'HELPER_SAPISID', 'STREAM_PORT' # Added helper env vars
+        'HELPER_ENDPOINT', 'HELPER_SAPISID', 'STREAM_PORT',
+        'UNIFIED_PROXY_CONFIG'  # 新增统一代理配置
     ]
     for key in env_keys_to_log:
         if key in os.environ:
