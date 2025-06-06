@@ -733,10 +733,10 @@ async def _process_request_refactored(
         await _handle_parameter_cache(req_id, context)
         
         prepared_prompt = await _prepare_and_validate_request(req_id, request, check_client_disconnected)
-        
+
         # 使用PageController处理页面交互
-        await page_controller.clear_chat_history(check_client_disconnected)
-        
+        # 注意：聊天历史清空已移至队列处理锁释放后执行
+
         await page_controller.adjust_parameters(
             request.model_dump(exclude_none=True), # 使用 exclude_none=True 避免传递None值
             context['page_params_cache'],

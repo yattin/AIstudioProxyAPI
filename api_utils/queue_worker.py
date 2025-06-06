@@ -8,6 +8,7 @@ import time
 from fastapi import HTTPException
 
 
+
 async def queue_worker():
     """队列工作器，处理请求队列中的任务"""
     # 导入全局变量
@@ -224,12 +225,24 @@ async def queue_worker():
                         if not result_future.done():
                             result_future.set_exception(HTTPException(status_code=500, detail=f"[{req_id}] Request processing error: {process_err}"))
             
-            # 清空流式队列缓存
-            logger.info(f"[{req_id}] (Worker) 尝试清空流式队列缓存...")
-            from api_utils import clear_stream_queue
-            await clear_stream_queue()
             logger.info(f"[{req_id}] (Worker) 释放处理锁。")
-            
+
+            # 在释放处理锁后立即执行清空操作
+            try:
+                # 清空流式队列缓存
+                from api_utils import clear_stream_queue
+                await clear_stream_queue()
+
+                # 清空聊天历史（如果有必要的参数）
+                if completion_event and submit_btn_loc and client_disco_checker:
+                    from server import page_instance, is_page_ready
+                    if page_instance and is_page_ready:
+                        from browser_utils.page_controller import PageController
+                        page_controller = PageController(page_instance, logger, req_id)
+                        await page_controller.clear_chat_history(client_disco_checker)
+            except Exception as clear_err:
+                logger.error(f"[{req_id}] (Worker) 清空操作时发生错误: {clear_err}", exc_info=True)
+
             was_last_request_streaming = is_streaming_request
             last_request_completion_time = time.time()
             
