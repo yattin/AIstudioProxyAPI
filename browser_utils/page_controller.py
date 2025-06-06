@@ -611,7 +611,7 @@ class PageController:
 
             self.logger.info(f"[{self.req_id}] 等待响应完成...")
             completion_detected = await _wait_for_response_completion(
-                self.page, input_field_locator, submit_button_locator, edit_button_locator, self.req_id, check_client_disconnected
+                self.page, input_field_locator, submit_button_locator, edit_button_locator, self.req_id, check_client_disconnected, None
             )
 
             if not completion_detected:

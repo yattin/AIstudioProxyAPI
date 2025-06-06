@@ -537,7 +537,9 @@ async def _wait_for_response_completion(
     consecutive_empty_input_submit_disabled_count = 0
     
     while True:
-        if check_client_disconnected_func(current_chat_id, req_id):
+        try:
+            check_client_disconnected_func("等待响应完成 - 循环开始")
+        except ClientDisconnectedError:
             logger.info(f"[{req_id}] (WaitV3) 客户端断开连接，中止等待。")
             return False
 
@@ -547,7 +549,9 @@ async def _wait_for_response_completion(
             await save_error_snapshot(f"wait_completion_v3_overall_timeout_{req_id}")
             return False
 
-        if check_client_disconnected_func(current_chat_id, req_id): 
+        try:
+            check_client_disconnected_func("等待响应完成 - 超时检查后")
+        except ClientDisconnectedError:
             return False
 
         # --- 主要条件: 输入框空 & 提交按钮禁用 ---
@@ -558,7 +562,9 @@ async def _wait_for_response_completion(
         except TimeoutError:
             logger.warning(f"[{req_id}] (WaitV3) 检查提交按钮是否禁用超时。为本次检查假定其未禁用。")
         
-        if check_client_disconnected_func(current_chat_id, req_id): 
+        try:
+            check_client_disconnected_func("等待响应完成 - 按钮状态检查后")
+        except ClientDisconnectedError:
             return False
 
         if is_input_empty and is_submit_disabled:
@@ -575,7 +581,9 @@ async def _wait_for_response_completion(
                 if DEBUG_LOGS_ENABLED:
                     logger.debug(f"[{req_id}] (WaitV3) 主要条件满足后，检查编辑按钮可见性超时。")
             
-            if check_client_disconnected_func(current_chat_id, req_id): 
+            try:
+                check_client_disconnected_func("等待响应完成 - 编辑按钮检查后")
+            except ClientDisconnectedError:
                 return False
 
             # 启发式完成: 如果主要条件持续满足，但编辑按钮仍未出现
