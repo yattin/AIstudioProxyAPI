@@ -63,19 +63,30 @@ async def _handle_model_list_response(response: Any):
     excluded_model_ids = getattr(server, 'excluded_model_ids', set())
     
     if MODELS_ENDPOINT_URL_CONTAINS in response.url and response.ok:
-        logger.info(f"捕获到潜在的模型列表响应来自: {response.url} (状态: {response.status})")
+        # 检查是否在登录流程中
+        launch_mode = os.environ.get('LAUNCH_MODE', 'debug')
+        is_in_login_flow = launch_mode in ['debug'] and not getattr(server, 'is_page_ready', False)
+
+        if is_in_login_flow:
+            # 在登录流程中，静默处理，不输出干扰信息
+            pass  # 静默处理，避免干扰用户输入
+        else:
+            logger.info(f"捕获到潜在的模型列表响应来自: {response.url} (状态: {response.status})")
         try:
             data = await response.json()
             models_array_container = None
             if isinstance(data, list) and data:
                 if isinstance(data[0], list) and data[0] and isinstance(data[0][0], list):
-                    logger.info("检测到三层列表结构 data[0][0] is list. models_array_container 设置为 data[0]。")
+                    if not is_in_login_flow:
+                        logger.info("检测到三层列表结构 data[0][0] is list. models_array_container 设置为 data[0]。")
                     models_array_container = data[0]
                 elif isinstance(data[0], list) and data[0] and isinstance(data[0][0], str):
-                    logger.info("检测到两层列表结构 data[0][0] is str. models_array_container 设置为 data。")
+                    if not is_in_login_flow:
+                        logger.info("检测到两层列表结构 data[0][0] is str. models_array_container 设置为 data。")
                     models_array_container = data
                 elif isinstance(data[0], dict):
-                    logger.info("检测到根列表，元素为字典。直接使用 data 作为 models_array_container。")
+                    if not is_in_login_flow:
+                        logger.info("检测到根列表，元素为字典。直接使用 data 作为 models_array_container。")
                     models_array_container = data
                 else:
                     logger.warning(f"未知的列表嵌套结构。data[0] 类型: {type(data[0]) if data else 'N/A'}。data[0] 预览: {str(data[0])[:200] if data else 'N/A'}")
@@ -202,7 +213,8 @@ async def _handle_model_list_response(response: Any):
                     if model_id_path_str and model_id_path_str.lower() != "none":
                         simple_model_id_str = model_id_path_str.split('/')[-1] if '/' in model_id_path_str else model_id_path_str
                         if simple_model_id_str in excluded_model_ids:
-                            logger.info(f"模型 '{simple_model_id_str}' 在排除列表 excluded_model_ids 中，已跳过。")
+                            if not is_in_login_flow:
+                                logger.info(f"模型 '{simple_model_id_str}' 在排除列表 excluded_model_ids 中，已跳过。")
                             continue
                         
                         final_display_name_str = display_name_candidate if display_name_candidate else simple_model_id_str.replace("-", " ").title()

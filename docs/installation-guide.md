@@ -39,11 +39,32 @@ source venv/bin/activate  # Linux/macOS
 
 ```bash
 # 安装 Camoufox 库 (推荐包含 geoip 数据，特别是使用代理时)
-pip install -U camoufox[geoip]
+pip install -U "camoufox[geoip]"
 
 # 安装项目所需的其他 Python 库
 pip install -r requirements.txt
 ```
+
+**重要：关于引号使用的跨平台说明**
+
+在安装 `camoufox[geoip]` 时，不同平台需要使用不同的引号处理方式：
+
+**各平台推荐命令**：
+- **macOS/Linux (bash/zsh)**：`pip install -U "camoufox[geoip]"`
+- **Windows PowerShell**：`pip install -U "camoufox[geoip]"` 或 `pip install -U 'camoufox[geoip]'`
+- **Windows CMD**：`pip install -U camoufox[geoip]` （通常不需要引号）
+
+**技术原因**：
+- **Unix Shell (bash/zsh)**：方括号 `[geoip]` 会被解释为文件通配符（glob pattern），不使用引号会导致 `no matches found` 错误
+- **PowerShell**：虽然对方括号处理较为宽松，但使用引号是最安全的做法
+- **Windows CMD**：对方括号的处理相对简单，通常不需要引号，但使用引号也不会出错
+
+**最佳实践**：
+为了确保跨平台兼容性，**建议在所有平台都使用双引号**：`pip install -U "camoufox[geoip]"`
+
+**如果遇到问题**：
+- 如果出现 `no matches found` 或类似错误，请确保使用了引号
+- 如果引号导致问题，可以尝试不使用引号（主要在某些 Windows 环境中）
 `requirements.txt` 主要包含 `fastapi`, `uvicorn[standard]`, `playwright`, `pydantic` 等现代化依赖包。
 
 **依赖版本说明**:
