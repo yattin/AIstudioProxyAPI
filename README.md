@@ -33,8 +33,9 @@ This project is generously sponsored by ZMTO. Visit their website: [https://zmto
 *   **参数控制**: 支持 `temperature`, `max_output_tokens`, `top_p`, `stop` 等参数
 *   **反指纹检测**: 使用 Camoufox 降低被检测为自动化脚本的风险
 *   **多种响应获取方式**: 集成流式代理、外部 Helper 服务、Playwright 页面交互
-*   **Web UI**: 内置现代化的测试界面，支持聊天、状态监控、API密钥管理
+*   **Web UI**: 内置现代化的测试界面，支持聊天、状态监控、安全的API密钥管理
 *   **图形界面启动器**: 提供 GUI 启动器，简化配置和管理
+*   **灵活的认证系统**: 支持可选的API密钥认证，兼容OpenAI标准的Bearer token
 
 ## 系统架构
 

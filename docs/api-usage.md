@@ -2,6 +2,119 @@
 
 代理服务器默认监听在 `http://127.0.0.1:2048`。端口可以在 [`launch_camoufox.py`](../launch_camoufox.py) 的 `--server-port` 参数或 [`gui_launcher.py`](../gui_launcher.py) 中修改。
 
+## API 密钥配置
+
+### key.txt 文件配置
+
+项目使用 `key.txt` 文件来管理API密钥：
+
+**文件位置**: 项目根目录下的 `key.txt` 文件
+
+**文件格式**: 每行一个API密钥，支持空行和注释
+```
+your-api-key-1
+your-api-key-2
+# 这是注释行，会被忽略
+
+another-api-key
+```
+
+**自动创建**: 如果 `key.txt` 文件不存在，系统会自动创建一个空文件
+
+### 密钥管理方法
+
+#### 手动编辑文件
+直接编辑 `key.txt` 文件添加或删除密钥：
+```bash
+# 添加密钥
+echo "your-new-api-key" >> key.txt
+
+# 查看当前密钥（注意安全）
+cat key.txt
+```
+
+#### 通过 Web UI 管理
+在 Web UI 的"设置"标签页中可以：
+- 验证密钥有效性
+- 查看服务器上配置的密钥列表（需要先验证）
+- 测试特定密钥
+
+### 密钥验证机制
+
+**验证逻辑**:
+- 如果 `key.txt` 为空或不存在，则不需要API密钥验证
+- 如果配置了密钥，则所有API请求都需要提供有效的密钥
+- 密钥验证支持两种认证头格式
+
+**安全特性**:
+- 密钥在日志中会被打码显示（如：`abcd****efgh`）
+- Web UI 中的密钥列表也会打码显示
+- 支持最小长度验证（至少8个字符）
+
+## API 认证流程
+
+### Bearer Token 认证
+
+项目支持标准的 OpenAI 兼容认证方式：
+
+**主要认证方式** (推荐):
+```bash
+Authorization: Bearer your-api-key
+```
+
+**备用认证方式** (向后兼容):
+```bash
+X-API-Key: your-api-key
+```
+
+### 认证行为
+
+**无密钥配置时**:
+- 所有API请求都不需要认证
+- `/api/info` 端点会显示 `"api_key_required": false`
+
+**有密钥配置时**:
+- 所有 `/v1/*` 路径的API请求都需要有效的密钥
+- 除外路径：`/v1/models`, `/health`, `/docs` 等公开端点
+- 认证失败返回 `401 Unauthorized` 错误
+
+### 客户端配置示例
+
+#### curl 示例
+```bash
+# 使用 Bearer token
+curl -X POST http://127.0.0.1:2048/v1/chat/completions \
+  -H "Authorization: Bearer your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "Hello"}]}'
+
+# 使用 X-API-Key 头
+curl -X POST http://127.0.0.1:2048/v1/chat/completions \
+  -H "X-API-Key: your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "Hello"}]}'
+```
+
+#### Python requests 示例
+```python
+import requests
+
+headers = {
+    "Authorization": "Bearer your-api-key",
+    "Content-Type": "application/json"
+}
+
+data = {
+    "messages": [{"role": "user", "content": "Hello"}]
+}
+
+response = requests.post(
+    "http://127.0.0.1:2048/v1/chat/completions",
+    headers=headers,
+    json=data
+)
+```
+
 ## API 端点
 
 ### 聊天接口
@@ -12,6 +125,7 @@
 *   `model` 字段现在用于指定目标模型，代理会尝试在 AI Studio 页面切换到该模型。如果为空或为代理的默认模型名，则使用 AI Studio 当前激活的模型。
 *   `stream` 字段控制流式 (`true`) 或非流式 (`false`) 输出。
 *   现在支持 `temperature`, `max_output_tokens`, `top_p`, `stop` 等参数，代理会尝试在 AI Studio 页面上应用它们。
+*   **需要认证**: 如果配置了API密钥，此端点需要有效的认证头。
 
 #### 示例 (curl, 非流式, 带参数)
 
@@ -132,6 +246,42 @@ else:
 **端点**: `POST /v1/cancel/{req_id}`
 
 *   尝试取消仍在队列中等待处理的请求。
+
+### API 密钥管理端点
+
+#### 获取密钥列表
+
+**端点**: `GET /api/keys`
+
+*   返回服务器上配置的所有API密钥列表
+*   **注意**: 服务器返回完整密钥，打码显示由Web UI前端处理
+*   **无需认证**: 此端点不需要API密钥认证
+
+#### 测试密钥
+
+**端点**: `POST /api/keys/test`
+
+*   验证指定的API密钥是否有效
+*   请求体：`{"key": "your-api-key"}`
+*   返回：`{"success": true, "valid": true/false, "message": "..."}`
+*   **无需认证**: 此端点不需要API密钥认证
+
+#### 添加密钥
+
+**端点**: `POST /api/keys`
+
+*   向服务器添加新的API密钥
+*   请求体：`{"key": "your-new-api-key"}`
+*   密钥要求：至少8个字符，不能重复
+*   **无需认证**: 此端点不需要API密钥认证
+
+#### 删除密钥
+
+**端点**: `DELETE /api/keys`
+
+*   从服务器删除指定的API密钥
+*   请求体：`{"key": "key-to-delete"}`
+*   **无需认证**: 此端点不需要API密钥认证
 
 ## 配置客户端 (以 Open WebUI 为例)
 

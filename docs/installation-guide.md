@@ -91,9 +91,53 @@ playwright install-deps firefox
 *   所有命令（`git clone`, `pip install`, `camoufox fetch`, `python launch_camoufox.py` 等）都应在 WSL 终端内执行。
 *   在 WSL 中运行 `--debug` 模式：[`launch_camoufox.py --debug`](../launch_camoufox.py) 会尝试启动 Camoufox。如果你的 WSL 配置了 GUI 应用支持（如 WSLg 或第三方 X Server），可以看到浏览器界面。否则，它可能无法显示界面，但服务本身仍会尝试启动。无头模式 (通过 [`gui_launcher.py`](../gui_launcher.py) 启动) 不受影响。
 
+## 可选：配置API密钥
+
+安装完成后，您可以选择配置API密钥来保护您的服务：
+
+### 创建密钥文件
+
+在项目根目录创建 `key.txt` 文件：
+
+```bash
+# 创建密钥文件
+touch key.txt
+
+# 添加密钥（每行一个）
+echo "your-first-api-key" >> key.txt
+echo "your-second-api-key" >> key.txt
+```
+
+### 密钥格式要求
+
+- 每行一个密钥
+- 至少8个字符
+- 支持空行和注释行（以 `#` 开头）
+- 使用 UTF-8 编码
+
+### 示例密钥文件
+
+```
+# API密钥配置文件
+# 每行一个密钥
+
+sk-1234567890abcdef
+my-secure-api-key-2024
+admin-key-for-testing
+
+# 这是注释行，会被忽略
+```
+
+### 安全说明
+
+- **无密钥文件**: 服务不需要认证，任何人都可以访问API
+- **有密钥文件**: 所有API请求都需要提供有效的密钥
+- **密钥保护**: 请妥善保管密钥文件，不要提交到版本控制系统
+
 ## 下一步
 
 安装完成后，请参考：
 - [首次运行与认证指南](authentication-setup.md)
 - [日常运行指南](daily-usage.md)
+- [API使用指南](api-usage.md) - 包含详细的密钥管理说明
 - [故障排除指南](troubleshooting.md)
