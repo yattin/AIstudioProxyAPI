@@ -1,7 +1,7 @@
 import asyncio
 import ssl as ssl_module
 import urllib.parse
-from aiohttp import TCPConnector
+from typing import Optional
 from python_socks.async_.asyncio import Proxy
 
 
@@ -12,15 +12,14 @@ class ProxyConnector:
 
     def __init__(self, proxy_url=None):
         self.proxy_url = proxy_url
-        self.connector = None
+        self.proxy: Optional[Proxy] = None
 
         if proxy_url:
-            self._setup_connector()
+            self._setup_proxy()
 
-    def _setup_connector(self):
-        """Set up the appropriate connector based on the proxy URL"""
+    def _setup_proxy(self):
+        """Initialize Proxy instance based on the proxy URL"""
         if not self.proxy_url:
-            self.connector = TCPConnector()
             return
 
         # Parse the proxy URL
@@ -28,20 +27,19 @@ class ProxyConnector:
         proxy_type = parsed.scheme.lower()
 
         if proxy_type in ('http', 'https', 'socks4', 'socks5'):
-            self.connector = "SocksConnector"
+            self.proxy = Proxy.from_url(self.proxy_url)
         else:
             raise ValueError(f"Unsupported proxy type: {proxy_type}")
 
     async def create_connection(self, host, port, ssl=None):
         """Create a connection to the target host through the proxy"""
-        if not self.connector:
+        if not self.proxy:
             # Direct connection without proxy
             reader, writer = await asyncio.open_connection(host, port, ssl=ssl)
             return reader, writer
 
-        # SOCKS proxy connection
-        proxy = Proxy.from_url(self.proxy_url)
-        sock = await proxy.connect(dest_host=host, dest_port=port)
+        # SOCKS or HTTP proxy connection
+        sock = await self.proxy.connect(dest_host=host, dest_port=port)
         if ssl is None:
             reader, writer = await asyncio.open_connection(
                 host=None,
