@@ -28,9 +28,9 @@
 要构建 Docker 镜像，请在项目根目录下打开终端或命令行界面，然后执行以下命令：
 
 ```bash
-# 方法 1: 使用 docker-compose (推荐)
+# 方法 1: 使用 docker compose (推荐)
 cd docker
-docker-compose build
+docker compose build
 
 # 方法 2: 直接使用 docker build (在项目根目录执行)
 docker build -f docker/Dockerfile -t ai-studio-proxy:latest .
@@ -55,19 +55,19 @@ docker build -f docker/Dockerfile -t ai-studio-proxy:latest .
 Docker Compose 提供了更简洁的配置管理方式，特别适合使用 `.env` 文件：
 
 ```bash
-# 1. 准备配置文件 (在项目根目录)
-cp docker/.env.docker .env
+# 1. 准备配置文件 (进入 docker 目录)
+cp .env.docker .env
 # 编辑 .env 文件以适应您的需求
 
 # 2. 使用 Docker Compose 启动 (进入 docker 目录)
 cd docker
-docker-compose up -d
+docker compose up -d
 
 # 3. 查看日志
-docker-compose logs -f
+docker compose logs -f
 
 # 4. 停止服务
-docker-compose down
+docker compose down
 ```
 
 ### 方式 B: 使用 Docker 命令
@@ -150,8 +150,8 @@ docker run -d \
 
 1. **创建 `.env` 配置文件 (推荐):**
    ```bash
-   # 复制配置模板 (在项目根目录执行)
-   cp docker/.env.docker .env
+   # 复制配置模板 (在项目docker目录下执行)
+   cp .env.docker .env
 
    # 编辑配置文件
    nano .env  # 或使用其他编辑器
@@ -329,7 +329,7 @@ docker run -d \
 现在 Docker 部署完全支持 `.env` 文件配置管理：
 
 ✅ **统一配置**: 主机和 Docker 环境使用相同的 `.env` 配置文件
-✅ **版本更新无忧**: `git pull` + `docker-compose up -d` 即可完成更新
+✅ **版本更新无忧**: `git pull` + `docker compose up -d` 即可完成更新
 ✅ **配置隔离**: 开发、测试、生产环境可使用不同的 `.env` 文件
 ✅ **安全性**: `.env` 文件不会被提交到版本控制
 
@@ -338,23 +338,22 @@ docker run -d \
 ```bash
 # 1. 初始设置
 git clone <repository>
-cd <project>
-cp docker/.env.docker .env
+cd <project>/docker
+cp .env.docker .env
 # 编辑 .env 文件
 
 # 2. 启动服务
-cd docker
-docker-compose up -d
+docker compose up -d
 
 # 3. 版本更新
 cd ..  # 回到项目根目录
 git pull
 cd docker
-docker-compose up -d --build
+docker compose up -d --build
 
 # 4. 查看状态
-docker-compose ps
-docker-compose logs -f
+docker compose ps
+docker compose logs -f
 ```
 
 ### 配置文件说明
