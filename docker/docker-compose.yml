@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   ai-studio-proxy:
     build:
@@ -13,7 +11,7 @@ services:
       # 挂载认证文件目录 (必需)
       - ../auth_profiles:/app/auth_profiles
       # 挂载 .env 配置文件 (推荐)
-      - ../.env:/app/.env:ro
+      - ../docker/.env:/app/.env:ro
       # 挂载日志目录 (可选，用于持久化日志)
       - ../logs:/app/logs
       # 挂载自定义证书 (可选)
