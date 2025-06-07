@@ -306,6 +306,7 @@ async def _handle_auxiliary_stream_response(req_id: str, request: ChatCompletion
                                 "model": model_name_for_stream,
                                 "created": created_timestamp,
                                 "choices":[{
+                                    "index": 0,
                                     "delta":{
                                         "role": "assistant",
                                         "content": None,
@@ -326,6 +327,7 @@ async def _handle_auxiliary_stream_response(req_id: str, request: ChatCompletion
                             
                             delta_content = {"role": "assistant", "content": body[last_body_pos:]}
                             choice_item = {
+                                "index": 0,
                                 "delta": delta_content,
                                 "finish_reason": finish_reason_val,
                                 "native_finish_reason": finish_reason_val,
@@ -376,6 +378,7 @@ async def _handle_auxiliary_stream_response(req_id: str, request: ChatCompletion
                                     })
                                 delta_content["tool_calls"] = tool_calls_list
                                 choice_item = {
+                                    "index": 0,
                                     "delta": delta_content,
                                     "finish_reason": "tool_calls",
                                     "native_finish_reason": "tool_calls",
@@ -383,6 +386,7 @@ async def _handle_auxiliary_stream_response(req_id: str, request: ChatCompletion
                             else:
                                 # 纯结束，没有新内容和函数调用
                                 choice_item = {
+                                    "index": 0,
                                     "delta": {"role": "assistant"},
                                     "finish_reason": "stop",
                                     "native_finish_reason": "stop",
@@ -409,6 +413,7 @@ async def _handle_auxiliary_stream_response(req_id: str, request: ChatCompletion
                             "model": model_name_for_stream,
                             "created": created_timestamp,
                             "choices": [{
+                                "index": 0,
                                 "delta": {"role": "assistant", "content": f"\n\n[错误: {str(e)}]"},
                                 "finish_reason": "stop",
                                 "native_finish_reason": "stop",

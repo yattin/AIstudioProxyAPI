@@ -2,6 +2,25 @@
 
 完成首次认证设置后，推荐使用 [`gui_launcher.py`](../gui_launcher.py) 的无头模式或直接通过命令行运行 [`launch_camoufox.py --headless`](../launch_camoufox.py) 进行日常运行。
 
+## ⭐ 简化启动方式（推荐）
+
+**现在有了 `.env` 配置文件，启动变得非常简单！**
+
+### 基本启动（推荐）
+
+```bash
+# 图形界面启动（推荐新手）
+python gui_launcher.py
+
+# 命令行启动（推荐日常使用）
+python launch_camoufox.py --headless
+
+# 调试模式（首次设置或故障排除）
+python launch_camoufox.py --debug
+```
+
+**就这么简单！** 所有配置都在 `.env` 文件中预设好了，无需复杂的命令行参数。
+
 ## 启动器说明
 
 ### 关于 `--virtual-display` (Linux 虚拟显示无头模式)
@@ -32,45 +51,72 @@
 
 ### 模式1: 优先使用集成的流式代理 (默认推荐)
 
+**使用 `.env` 配置（推荐）:**
+
 ```bash
-# 基本启动命令 - FastAPI 在 2048, 集成流式代理在 3120, 明确禁用代理
-python launch_camoufox.py --headless --server-port 2048 --stream-port 3120 --helper '' --internal-camoufox-proxy ''
+# 在 .env 文件中配置
+STREAM_PORT=3120
+# HTTP_PROXY=http://127.0.0.1:7890  # 如需代理，取消注释
 
-# 使用自定义流式代理端口，明确禁用代理
-python launch_camoufox.py --headless --server-port 2048 --stream-port 3125 --helper '' --internal-camoufox-proxy ''
-
-# 启用统一代理配置（同时应用于浏览器和流式代理）
-python launch_camoufox.py --headless --server-port 2048 --stream-port 3120 --helper '' --internal-camoufox-proxy 'http://127.0.0.1:7890'
-
-# 使用环境变量配置代理（不推荐，建议明确指定）
-export HTTP_PROXY=http://127.0.0.1:7890
-python launch_camoufox.py --headless --server-port 2048 --stream-port 3120 --helper ''
+# 然后简单启动
+python launch_camoufox.py --headless
 ```
 
-在此模式下，主服务器会优先尝试通过端口 `3120` (或指定的 `--stream-port`) 上的集成流式代理获取响应。如果失败，则回退到 Playwright 页面交互。
+**命令行覆盖（高级用户）:**
 
-**重要提示**: 强烈建议在所有启动命令中明确指定 `--internal-camoufox-proxy` 参数，即使是禁用代理也要设置为 `''`，这样可以避免意外使用环境变量中的代理设置，确保代理行为可预测。
+```bash
+# 使用自定义流式代理端口
+python launch_camoufox.py --headless --stream-port 3125
+
+# 启用代理配置
+python launch_camoufox.py --headless --internal-camoufox-proxy 'http://127.0.0.1:7890'
+
+# 明确禁用代理（覆盖 .env 中的设置）
+python launch_camoufox.py --headless --internal-camoufox-proxy ''
+```
+
+在此模式下，主服务器会优先尝试通过端口 `3120` (或 `.env` 中配置的 `STREAM_PORT`) 上的集成流式代理获取响应。如果失败，则回退到 Playwright 页面交互。
 
 ### 模式2: 优先使用外部 Helper 服务 (禁用集成流式代理)
 
-```bash
-# 基本外部Helper模式，明确禁用代理
-python launch_camoufox.py --headless --server-port 2048 --stream-port 0 --helper 'http://your-helper-service.com/api/getStreamResponse' --internal-camoufox-proxy ''
+**使用 `.env` 配置（推荐）:**
 
-# 外部Helper模式 + 统一代理配置
-python launch_camoufox.py --headless --server-port 2048 --stream-port 0 --helper 'http://your-helper-service.com/api/getStreamResponse' --internal-camoufox-proxy 'http://127.0.0.1:7890'
+```bash
+# 在 .env 文件中配置
+STREAM_PORT=0  # 禁用集成流式代理
+GUI_DEFAULT_HELPER_ENDPOINT=http://your-helper-service.com/api/getStreamResponse
+
+# 然后简单启动
+python launch_camoufox.py --headless
 ```
 
-在此模式下，主服务器会优先尝试通过 `--helper` 指定的端点获取响应 (需要有效的 `auth_profiles/active/*.json` 以提取 `SAPISID`)。如果失败，则回退到 Playwright 页面交互。
+**命令行覆盖（高级用户）:**
+
+```bash
+# 外部Helper模式
+python launch_camoufox.py --headless --stream-port 0 --helper 'http://your-helper-service.com/api/getStreamResponse'
+```
+
+在此模式下，主服务器会优先尝试通过 Helper 端点获取响应 (需要有效的 `auth_profiles/active/*.json` 以提取 `SAPISID`)。如果失败，则回退到 Playwright 页面交互。
 
 ### 模式3: 仅使用 Playwright 页面交互 (禁用所有流式代理和 Helper)
 
-```bash
-# 纯Playwright模式，明确禁用代理
-python launch_camoufox.py --headless --server-port 2048 --stream-port 0 --helper '' --internal-camoufox-proxy ''
+**使用 `.env` 配置（推荐）:**
 
-# Playwright模式 + 统一代理配置
-python launch_camoufox.py --headless --server-port 2048 --stream-port 0 --helper '' --internal-camoufox-proxy 'http://127.0.0.1:7890'
+```bash
+# 在 .env 文件中配置
+STREAM_PORT=0  # 禁用集成流式代理
+GUI_DEFAULT_HELPER_ENDPOINT=  # 禁用 Helper 服务
+
+# 然后简单启动
+python launch_camoufox.py --headless
+```
+
+**命令行覆盖（高级用户）:**
+
+```bash
+# 纯Playwright模式
+python launch_camoufox.py --headless --stream-port 0 --helper ''
 ```
 
 在此模式下，主服务器将仅通过 Playwright 与 AI Studio 页面交互 (模拟点击"编辑"或"复制"按钮) 来获取响应。这是传统的后备方法。
@@ -103,9 +149,19 @@ python gui_launcher.py
 
 ## 重要注意事项
 
-**强烈建议在所有 `launch_camoufox.py` 命令中明确指定 `--internal-camoufox-proxy` 参数，即使其值为空字符串 (`''`)，以避免意外使用系统环境变量中的代理设置。**
+### 配置优先级
 
-**只有当你确认使用 [`launch_camoufox.py --debug`](../launch_camoufox.py) 或 GUI 有头模式一切运行正常（特别是浏览器内的登录和认证保存），并且 `auth_profiles/active/` 目录下有有效的认证文件后，才推荐使用 [`gui_launcher.py`](../gui_launcher.py) 的无头模式或 [`launch_camoufox.py --headless`](../launch_camoufox.py) 作为日常后台运行的标准方式。**
+1. **`.env` 文件配置** - 推荐的配置方式，一次设置长期使用
+2. **命令行参数** - 可以覆盖 `.env` 文件中的设置，适用于临时调整
+3. **环境变量** - 最低优先级，主要用于系统级配置
+
+### 使用建议
+
+- **日常使用**: 配置好 `.env` 文件后，使用简单的 `python launch_camoufox.py --headless` 即可
+- **临时调整**: 需要临时修改配置时，使用命令行参数覆盖，无需修改 `.env` 文件
+- **首次设置**: 使用 `python launch_camoufox.py --debug` 进行认证设置
+
+**只有当你确认使用调试模式一切运行正常（特别是浏览器内的登录和认证保存），并且 `auth_profiles/active/` 目录下有有效的认证文件后，才推荐使用无头模式作为日常后台运行的标准方式。**
 
 ## 下一步
 

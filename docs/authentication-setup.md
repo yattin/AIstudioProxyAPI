@@ -9,13 +9,13 @@
 ## 方法一：通过命令行运行 Debug 模式
 
 ```bash
-python launch_camoufox.py --debug --server-port 2048 --stream-port 3120 --helper '' --internal-camoufox-proxy ''
+python launch_camoufox.py --debug --server-port 2048 --stream-port 0 --helper '' --internal-camoufox-proxy ''
 ```
 
 **重要参数说明:**
 *   `--debug`: 启动有头模式，用于首次认证和调试
 *   `--server-port <端口号>`: 指定 FastAPI 服务器监听的端口 (默认: 2048)
-*   `--stream-port <端口号>`: 启动集成的流式代理服务端口 (默认: 3120)。设置为 `0` 可禁用此服务
+*   `--stream-port <端口号>`: 启动集成的流式代理服务端口 (默认: 3120)。设置为 `0` 可禁用此服务，首次启动建议禁用
 *   `--helper <端点URL>`: 指定外部 Helper 服务的地址。设置为空字符串 `''` 表示不使用外部 Helper
 *   `--internal-camoufox-proxy <代理地址>`: 为 Camoufox 浏览器指定代理。设置为空字符串 `''` 表示不使用代理
 *   **注意**: 如果需要启用流式代理服务，建议同时配置 `--internal-camoufox-proxy` 参数以确保正常运行
@@ -25,9 +25,14 @@ python launch_camoufox.py --debug --server-port 2048 --stream-port 3120 --helper
 1. 脚本会启动 Camoufox（通过内部调用自身），并在终端输出启动信息。
 2. 你会看到一个 **带界面的 Firefox 浏览器窗口** 弹出。
 3. **关键交互:** **在弹出的浏览器窗口中完成 Google 登录**，直到看到 AI Studio 聊天界面。 (脚本会自动处理浏览器连接，无需用户手动操作)。
-4. 回到终端，提示保存认证时输入 `y` 并回车 (文件名可默认)。文件会保存在 `auth_profiles/saved/`。
-5. **将 `auth_profiles/saved/` 下新生成的 `.json` 文件移动到 `auth_profiles/active/` 目录。** 确保 `active` 目录下只有一个 `.json` 文件。
-6. 可以按 `Ctrl+C` 停止 `--debug` 模式的运行。
+4. **登录确认操作**: 当系统检测到登录页面并在终端显示类似以下提示时：
+   ```
+   检测到可能需要登录。如果浏览器显示登录页面，请在浏览器窗口中完成 Google 登录，然后在此处按 Enter 键继续...
+   ```
+   **用户必须在终端中按 Enter 键确认操作才能继续**。这个确认步骤是必需的，系统会等待用户的确认输入才会进行下一步的登录状态检查。
+5. 回到终端根据提示回车即可，如果设置使用非自动保存模式（即将弃用），请根据提示保存认证时输入 `y` 并回车 (文件名可默认)。文件会保存在 `auth_profiles/saved/`。
+6. **将 `auth_profiles/saved/` 下新生成的 `.json` 文件移动到 `auth_profiles/active/` 目录。** 确保 `active` 目录下只有一个 `.json` 文件。
+7. 可以按 `Ctrl+C` 停止 `--debug` 模式的运行。
 
 ## 方法二：通过 GUI 启动有头模式
 
@@ -35,7 +40,7 @@ python launch_camoufox.py --debug --server-port 2048 --stream-port 3120 --helper
 2. 在 GUI 中输入 `FastAPI 服务端口` (默认为 2048)。
 3. 点击 `启动有头模式` 按钮。
 4. 在弹出的新控制台和浏览器窗口中，按照命令行方式的提示进行 Google 登录和认证文件保存操作。
-5. 同样需要手动将认证文件从 `auth_profiles/saved/` 移动到 `auth_profiles/active/`。
+5. 同样需要手动将认证文件从 `auth_profiles/saved/` 移动到 `auth_profiles/active/`便于无头模式正常使用。
 
 ## 激活认证文件
 

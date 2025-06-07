@@ -39,11 +39,32 @@ source venv/bin/activate  # Linux/macOS
 
 ```bash
 # 安装 Camoufox 库 (推荐包含 geoip 数据，特别是使用代理时)
-pip install -U camoufox[geoip]
+pip install -U "camoufox[geoip]"
 
 # 安装项目所需的其他 Python 库
 pip install -r requirements.txt
 ```
+
+**重要：关于引号使用的跨平台说明**
+
+在安装 `camoufox[geoip]` 时，不同平台需要使用不同的引号处理方式：
+
+**各平台推荐命令**：
+- **macOS/Linux (bash/zsh)**：`pip install -U "camoufox[geoip]"`
+- **Windows PowerShell**：`pip install -U "camoufox[geoip]"` 或 `pip install -U 'camoufox[geoip]'`
+- **Windows CMD**：`pip install -U camoufox[geoip]` （通常不需要引号）
+
+**技术原因**：
+- **Unix Shell (bash/zsh)**：方括号 `[geoip]` 会被解释为文件通配符（glob pattern），不使用引号会导致 `no matches found` 错误
+- **PowerShell**：虽然对方括号处理较为宽松，但使用引号是最安全的做法
+- **Windows CMD**：对方括号的处理相对简单，通常不需要引号，但使用引号也不会出错
+
+**最佳实践**：
+为了确保跨平台兼容性，**建议在所有平台都使用双引号**：`pip install -U "camoufox[geoip]"`
+
+**如果遇到问题**：
+- 如果出现 `no matches found` 或类似错误，请确保使用了引号
+- 如果引号导致问题，可以尝试不使用引号（主要在某些 Windows 环境中）
 `requirements.txt` 主要包含 `fastapi`, `uvicorn[standard]`, `playwright`, `pydantic` 等现代化依赖包。
 
 **依赖版本说明**:
@@ -103,9 +124,47 @@ playwright install-deps firefox
 *   所有命令（`git clone`, `pip install`, `camoufox fetch`, `python launch_camoufox.py` 等）都应在 WSL 终端内执行。
 *   在 WSL 中运行 `--debug` 模式：[`launch_camoufox.py --debug`](../launch_camoufox.py) 会尝试启动 Camoufox。如果你的 WSL 配置了 GUI 应用支持（如 WSLg 或第三方 X Server），可以看到浏览器界面。否则，它可能无法显示界面，但服务本身仍会尝试启动。无头模式 (通过 [`gui_launcher.py`](../gui_launcher.py) 启动) 不受影响。
 
+## 配置环境变量（推荐）
+
+安装完成后，强烈建议配置 `.env` 文件来简化后续使用：
+
+### 创建配置文件
+
+```bash
+# 复制配置模板
+cp .env.example .env
+
+# 编辑配置文件
+nano .env  # 或使用其他编辑器
+```
+
+### 基本配置示例
+
+```env
+# 服务端口配置
+DEFAULT_FASTAPI_PORT=2048
+STREAM_PORT=3120
+
+# 代理配置（如需要）
+# HTTP_PROXY=http://127.0.0.1:7890
+
+# 日志配置
+SERVER_LOG_LEVEL=INFO
+DEBUG_LOGS_ENABLED=false
+```
+
+配置完成后，启动命令将变得非常简单：
+
+```bash
+# 简单启动，无需复杂参数
+python launch_camoufox.py --headless
+```
+
+详细配置说明请参见 [环境变量配置指南](environment-configuration.md)。
+
 ## 可选：配置API密钥
 
-安装完成后，您可以选择配置API密钥来保护您的服务：
+您也可以选择配置API密钥来保护您的服务：
 
 ### 创建密钥文件
 
@@ -149,6 +208,7 @@ admin-key-for-testing
 ## 下一步
 
 安装完成后，请参考：
+- **[环境变量配置指南](environment-configuration.md)** - ⭐ 推荐先配置，简化后续使用
 - [首次运行与认证指南](authentication-setup.md)
 - [日常运行指南](daily-usage.md)
 - [API使用指南](api-usage.md) - 包含详细的密钥管理说明

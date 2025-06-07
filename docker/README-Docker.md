@@ -1,5 +1,7 @@
 # Docker 部署教程 (AI Studio Proxy API)
 
+> 📁 **注意**: 所有 Docker 相关文件现在都位于 `docker/` 目录中，保持项目根目录的整洁。
+
 本文档提供了使用 Docker 构建和运行 AI Studio Proxy API 项目的详细步骤。
 
 **先决条件:**
@@ -26,7 +28,12 @@
 要构建 Docker 镜像，请在项目根目录下打开终端或命令行界面，然后执行以下命令：
 
 ```bash
-docker build -t ai-studio-proxy:latest .
+# 方法 1: 使用 docker-compose (推荐)
+cd docker
+docker-compose build
+
+# 方法 2: 直接使用 docker build (在项目根目录执行)
+docker build -f docker/Dockerfile -t ai-studio-proxy:latest .
 ```
 
 **命令解释:**
@@ -41,7 +48,48 @@ docker build -t ai-studio-proxy:latest .
 
 ## 3. 运行 Docker 容器
 
-镜像构建完成后，您可以使用以下命令来创建并运行一个基于该镜像的 Docker 容器：
+镜像构建完成后，您可以选择以下两种方式来运行容器：
+
+### 方式 A: 使用 Docker Compose (推荐)
+
+Docker Compose 提供了更简洁的配置管理方式，特别适合使用 `.env` 文件：
+
+```bash
+# 1. 准备配置文件 (在项目根目录)
+cp docker/.env.docker .env
+# 编辑 .env 文件以适应您的需求
+
+# 2. 使用 Docker Compose 启动 (进入 docker 目录)
+cd docker
+docker-compose up -d
+
+# 3. 查看日志
+docker-compose logs -f
+
+# 4. 停止服务
+docker-compose down
+```
+
+### 方式 B: 使用 Docker 命令
+
+您也可以使用传统的 Docker 命令来创建并运行容器：
+
+### 方法 1: 使用 .env 文件 (推荐)
+
+```bash
+docker run -d \
+    -p <宿主机_服务端口>:2048 \
+    -p <宿主机_流端口>:3120 \
+    -v "$(pwd)/auth_profiles":/app/auth_profiles \
+    -v "$(pwd)/.env":/app/.env \
+    # 可选: 如果您想使用自己的 SSL/TLS 证书，请取消下面一行的注释。
+    # 请确保宿主机上的 'certs/' 目录存在，并且其中包含应用程序所需的证书文件。
+    # -v "$(pwd)/certs":/app/certs \
+    --name ai-studio-proxy-container \
+    ai-studio-proxy:latest
+```
+
+### 方法 2: 使用环境变量 (传统方式)
 
 ```bash
 docker run -d \
@@ -51,11 +99,17 @@ docker run -d \
     # 可选: 如果您想使用自己的 SSL/TLS 证书，请取消下面一行的注释。
     # 请确保宿主机上的 'certs/' 目录存在，并且其中包含应用程序所需的证书文件。
     # -v "$(pwd)/certs":/app/certs \
-    -e SERVER_PORT=2048 \
+    -e PORT=8000 \
+    -e DEFAULT_FASTAPI_PORT=2048 \
+    -e DEFAULT_CAMOUFOX_PORT=9222 \
     -e STREAM_PORT=3120 \
-    # 可选: 如果您需要设置内部 Camoufox 代理，请取消下面一行的注释，
-    # 并将 "http://your_proxy_address:port" 替换为您的代理实际地址和端口。
-    # -e INTERNAL_CAMOUFOX_PROXY="http://your_proxy_address:port" \
+    -e SERVER_LOG_LEVEL=INFO \
+    -e DEBUG_LOGS_ENABLED=false \
+    -e AUTO_CONFIRM_LOGIN=true \
+    # 可选: 如果您需要设置代理，请取消下面的注释
+    # -e HTTP_PROXY="http://your_proxy_address:port" \
+    # -e HTTPS_PROXY="http://your_proxy_address:port" \
+    # -e UNIFIED_PROXY_CONFIG="http://your_proxy_address:port" \
     --name ai-studio-proxy-container \
     ai-studio-proxy:latest
 ```
@@ -91,10 +145,93 @@ docker run -d \
 *   `ai-studio-proxy:latest`: 指定要运行的镜像的名称和标签。这必须与您在 `docker build` 命令中使用的名称和标签相匹配。
 
 **首次运行前的重要准备:**
-*   **创建 `auth_profiles/` 目录:** 在项目根目录下 (与 [`Dockerfile`](./Dockerfile:1) 同级)，手动创建一个名为 `auth_profiles` 的目录。如果您的应用程序需要初始的认证配置文件，请将它们放入此目录中。
-*   **(可选) 创建 `certs/` 目录:** 如果您计划使用自己的证书并取消了相关卷挂载行的注释，请在项目根目录下创建一个名为 `certs` 的目录，并将您的证书文件 (例如 `server.crt`, `server.key`) 放入其中。
 
-## 4. 管理正在运行的容器
+### 配置文件准备
+
+1. **创建 `.env` 配置文件 (推荐):**
+   ```bash
+   # 复制配置模板 (在项目根目录执行)
+   cp docker/.env.docker .env
+
+   # 编辑配置文件
+   nano .env  # 或使用其他编辑器
+   ```
+
+   **`.env` 文件的优势:**
+   - ✅ **版本更新无忧**: 一个 `git pull` 就完成更新，无需重新配置
+   - ✅ **配置集中管理**: 所有配置项统一在 `.env` 文件中
+   - ✅ **Docker 兼容**: 容器会自动读取挂载的 `.env` 文件
+   - ✅ **安全性**: `.env` 文件已被 `.gitignore` 忽略，不会泄露配置
+
+2. **创建 `auth_profiles/` 目录:** 在项目根目录下 (与 [`Dockerfile`](./Dockerfile:1) 同级)，手动创建一个名为 `auth_profiles` 的目录。如果您的应用程序需要初始的认证配置文件，请将它们放入此目录中。
+
+3. **(可选) 创建 `certs/` 目录:** 如果您计划使用自己的证书并取消了相关卷挂载行的注释，请在项目根目录下创建一个名为 `certs` 的目录，并将您的证书文件 (例如 `server.crt`, `server.key`) 放入其中。
+
+## 4. 环境变量配置详解
+
+### 使用 .env 文件配置 (推荐)
+
+项目现在支持通过 `.env` 文件进行配置管理。在 Docker 环境中，您只需要将 `.env` 文件挂载到容器中即可：
+
+```bash
+# 挂载 .env 文件到容器
+-v "$(pwd)/.env":/app/.env
+```
+
+### 常用配置项
+
+以下是 Docker 环境中常用的配置项：
+
+```env
+# 服务端口配置
+PORT=8000
+DEFAULT_FASTAPI_PORT=2048
+DEFAULT_CAMOUFOX_PORT=9222
+STREAM_PORT=3120
+
+# 代理配置
+HTTP_PROXY=http://127.0.0.1:7890
+HTTPS_PROXY=http://127.0.0.1:7890
+UNIFIED_PROXY_CONFIG=http://127.0.0.1:7890
+
+# 日志配置
+SERVER_LOG_LEVEL=INFO
+DEBUG_LOGS_ENABLED=false
+TRACE_LOGS_ENABLED=false
+
+# 认证配置
+AUTO_CONFIRM_LOGIN=true
+AUTO_SAVE_AUTH=false
+AUTH_SAVE_TIMEOUT=30
+
+# API 默认参数
+DEFAULT_TEMPERATURE=1.0
+DEFAULT_MAX_OUTPUT_TOKENS=65536
+DEFAULT_TOP_P=0.95
+```
+
+### 配置优先级
+
+在 Docker 环境中，配置的优先级顺序为：
+
+1. **Docker 运行时环境变量** (`-e` 参数) - 最高优先级
+2. **挂载的 .env 文件** - 中等优先级
+3. **Dockerfile 中的 ENV** - 最低优先级
+
+### 示例：完整的 Docker 运行命令
+
+```bash
+# 使用 .env 文件的完整示例
+docker run -d \
+    -p 8080:2048 \
+    -p 8081:3120 \
+    -v "$(pwd)/auth_profiles":/app/auth_profiles \
+    -v "$(pwd)/.env":/app/.env \
+    --name ai-studio-proxy-container \
+    ai-studio-proxy:latest
+```
+
+## 5. 管理正在运行的容器
 
 一旦容器启动，您可以使用以下 Docker 命令来管理它：
 
@@ -184,3 +321,47 @@ docker run -d \
 2. **模块化架构**: 项目采用模块化设计，所有配置和代码都已经过优化，无需手动修改。
 3. **端口配置**: 确保宿主机上的端口未被占用，默认使用 2048 (主服务) 和 3120 (流式代理)。
 4. **日志查看**: 可以通过 `docker logs` 命令查看容器运行日志，便于调试和监控。
+
+## 配置管理总结 ⭐
+
+### 新功能：统一的 .env 配置
+
+现在 Docker 部署完全支持 `.env` 文件配置管理：
+
+✅ **统一配置**: 主机和 Docker 环境使用相同的 `.env` 配置文件
+✅ **版本更新无忧**: `git pull` + `docker-compose up -d` 即可完成更新
+✅ **配置隔离**: 开发、测试、生产环境可使用不同的 `.env` 文件
+✅ **安全性**: `.env` 文件不会被提交到版本控制
+
+### 推荐的 Docker 工作流程
+
+```bash
+# 1. 初始设置
+git clone <repository>
+cd <project>
+cp docker/.env.docker .env
+# 编辑 .env 文件
+
+# 2. 启动服务
+cd docker
+docker-compose up -d
+
+# 3. 版本更新
+cd ..  # 回到项目根目录
+git pull
+cd docker
+docker-compose up -d --build
+
+# 4. 查看状态
+docker-compose ps
+docker-compose logs -f
+```
+
+### 配置文件说明
+
+- **`.env`**: 您的实际配置文件 (从 `.env.docker` 复制并修改)
+- **`.env.docker`**: Docker 环境的配置模板
+- **`.env.example`**: 通用配置模板 (适用于所有环境)
+- **`docker-compose.yml`**: Docker Compose 配置文件
+
+这样的配置管理方式确保了 Docker 部署与本地开发的一致性，同时简化了配置和更新流程。
