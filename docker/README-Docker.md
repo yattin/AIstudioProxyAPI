@@ -150,8 +150,8 @@ docker run -d \
 
 1. **创建 `.env` 配置文件 (推荐):**
    ```bash
-   # 复制配置模板 (在项目根目录执行)
-   cp docker/.env.docker .env
+   # 复制配置模板 (在项目docker目录下执行)
+   cp .env.docker .env
 
    # 编辑配置文件
    nano .env  # 或使用其他编辑器
@@ -338,12 +338,11 @@ docker run -d \
 ```bash
 # 1. 初始设置
 git clone <repository>
-cd <project>
-cp docker/.env.docker .env
+cd <project>/docker
+cp .env.docker .env
 # 编辑 .env 文件
 
 # 2. 启动服务
-cd docker
 docker compose up -d
 
 # 3. 版本更新
