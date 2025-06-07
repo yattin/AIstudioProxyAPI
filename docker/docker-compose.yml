@@ -14,7 +14,7 @@ services:
       - ../docker/.env:/app/.env:ro
       # 挂载日志目录 (可选，用于持久化日志)
       # 如果出现权限报错，需要修改日志目录权限 sudo chmod -R 777 ../logs
-      - ../logs:/app/logs
+      # - ../logs:/app/logs
       # 挂载自定义证书 (可选)
       # - ../certs:/app/certs:ro
     environment:
