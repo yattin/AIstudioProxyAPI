@@ -46,7 +46,10 @@ PYTHON_EXECUTABLE = sys.executable
 ENDPOINT_CAPTURE_TIMEOUT = int(os.environ.get('ENDPOINT_CAPTURE_TIMEOUT', '45'))  # 秒 (from dev)
 DEFAULT_SERVER_PORT = int(os.environ.get('DEFAULT_FASTAPI_PORT', '2048'))  # FastAPI 服务器端口
 DEFAULT_CAMOUFOX_PORT = int(os.environ.get('DEFAULT_CAMOUFOX_PORT', '9222'))  # Camoufox 调试端口 (如果内部启动需要)
+DEFAULT_STREAM_PORT = int(os.environ.get('STREAM_PORT', '3120'))  # 流式代理服务器端口
 DEFAULT_HELPER_ENDPOINT = os.environ.get('GUI_DEFAULT_HELPER_ENDPOINT', '')  # 外部 Helper 端点
+DEFAULT_AUTH_SAVE_TIMEOUT = int(os.environ.get('AUTH_SAVE_TIMEOUT', '30'))  # 认证保存超时时间
+DEFAULT_SERVER_LOG_LEVEL = os.environ.get('SERVER_LOG_LEVEL', 'INFO')  # 服务器日志级别
 AUTH_PROFILES_DIR = os.path.join(os.path.dirname(__file__), "auth_profiles")
 ACTIVE_AUTH_DIR = os.path.join(AUTH_PROFILES_DIR, "active")
 SAVED_AUTH_DIR = os.path.join(AUTH_PROFILES_DIR, "saved")
@@ -507,10 +510,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--stream-port",
         type=int,
-        default=3120, # 使用默认值
+        default=DEFAULT_STREAM_PORT, # 从 .env 文件读取默认值
         help=(
             f"流式代理服务器使用端口"
-            f"提供来禁用此功能 --stream-port=0 . 默认: 3120"
+            f"提供来禁用此功能 --stream-port=0 . 默认: {DEFAULT_STREAM_PORT}"
         )
     )
     parser.add_argument(
@@ -544,13 +547,13 @@ if __name__ == "__main__":
         help="[调试模式] 在登录成功后，如果之前未加载认证文件，则自动提示并保存新的认证状态。"
     )
     parser.add_argument( # from dev
-        "--auth-save-timeout", type=int, default=30,
-        help="[调试模式] 自动保存认证或输入认证文件名的等待超时时间 (秒)。"
+        "--auth-save-timeout", type=int, default=DEFAULT_AUTH_SAVE_TIMEOUT,
+        help=f"[调试模式] 自动保存认证或输入认证文件名的等待超时时间 (秒)。默认: {DEFAULT_AUTH_SAVE_TIMEOUT}"
     )
     # 日志相关参数 (from dev)
     parser.add_argument(
-        "--server-log-level", type=str, default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        help="server.py 的日志级别。"
+        "--server-log-level", type=str, default=DEFAULT_SERVER_LOG_LEVEL, choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help=f"server.py 的日志级别。默认: {DEFAULT_SERVER_LOG_LEVEL}"
     )
     parser.add_argument(
         "--server-redirect-print", action='store_true',
@@ -662,22 +665,45 @@ if __name__ == "__main__":
         final_launch_mode = 'virtual_headless'
         if platform.system() != "Linux":
             logger.warning("⚠️ --virtual-display 模式主要为 Linux 设计。在非 Linux 系统上，其行为可能与标准无头模式相同或导致 Camoufox 内部错误。")
-    else: 
+    else:
+        # 读取 .env 文件中的 LAUNCH_MODE 配置作为默认值
+        env_launch_mode = os.environ.get('LAUNCH_MODE', '').lower()
+        default_mode_from_env = None
+        default_interactive_choice = '1'  # 默认选择无头模式
+
+        # 将 .env 中的 LAUNCH_MODE 映射到交互式选择
+        if env_launch_mode == 'headless':
+            default_mode_from_env = 'headless'
+            default_interactive_choice = '1'
+        elif env_launch_mode == 'debug' or env_launch_mode == 'normal':
+            default_mode_from_env = 'debug'
+            default_interactive_choice = '2'
+        elif env_launch_mode == 'virtual_display' or env_launch_mode == 'virtual_headless':
+            default_mode_from_env = 'virtual_headless'
+            default_interactive_choice = '3' if platform.system() == "Linux" else '1'
+
         logger.info("--- 请选择启动模式 (未通过命令行参数指定) ---")
+        if env_launch_mode and default_mode_from_env:
+            logger.info(f"  从 .env 文件读取到默认启动模式: {env_launch_mode} -> {default_mode_from_env}")
+
         prompt_options_text = "[1] 无头模式, [2] 调试模式"
         valid_choices = {'1': 'headless', '2': 'debug'}
-        default_interactive_choice = '1'
+
         if platform.system() == "Linux": # from dev
             prompt_options_text += ", [3] 无头模式 (虚拟显示 Xvfb)"
             valid_choices['3'] = 'virtual_headless'
+
+        # 构建提示信息，显示当前默认选择
+        default_mode_name = valid_choices.get(default_interactive_choice, 'headless')
         user_mode_choice = input_with_timeout(
-            f"  请输入启动模式 ({prompt_options_text}; 默认: {default_interactive_choice} 无头模式，{15}秒超时): ", 15
+            f"  请输入启动模式 ({prompt_options_text}; 默认: {default_interactive_choice} {default_mode_name}模式，{15}秒超时): ", 15
         ) or default_interactive_choice
+
         if user_mode_choice in valid_choices:
             final_launch_mode = valid_choices[user_mode_choice]
         else:
-            final_launch_mode = 'headless' # Default to headless
-            logger.info(f"无效输入 '{user_mode_choice}' 或超时，默认启动模式: 无头模式")
+            final_launch_mode = default_mode_from_env or 'headless' # 使用 .env 默认值或回退到无头模式
+            logger.info(f"无效输入 '{user_mode_choice}' 或超时，使用默认启动模式: {final_launch_mode}模式")
     logger.info(f"最终选择的启动模式: {final_launch_mode.replace('_', ' ')}模式")
     logger.info("-------------------------------------------------")
 

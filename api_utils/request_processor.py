@@ -610,19 +610,29 @@ async def _handle_playwright_response(req_id: str, request: ChatCompletionReques
                 page_controller = PageController(page, logger, req_id)
                 final_content = await page_controller.get_response(check_client_disconnected)
                 
-                # 生成流式响应
-                words = final_content.split()
-                for i, word in enumerate(words):
+                # 生成流式响应 - 保持Markdown格式
+                # 按行分割以保持换行符和Markdown结构
+                lines = final_content.split('\n')
+                for line_idx, line in enumerate(lines):
                     # 检查客户端是否断开连接
                     try:
                         check_client_disconnected(f"Playwright流式生成器循环 ({req_id}): ")
                     except ClientDisconnectedError:
                         logger.info(f"[{req_id}] Playwright流式生成器中检测到客户端断开连接")
                         break
-                    
-                    chunk_content = word + (" " if i < len(words) - 1 else "")
-                    yield generate_sse_chunk(chunk_content, req_id, current_ai_studio_model_id or MODEL_NAME)
-                    await asyncio.sleep(0.05)
+
+                    # 输出当前行的内容（包括空行，以保持Markdown格式）
+                    if line:  # 非空行按字符分块输出
+                        chunk_size = 5  # 每次输出5个字符，平衡速度和体验
+                        for i in range(0, len(line), chunk_size):
+                            chunk = line[i:i+chunk_size]
+                            yield generate_sse_chunk(chunk, req_id, current_ai_studio_model_id or MODEL_NAME)
+                            await asyncio.sleep(0.03)  # 适中的输出速度
+
+                    # 添加换行符（除了最后一行）
+                    if line_idx < len(lines) - 1:
+                        yield generate_sse_chunk('\n', req_id, current_ai_studio_model_id or MODEL_NAME)
+                        await asyncio.sleep(0.01)
                 
                 # 计算并发送带usage的完成块
                 usage_stats = calculate_usage_stats(
