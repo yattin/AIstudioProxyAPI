@@ -188,11 +188,11 @@ python launch_camoufox.py --headless
 
 ```bash
 # 1. 准备配置文件
-cp docker/.env.docker .env
+cd docker
+cp .env.docker .env
 nano .env  # 编辑配置
 
 # 2. 使用 Docker Compose 启动
-cd docker
 docker-compose up -d
 
 # 3. 版本更新
